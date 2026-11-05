@@ -457,15 +457,21 @@ export function useExtensionScopeStore() {
     setStore("projectMcps", pKey, mcpName, enabled)
   }
 
-  const isSessionSkillEnabled = (sessionID: string | undefined, worktree: string, skill: ScopedSkillInfo) => {
-    const sKey = skillScopeKey(skill)
+  const setProjectMcpsBatch = (
+    worktree: string,
+    entries: ReadonlyArray<{ name: string; enabled: boolean }>,
+  ) => {
+    const pKey = pathKey(worktree)
+    const next = { ...(store.projectMcps?.[pKey] ?? {}) }
 
-    if (sessionID) {
-      const sessionExplicit = store.sessionSkills[sessionID]?.[sKey]
-
-      if (sessionExplicit !== undefined) return sessionExplicit
+    for (const entry of entries) {
+      next[entry.name] = entry.enabled
     }
 
+    setStore("projectMcps", pKey, next)
+  }
+
+  const isSessionSkillEnabled = (_sessionID: string | undefined, worktree: string, skill: ScopedSkillInfo) => {
     return isProjectSkillEnabled(worktree, skill)
   }
 
@@ -482,17 +488,11 @@ export function useExtensionScopeStore() {
   }
 
   const isSessionMcpEnabled = (
-    sessionID: string | undefined,
+    _sessionID: string | undefined,
     mcpName: string,
     projectEnabled: boolean,
     worktree?: string,
   ) => {
-    if (sessionID) {
-      const explicit = store.sessionMcps[sessionID]?.[mcpName]
-
-      if (explicit !== undefined) return explicit
-    }
-
     if (worktree) {
       return isProjectMcpEnabled(worktree, mcpName, projectEnabled)
     }
@@ -637,6 +637,7 @@ export function useExtensionScopeStore() {
     setProjectSkillsBatch,
     isProjectMcpEnabled,
     setProjectMcpEnabled,
+    setProjectMcpsBatch,
     isSessionSkillEnabled,
     setSessionSkillEnabled,
     isSessionMcpEnabled,

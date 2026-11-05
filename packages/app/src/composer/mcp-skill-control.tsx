@@ -3,25 +3,26 @@ import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
 import { Icon } from "@opencode/ui/icon"
-import { Switch } from "@opencode/ui/switch"
-import { getFilename } from "@opencode/util/path"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useData, useServer } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { useMcpToggle } from "@/providers/connect/mcp"
-import { useSettingsSurface } from "@/settings/surface"
 import { useLayout } from "@/shell/state/layout"
 import {
   isProjectLocalSkill,
   localizeSkillDescription,
-  resolveSkillOrigin,
   skillScopeKey,
   useExtensionScopeStore,
   useIdeGlobalExtensions,
   type ScopedSkillInfo,
 } from "@/shell/titlebar/extension-scope-store"
 import type { ComposerModel } from "./model"
+
+type McpPickerItem = {
+  name: string
+  connected: boolean
+}
 
 export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
   const dialog = useDialog()
@@ -60,25 +61,39 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
     }
   })
 
-  const mcps = createMemo(() => {
+  const mcps = createMemo<McpPickerItem[]>(() => {
     const localList = (data.location.mcp.server.list({ directory: directory() }) ?? []).filter(
       (item) => !scopeStore.isMcpRemoved(item.name),
     )
 
-    if (isLocalServer()) return localList
+    const byName = new Map<string, McpPickerItem>()
 
-    const byName = new Map(
-      ideGlobal
-        .mcps()
-        .filter((item) => !scopeStore.isMcpRemoved(item.name))
-        .map((item) => [item.name, item]),
-    )
-
-    for (const item of localList) {
-      byName.set(item.name, item)
+    if (!isLocalServer()) {
+      for (const item of ideGlobal.mcps()) {
+        if (scopeStore.isMcpRemoved(item.name)) continue
+        byName.set(item.name, {
+          name: item.name,
+          connected: item.status.status !== "disabled",
+        })
+      }
     }
 
-    return Array.from(byName.values())
+    for (const item of localList) {
+      byName.set(item.name, {
+        name: item.name,
+        connected: item.status.status !== "disabled",
+      })
+    }
+
+    for (const custom of scopeStore.customMcps()) {
+      if (scopeStore.isMcpRemoved(custom.name) || byName.has(custom.name)) continue
+      byName.set(custom.name, {
+        name: custom.name,
+        connected: custom.enabled,
+      })
+    }
+
+    return Array.from(byName.values()).toSorted((a, b) => a.name.localeCompare(b.name))
   })
 
   const skills = createMemo<ScopedSkillInfo[]>(() => {
@@ -95,8 +110,6 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
     return scopeStore.mergeSkills(Array.from(byKey.values()))
   })
 
-  // Keep backend `session.permissions` synchronized with Global -> Project -> Session MCP & Skill switches
-  // so `SessionContext.select` genuinely filters `<available_skills>`, `<mcp_instructions>`, and tool definitions.
   let lastSyncedKey = ""
 
   createEffect(() => {
@@ -111,10 +124,7 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
       sessionID,
       worktree: directory(),
       skills: skills(),
-      mcps: mcps().map((item) => ({
-        name: item.name,
-        connected: item.status.status !== "disabled",
-      })),
+      mcps: mcps(),
       basePermissions: currentSession.permissions,
     })
 
@@ -138,19 +148,10 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
   })
 
   const activeMcpCount = () =>
-    mcps().filter((mcp) =>
-      scopeStore.isSessionMcpEnabled(
-        activeSessionID(),
-        mcp.name,
-        mcp.status.status === "connected",
-        directory(),
-      ),
-    ).length
+    mcps().filter((mcp) => scopeStore.isProjectMcpEnabled(directory(), mcp.name, mcp.connected)).length
 
   const activeSkillCount = () =>
-    skills().filter((skill) => scopeStore.isSessionSkillEnabled(activeSessionID(), directory(), skill)).length
-
-  const customized = () => scopeStore.hasSessionCustomOverrides(activeSessionID())
+    skills().filter((skill) => scopeStore.isProjectSkillEnabled(directory(), skill)).length
 
   return (
     <Button
@@ -162,17 +163,7 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
       onMouseDown={(event: MouseEvent) => event.preventDefault()}
       onClick={() =>
         void dialog.show(
-          () => (
-            <DialogSessionMcpSkills
-              directory={directory()}
-              sessionID={activeSessionID()}
-              isLocal={isLocalServer()}
-              onInsertSkill={(skill) => {
-                dialog.close()
-                props.model.insertSkill(skill)
-              }}
-            />
-          ),
+          () => <DialogSessionMcpSkills directory={directory()} isLocal={isLocalServer()} />,
           props.model.restoreFocus,
         )
       }
@@ -181,44 +172,46 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
       <span>
         MCP {activeMcpCount()} · Skill {activeSkillCount()}
       </span>
-      <Show when={customized()}>
-        <span class="size-1.5 rounded-full bg-indigo-500" title="当前对话已单独定制 MCP / Skill" />
-      </Show>
     </Button>
   )
 }
 
-function DialogSessionMcpSkills(props: {
-  directory: string
-  sessionID: string | undefined
-  isLocal: boolean
-  onInsertSkill: (skill: { id: string; name: string }) => void
-}) {
+function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) {
   const language = useLanguage()
   const dialog = useDialog()
   const data = useData()
-  const server = useServer()
-  const surface = useSettingsSurface()
   const scopeStore = useExtensionScopeStore()
   const ideGlobal = useIdeGlobalExtensions()
   const toggleMcp = useMcpToggle(() => props.directory)
 
-  const projectName = () => getFilename(props.directory) || props.directory
-
-  const mcps = createMemo(() => {
+  const mcps = createMemo<McpPickerItem[]>(() => {
     const localList = data.location.mcp.server.list({ directory: props.directory }) ?? []
-    const byName = new Map<string, (typeof localList)[number] & { fromIdeGlobal?: boolean }>()
+    const byName = new Map<string, McpPickerItem>()
 
     if (!props.isLocal) {
       for (const item of ideGlobal.mcps()) {
         if (scopeStore.isMcpRemoved(item.name)) continue
-        byName.set(item.name, { ...item, fromIdeGlobal: true })
+        byName.set(item.name, {
+          name: item.name,
+          connected: item.status.status !== "disabled",
+        })
       }
     }
 
     for (const item of localList) {
       if (scopeStore.isMcpRemoved(item.name)) continue
-      byName.set(item.name, item)
+      byName.set(item.name, {
+        name: item.name,
+        connected: item.status.status !== "disabled",
+      })
+    }
+
+    for (const custom of scopeStore.customMcps()) {
+      if (scopeStore.isMcpRemoved(custom.name) || byName.has(custom.name)) continue
+      byName.set(custom.name, {
+        name: custom.name,
+        connected: custom.enabled,
+      })
     }
 
     return Array.from(byName.values()).toSorted((a, b) => a.name.localeCompare(b.name))
@@ -245,212 +238,211 @@ function DialogSessionMcpSkills(props: {
     })
   })
 
-  const customized = () => scopeStore.hasSessionCustomOverrides(props.sessionID)
+  const enabledMcpCount = () =>
+    mcps().filter((item) => scopeStore.isProjectMcpEnabled(props.directory, item.name, item.connected)).length
+
+  const enabledSkillCount = () =>
+    skills().filter((item) => scopeStore.isProjectSkillEnabled(props.directory, item)).length
 
   return (
     <Dialog size="large">
       <DialogHeader>
-        <DialogTitleGroup
-          title="当前对话 MCP & Skill 管理"
-          description={
-            props.sessionID
-              ? `当前项目：${projectName()} · 默认继承该项目的配置，下方开关实时同步至当前对话上下文`
-              : `当前项目：${projectName()} · 新建对话草稿将直接调整该项目的默认配置`
-          }
-        />
+        <DialogTitleGroup title="选择 MCP 与 Skill" />
       </DialogHeader>
 
-      <DialogBody class="flex max-h-[65vh] flex-col gap-4 overflow-y-auto px-4 py-2">
-        <div class="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-v2-border-border-muted bg-v2-background-bg-layer-02/50 px-3 py-2 text-[12px]">
-          <div class="flex items-center gap-2">
-            <span
-              class={`rounded px-1.5 py-0.5 text-[10px] font-medium ${
-                customized()
-                  ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
-                  : "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
-              }`}
-            >
-              {customized() ? "当前对话已定制" : "继承项目默认"}
-            </span>
-            <span class="text-v2-text-text-muted">
-              全局 → 项目（{projectName()}）→ 当前对话 三级联动
-            </span>
-          </div>
-          <div class="flex items-center gap-2">
-            <Show when={props.sessionID && customized()}>
-              <button
-                type="button"
-                class="rounded px-2 py-0.5 text-[11px] font-medium text-indigo-600 hover:bg-indigo-500/10 dark:text-indigo-400"
-                onClick={() => props.sessionID && scopeStore.resetSessionOverrides(props.sessionID)}
-              >
-                恢复继承项目配置
-              </button>
-            </Show>
-            <button
-              type="button"
-              class="rounded px-2 py-0.5 text-[11px] font-medium text-v2-text-text-muted hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
-              onClick={() => {
-                dialog.close()
-                surface.openProject({ server: server.key, project: props.directory, tab: "extensions" })
-              }}
-            >
-              前往项目级配置 →
-            </button>
-          </div>
-        </div>
-
-        <div class="flex flex-col gap-2">
-          <div class="flex items-center justify-between px-1">
-            <span class="text-[12px] font-semibold text-v2-text-text-base">
-              当前对话 MCP 服务 ({mcps().length})
-            </span>
-          </div>
-          <Show
-            when={mcps().length > 0}
-            fallback={
-              <div class="rounded-md border border-dashed border-v2-border-border-muted px-3 py-2 text-[12px] text-v2-text-text-faint">
-                当前项目暂无已配置的 MCP 服务。
+      <DialogBody class="px-4 py-2">
+        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+          <div class="flex min-w-0 flex-col gap-2">
+            <div class="flex items-center justify-between px-1">
+              <div class="flex items-center gap-1.5">
+                <span class="text-[13px] font-semibold text-v2-text-text-base">MCP</span>
+                <span class="rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[11px] font-medium text-v2-text-text-muted">
+                  {enabledMcpCount()} / {mcps().length}
+                </span>
               </div>
-            }
-          >
-            <div class="flex flex-col gap-1.5">
-              <For each={mcps()}>
-                {(mcp) => {
-                  const projectEnabled = () =>
-                    scopeStore.isProjectMcpEnabled(
-                      props.directory,
-                      mcp.name,
-                      mcp.status.status !== "disabled",
-                    )
-
-                  const sessionEnabled = () =>
-                    scopeStore.isSessionMcpEnabled(props.sessionID, mcp.name, projectEnabled(), props.directory)
-
-                  return (
-                    <div class="flex items-center justify-between gap-2 rounded-md border border-v2-border-border-muted/70 px-3 py-2">
-                      <div class="flex min-w-0 flex-1 items-center gap-2">
-                        <span
-                          class={`size-2 shrink-0 rounded-full ${
-                            sessionEnabled() ? "bg-emerald-500" : "bg-zinc-400"
-                          }`}
-                        />
-                        <span class="truncate text-[13px] font-medium text-v2-text-text-base">{mcp.name}</span>
-                        <Show when={mcp.fromIdeGlobal}>
-                          <span class="shrink-0 rounded bg-zinc-500/15 px-1.5 py-0.5 text-[10px] leading-none font-medium text-zinc-600 dark:text-zinc-400">
-                            IDE 全局
-                          </span>
-                        </Show>
-                      </div>
-                      <Switch
-                        checked={sessionEnabled()}
-                        hideLabel
-                        onChange={(next) => {
-                          if (props.sessionID) {
-                            scopeStore.setSessionMcpEnabled(props.sessionID, mcp.name, next)
-                          }
-
-                          if (!props.sessionID) {
-                            scopeStore.setProjectMcpEnabled(props.directory, mcp.name, next)
-                          }
-
-                          if (next && mcp.status.status === "disabled" && !toggleMcp.isPending) {
-                            toggleMcp.mutate({ name: mcp.name, enabled: true })
-                          }
-                        }}
-                      >
-                        {mcp.name}
-                      </Switch>
-                    </div>
-                  )
-                }}
-              </For>
+              <Show when={mcps().length > 0}>
+                <div class="flex items-center gap-1">
+                  <Button
+                    variant="ghost-muted"
+                    size="small"
+                    onClick={() =>
+                      scopeStore.setProjectMcpsBatch(
+                        props.directory,
+                        mcps().map((item) => ({ name: item.name, enabled: true })),
+                      )
+                    }
+                  >
+                    全选
+                  </Button>
+                  <Button
+                    variant="ghost-muted"
+                    size="small"
+                    onClick={() =>
+                      scopeStore.setProjectMcpsBatch(
+                        props.directory,
+                        mcps().map((item) => ({ name: item.name, enabled: false })),
+                      )
+                    }
+                  >
+                    清空
+                  </Button>
+                </div>
+              </Show>
             </div>
-          </Show>
-        </div>
 
-        <div class="flex flex-col gap-2">
-          <div class="flex items-center justify-between px-1">
-            <span class="text-[12px] font-semibold text-v2-text-text-base">
-              当前对话可用 Skill 技能 ({skills().length})
-            </span>
-            <span class="text-[11px] text-v2-text-text-faint">
-              点击「@调用」可直接将该技能插入当前对话输入框
-            </span>
+            <div class="flex max-h-[52vh] flex-col gap-1 overflow-y-auto rounded-lg border border-v2-border-border-muted p-1.5">
+              <Show
+                when={mcps().length > 0}
+                fallback={
+                  <div class="px-3 py-8 text-center text-[12px] text-v2-text-text-faint">
+                    暂无 MCP 服务
+                  </div>
+                }
+              >
+                <For each={mcps()}>
+                  {(mcp) => {
+                    const checked = () =>
+                      scopeStore.isProjectMcpEnabled(props.directory, mcp.name, mcp.connected)
+
+                    const handleToggle = () => {
+                      const next = !checked()
+                      scopeStore.setProjectMcpEnabled(props.directory, mcp.name, next)
+
+                      if (next && !mcp.connected && !toggleMcp.isPending) {
+                        toggleMcp.mutate({ name: mcp.name, enabled: true })
+                      }
+                    }
+
+                    return (
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={checked()}
+                        class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-v2-overlay-simple-overlay-hover"
+                        onClick={handleToggle}
+                      >
+                        <span
+                          class={`flex size-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                            checked()
+                              ? "border-v2-interactive-bg-accent-base bg-v2-interactive-bg-accent-base text-white"
+                              : "border-v2-border-border-strong bg-transparent"
+                          }`}
+                        >
+                          <Show when={checked()}>
+                            <Icon name="check" size="small" />
+                          </Show>
+                        </span>
+                        <span
+                          class="min-w-0 flex-1 truncate text-[13px] font-medium"
+                          classList={{
+                            "text-v2-text-text-base": checked(),
+                            "text-v2-text-text-muted": !checked(),
+                          }}
+                        >
+                          {mcp.name}
+                        </span>
+                      </button>
+                    )
+                  }}
+                </For>
+              </Show>
+            </div>
           </div>
-          <Show
-            when={skills().length > 0}
-            fallback={
-              <div class="rounded-md border border-dashed border-v2-border-border-muted px-3 py-2 text-[12px] text-v2-text-text-faint">
-                当前暂无可用 Skill。
-              </div>
-            }
-          >
-            <div class="flex flex-col gap-1.5">
-              <For each={skills()}>
-                {(skill) => {
-                  const origin = () => resolveSkillOrigin(skill.path, props.directory, skill.fromIdeGlobal)
-                  const enabled = () => scopeStore.isSessionSkillEnabled(props.sessionID, props.directory, skill)
-                  const desc = () => localizeSkillDescription(skill, language.locale())
 
-                  return (
-                    <div class="flex items-center justify-between gap-3 rounded-md border border-v2-border-border-muted/70 px-3 py-2 hover:bg-v2-overlay-simple-overlay-hover/50">
-                      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <div class="flex items-center gap-1.5">
-                          <span
-                            class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${origin().class}`}
-                          >
-                            {origin().label}
-                          </span>
+          <div class="flex min-w-0 flex-col gap-2">
+            <div class="flex items-center justify-between px-1">
+              <div class="flex items-center gap-1.5">
+                <span class="text-[13px] font-semibold text-v2-text-text-base">Skill</span>
+                <span class="rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[11px] font-medium text-v2-text-text-muted">
+                  {enabledSkillCount()} / {skills().length}
+                </span>
+              </div>
+              <Show when={skills().length > 0}>
+                <div class="flex items-center gap-1">
+                  <Button
+                    variant="ghost-muted"
+                    size="small"
+                    onClick={() =>
+                      scopeStore.setProjectSkillsBatch(
+                        props.directory,
+                        skills().map((skill) => ({ skill, enabled: true })),
+                      )
+                    }
+                  >
+                    全选
+                  </Button>
+                  <Button
+                    variant="ghost-muted"
+                    size="small"
+                    onClick={() =>
+                      scopeStore.setProjectSkillsBatch(
+                        props.directory,
+                        skills().map((skill) => ({ skill, enabled: false })),
+                      )
+                    }
+                  >
+                    清空
+                  </Button>
+                </div>
+              </Show>
+            </div>
+
+            <div class="flex max-h-[52vh] flex-col gap-1 overflow-y-auto rounded-lg border border-v2-border-border-muted p-1.5">
+              <Show
+                when={skills().length > 0}
+                fallback={
+                  <div class="px-3 py-8 text-center text-[12px] text-v2-text-text-faint">
+                    暂无可用 Skill
+                  </div>
+                }
+              >
+                <For each={skills()}>
+                  {(skill) => {
+                    const checked = () => scopeStore.isProjectSkillEnabled(props.directory, skill)
+                    const desc = () => localizeSkillDescription(skill, language.locale())
+
+                    return (
+                      <button
+                        type="button"
+                        role="checkbox"
+                        aria-checked={checked()}
+                        class="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-v2-overlay-simple-overlay-hover"
+                        onClick={() => scopeStore.setProjectSkillEnabled(props.directory, skill, !checked())}
+                      >
+                        <span
+                          class={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                            checked()
+                              ? "border-v2-interactive-bg-accent-base bg-v2-interactive-bg-accent-base text-white"
+                              : "border-v2-border-border-strong bg-transparent"
+                          }`}
+                        >
+                          <Show when={checked()}>
+                            <Icon name="check" size="small" />
+                          </Show>
+                        </span>
+                        <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                           <span
                             class="truncate text-[13px] font-medium"
                             classList={{
-                              "text-v2-text-text-base": enabled(),
-                              "text-v2-text-text-faint": !enabled(),
+                              "text-v2-text-text-base": checked(),
+                              "text-v2-text-text-muted": !checked(),
                             }}
                           >
                             {skill.name}
                           </span>
+                          <Show when={desc()}>
+                            <span class="truncate text-[11px] text-v2-text-text-faint" title={desc()}>
+                              {desc()}
+                            </span>
+                          </Show>
                         </div>
-                        <Show when={desc()}>
-                          <span class="truncate text-[11px] text-v2-text-text-faint" title={desc()}>
-                            {desc()}
-                          </span>
-                        </Show>
-                      </div>
-                      <div class="flex shrink-0 items-center gap-2">
-                        <Show when={skill.id}>
-                          {(id) => (
-                            <button
-                              type="button"
-                              class="rounded bg-v2-background-bg-layer-02 px-2 py-1 text-[11px] font-medium text-v2-text-text-base hover:bg-indigo-500/15 hover:text-indigo-600 dark:hover:text-indigo-400"
-                              onClick={() => props.onInsertSkill({ id: id(), name: skill.name })}
-                            >
-                              @调用
-                            </button>
-                          )}
-                        </Show>
-                        <Switch
-                          checked={enabled()}
-                          hideLabel
-                          onChange={(next) => {
-                            if (props.sessionID) {
-                              scopeStore.setSessionSkillEnabled(props.sessionID, skill, next)
-
-                              return
-                            }
-
-                            scopeStore.setProjectSkillEnabled(props.directory, skill, next)
-                          }}
-                        >
-                          {skill.name}
-                        </Switch>
-                      </div>
-                    </div>
-                  )
-                }}
-              </For>
+                      </button>
+                    )
+                  }}
+                </For>
+              </Show>
             </div>
-          </Show>
+          </div>
         </div>
       </DialogBody>
 

@@ -1,30 +1,19 @@
-import { For, Show, createEffect, createMemo, createSignal, type Component, type JSX } from "solid-js"
+import { Show, createEffect, createMemo, createSignal, type Component, type JSX } from "solid-js"
 import { Button } from "@opencode/ui/button"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Select } from "@opencode/ui/select"
-import { Switch } from "@opencode/ui/switch"
 import { TextInput } from "@opencode/ui/text-input"
 import { displayName } from "@opencode/ui/project-avatar"
 import { useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
-import { useData, useServer } from "@/runtime/server/current"
-import { useServerSDK } from "@/runtime/server/client"
+import { useServer } from "@/runtime/server/current"
 import { ServerConnection, useServers } from "@/runtime/server/registry"
 import { showToast } from "@/shell/notifications/toast"
 import type { LocalProject } from "@/shell/state/layout"
 import { pathKey } from "@/workspaces/path-key"
-import {
-  isProjectLocalSkill,
-  localizeSkillDescription,
-  resolveSkillOrigin,
-  skillScopeKey,
-  useExtensionScopeStore,
-  useIdeGlobalExtensions,
-  type ScopedSkillInfo,
-} from "@/shell/titlebar/extension-scope-store"
+import { useExtensionScopeStore } from "@/shell/titlebar/extension-scope-store"
 import { useArchiveState } from "@/shell/titlebar/archive-store"
-import { useSettingsSurface } from "../surface"
 import { SettingsList } from "../list"
 import { SettingsRow } from "../row"
 import { createEditProjectModel } from "./project-model"
@@ -215,273 +204,6 @@ function ProjectBasicInfoSection(props: {
   )
 }
 
-function SingleProjectExtensions(props: { project: LocalProject; isLocal: boolean }) {
-  const language = useLanguage()
-  const serverSDK = useServerSDK()
-  const data = useData()
-  const surface = useSettingsSurface()
-  const scopeStore = useExtensionScopeStore()
-  const ideGlobal = useIdeGlobalExtensions()
-
-  createEffect(() => {
-    if (serverSDK.connection.status() !== "connected") return
-    const ref = { directory: props.project.worktree }
-    void Promise.all([
-      data.location.mcp.server.sync(),
-      data.location.skill.sync(),
-      data.location.mcp.server.sync(ref),
-      data.location.skill.sync(ref),
-    ]).catch(() => undefined)
-  })
-
-  const globalMcpSet = createMemo(() => {
-    const names = new Set((data.location.mcp.server.list() ?? []).map((server) => server.name))
-
-    for (const custom of scopeStore.customMcps()) {
-      names.add(custom.name)
-    }
-
-    if (!props.isLocal) {
-      for (const item of ideGlobal.mcps()) {
-        names.add(item.name)
-      }
-    }
-
-    return names
-  })
-
-  const mcps = createMemo(() => {
-    const projectList = data.location.mcp.server.list({ directory: props.project.worktree }) ?? []
-    const globalList = data.location.mcp.server.list() ?? []
-    const byName = new Map<string, { name: string; status: { status: string }; fromIdeGlobal?: boolean }>()
-
-    if (!props.isLocal) {
-      for (const item of ideGlobal.mcps()) {
-        if (scopeStore.isMcpRemoved(item.name)) continue
-        byName.set(item.name, { ...item, fromIdeGlobal: true })
-      }
-    }
-
-    for (const item of globalList) {
-      if (scopeStore.isMcpRemoved(item.name)) continue
-      byName.set(item.name, item)
-    }
-
-    for (const item of projectList) {
-      if (scopeStore.isMcpRemoved(item.name)) continue
-      byName.set(item.name, item)
-    }
-
-    for (const custom of scopeStore.customMcps()) {
-      if (scopeStore.isMcpRemoved(custom.name) || byName.has(custom.name)) continue
-      byName.set(custom.name, {
-        name: custom.name,
-        status: { status: custom.enabled ? "connected" : "disabled" },
-      })
-    }
-
-    return Array.from(byName.values()).toSorted((a, b) => a.name.localeCompare(b.name))
-  })
-
-  const skills = createMemo<ScopedSkillInfo[]>(() => {
-    const projectList = data.location.skill.list({ directory: props.project.worktree }) ?? []
-    const globalList = data.location.skill.list() ?? []
-    const ideList = props.isLocal ? [] : ideGlobal.skills()
-    const byKey = new Map<string, ScopedSkillInfo>()
-
-    for (const item of [...projectList, ...globalList, ...ideList]) {
-      const key = skillScopeKey(item)
-
-      if (!byKey.has(key)) {
-        byKey.set(key, item)
-      }
-    }
-
-    return scopeStore.mergeSkills(Array.from(byKey.values())).toSorted((a, b) => {
-      const aLocal = isProjectLocalSkill(a.path, props.project.worktree) ? 1 : 0
-      const bLocal = isProjectLocalSkill(b.path, props.project.worktree) ? 1 : 0
-
-      if (aLocal !== bLocal) return bLocal - aLocal
-
-      return a.name.localeCompare(b.name)
-    })
-  })
-
-  const enabledMcpCount = () =>
-    mcps().filter((item) =>
-      scopeStore.isProjectMcpEnabled(props.project.worktree, item.name, item.status.status !== "disabled"),
-    ).length
-
-  const enabledSkillCount = () =>
-    skills().filter((item) => scopeStore.isProjectSkillEnabled(props.project.worktree, item)).length
-
-  return (
-    <div class="flex flex-col gap-5">
-      <div class="flex flex-col gap-2">
-        <div class="flex items-center justify-between px-1">
-          <div class="flex items-center gap-2">
-            <span class="text-[13px] font-semibold text-v2-text-text-base">该项目 MCP 服务</span>
-            <span class="rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[11px] font-medium text-v2-text-text-muted">
-              已启用 {enabledMcpCount()} / {mcps().length}
-            </span>
-          </div>
-          <Button variant="ghost-muted" size="small" onClick={() => surface.open("extensions")}>
-            管理全局扩展
-          </Button>
-        </div>
-
-        <Show
-          when={mcps().length > 0}
-          fallback={
-            <div class="rounded-lg border border-dashed border-v2-border-border-muted px-4 py-3 text-[12px] text-v2-text-text-faint">
-              当前项目暂无已配置的 MCP 服务。可在「设置 → MCP 与扩展」中添加或配置。
-            </div>
-          }
-        >
-          <SettingsList variant="catalog">
-            <For each={mcps()}>
-              {(mcp) => {
-                const isProjectOnly = () => !globalMcpSet().has(mcp.name)
-
-                const enabled = () =>
-                  scopeStore.isProjectMcpEnabled(props.project.worktree, mcp.name, mcp.status.status !== "disabled")
-
-                return (
-                  <div class="settings-extension-row">
-                    <div class="settings-extension-lead min-w-0 flex-1">
-                      <span
-                        class={`size-2 shrink-0 rounded-full ${
-                          enabled() && mcp.status.status === "connected"
-                            ? "bg-emerald-500"
-                            : mcp.status.status === "failed"
-                              ? "bg-red-500"
-                              : "bg-zinc-400"
-                        }`}
-                      />
-                      <span class="settings-extension-name truncate">{mcp.name}</span>
-                      <span
-                        class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${
-                          isProjectOnly()
-                            ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
-                            : "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400"
-                        }`}
-                      >
-                        {isProjectOnly() ? "项目专属" : mcp.fromIdeGlobal ? "IDE 全局" : "全局共享"}
-                      </span>
-                    </div>
-                    <Switch
-                      checked={enabled()}
-                      hideLabel
-                      onChange={(next) => scopeStore.setProjectMcpEnabled(props.project.worktree, mcp.name, next)}
-                    >
-                      {mcp.name}
-                    </Switch>
-                  </div>
-                )
-              }}
-            </For>
-          </SettingsList>
-        </Show>
-      </div>
-
-      <div class="flex flex-col gap-2">
-        <div class="flex flex-wrap items-center justify-between gap-2 px-1">
-          <div class="flex items-center gap-2">
-            <span class="text-[13px] font-semibold text-v2-text-text-base">该项目 Skill 技能</span>
-            <span class="rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[11px] font-medium text-v2-text-text-muted">
-              已启用 {enabledSkillCount()} / {skills().length}
-            </span>
-          </div>
-          <Show when={skills().length > 0}>
-            <div class="flex items-center gap-1">
-              <Button
-                variant="ghost-muted"
-                size="small"
-                onClick={() =>
-                  scopeStore.setProjectSkillsBatch(
-                    props.project.worktree,
-                    skills().map((skill) => ({ skill, enabled: true })),
-                  )
-                }
-              >
-                全选
-              </Button>
-              <Button
-                variant="ghost-muted"
-                size="small"
-                onClick={() =>
-                  scopeStore.setProjectSkillsBatch(
-                    props.project.worktree,
-                    skills().map((skill) => ({ skill, enabled: false })),
-                  )
-                }
-              >
-                清空
-              </Button>
-            </div>
-          </Show>
-        </div>
-
-        <Show
-          when={skills().length > 0}
-          fallback={
-            <div class="rounded-lg border border-dashed border-v2-border-border-muted px-4 py-3 text-[12px] text-v2-text-text-faint">
-              未检测到可用 Skill。
-            </div>
-          }
-        >
-          <SettingsList variant="catalog">
-            <For each={skills()}>
-              {(skill) => {
-                const origin = () => resolveSkillOrigin(skill.path, props.project.worktree, skill.fromIdeGlobal)
-                const enabled = () => scopeStore.isProjectSkillEnabled(props.project.worktree, skill)
-                const desc = () => localizeSkillDescription(skill, language.locale())
-
-                return (
-                  <div class="settings-extension-row">
-                    <div class="settings-extension-lead min-w-0 flex-1">
-                      <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                        <div class="flex items-center gap-2">
-                          <span
-                            class="settings-extension-name truncate"
-                            classList={{
-                              "text-v2-text-text-base": enabled(),
-                              "text-v2-text-text-faint": !enabled(),
-                            }}
-                          >
-                            {skill.name}
-                          </span>
-                          <span
-                            class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${origin().class}`}
-                          >
-                            {origin().label}
-                          </span>
-                        </div>
-                        <Show when={desc()}>
-                          <span class="truncate text-11-regular text-v2-text-text-faint" title={desc()}>
-                            {desc()}
-                          </span>
-                        </Show>
-                      </div>
-                    </div>
-                    <Switch
-                      checked={enabled()}
-                      hideLabel
-                      onChange={(next) => scopeStore.setProjectSkillEnabled(props.project.worktree, skill, next)}
-                    >
-                      {skill.name}
-                    </Switch>
-                  </div>
-                )
-              }}
-            </For>
-          </SettingsList>
-        </Show>
-      </div>
-    </div>
-  )
-}
-
 export const SettingsProjects: Component<{
   server: ServerConnection.Any
   active: boolean
@@ -573,8 +295,6 @@ export const SettingsProjects: Component<{
                 isLocal={isLocalServer()}
                 onRelocated={props.onOpenProject}
               />
-
-              <SingleProjectExtensions project={project} isLocal={isLocalServer()} />
             </div>
           )}
         </Show>
