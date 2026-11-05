@@ -1,5 +1,7 @@
 import { For, Show, createEffect, createMemo, createSignal, type Component, type JSX } from "solid-js"
 import { Button } from "@opencode/ui/button"
+import { Icon } from "@opencode/ui/icon"
+import { IconButton } from "@opencode/ui/icon-button"
 import { Select } from "@opencode/ui/select"
 import { Switch } from "@opencode/ui/switch"
 import { TextInput } from "@opencode/ui/text-input"
@@ -40,17 +42,31 @@ function ProjectBasicInfoSection(props: {
   const context = useServer().ctx
   const scopeStore = useExtensionScopeStore()
   const model = createEditProjectModel({ project: props.project, server: props.server })
+  const [editingName, setEditingName] = createSignal(false)
   const [pathValue, setPathValue] = createSignal(props.project.worktree)
   const [relocating, setRelocating] = createSignal(false)
+  let nameInput: HTMLInputElement | undefined
 
   createEffect(() => {
     setPathValue(props.project.worktree)
   })
 
-  const pathChanged = () => {
-    const trimmed = pathValue().trim()
+  const startEditingName = () => {
+    setEditingName(true)
+    requestAnimationFrame(() => {
+      nameInput?.focus()
+      nameInput?.select()
+    })
+  }
 
-    return trimmed.length > 0 && pathKey(trimmed) !== pathKey(props.project.worktree)
+  const commitName = () => {
+    model.saveName()
+    setEditingName(false)
+  }
+
+  const cancelEditingName = () => {
+    model.setStore("name", props.project.name || model.folderName())
+    setEditingName(false)
   }
 
   const applyNewPath = async (rawTarget: string) => {
@@ -91,7 +107,7 @@ function ProjectBasicInfoSection(props: {
   }
 
   const browseDirectory = async () => {
-    if (!props.isLocal || !platform.openDirectoryPickerDialog) return
+    if (!props.isLocal || platform.platform !== "desktop") return
 
     const result = await platform.openDirectoryPickerDialog({
       title: "选择项目文件夹",
@@ -107,58 +123,89 @@ function ProjectBasicInfoSection(props: {
 
   return (
     <SettingsList>
-      <SettingsRow title="项目名称" description="在左侧边栏展示的项目名称，可直接修改">
-        <div class="w-64 max-w-full">
-          <TextInput
-            data-action="settings-project-name"
-            type="text"
-            appearance="base"
-            value={model.store.name}
-            placeholder={model.folderName()}
-            aria-label={language.t("project.settings.name.title")}
-            onInput={(event) => model.setStore("name", event.currentTarget.value)}
-            onBlur={model.saveName}
-            onKeyDown={(event) => {
-              if (event.key === "Enter") event.currentTarget.blur()
-            }}
-          />
-        </div>
-      </SettingsRow>
+      <SettingsRow title="项目名称">
+        <Show
+          when={editingName()}
+          fallback={
+            <div class="flex max-w-full items-center gap-1.5">
+              <span
+                data-action="settings-project-name-display"
+                class="max-w-64 truncate text-13-regular text-v2-text-text-base"
+              >
+                {model.store.name || model.folderName()}
+              </span>
+              <IconButton
+                data-action="settings-project-name-edit"
+                variant="ghost-muted"
+                size="small"
+                icon={<Icon name="edit" size="small" />}
+                aria-label="编辑项目名称"
+                onClick={startEditingName}
+              />
+            </div>
+          }
+        >
+          <div class="flex w-64 max-w-full items-center gap-1.5">
+            <div class="min-w-0 flex-1">
+              <TextInput
+                ref={(el) => {
+                  nameInput = el
+                }}
+                data-action="settings-project-name"
+                type="text"
+                appearance="base"
+                value={model.store.name}
+                placeholder={model.folderName()}
+                aria-label={language.t("project.settings.name.title")}
+                onInput={(event) => model.setStore("name", event.currentTarget.value)}
+                onBlur={commitName}
+                onKeyDown={(event) => {
+                  if (event.isComposing || event.keyCode === 229) return
 
-      <SettingsRow
-        title={props.isLocal ? "本地路径" : "远程路径"}
-        description="该项目对应的工作区目录路径，支持直接编辑或重新选择目录"
-      >
-        <div class="flex w-96 max-w-full items-center gap-1.5">
-          <div class="min-w-0 flex-1">
-            <TextInput
-              data-action="settings-project-path"
-              type="text"
-              appearance="base"
-              value={pathValue()}
-              disabled={relocating()}
-              placeholder="/path/to/project"
-              aria-label="项目路径"
-              onInput={(event) => setPathValue(event.currentTarget.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && pathChanged()) {
-                  void applyNewPath(pathValue())
-                }
-              }}
+                  if (event.key === "Enter") {
+                    event.preventDefault()
+                    commitName()
+
+                    return
+                  }
+
+                  if (event.key === "Escape") {
+                    event.preventDefault()
+                    cancelEditingName()
+                  }
+                }}
+              />
+            </div>
+            <IconButton
+              data-action="settings-project-name-confirm"
+              variant="ghost-muted"
+              size="small"
+              icon={<Icon name="check" size="small" />}
+              aria-label="保存项目名称"
+              onMouseDown={(event) => event.preventDefault()}
+              onClick={commitName}
             />
           </div>
-          <Show when={pathChanged()}>
+        </Show>
+      </SettingsRow>
+
+      <SettingsRow title={props.isLocal ? "本地路径" : "远程路径"}>
+        <div class="flex max-w-full items-center gap-2">
+          <span
+            data-action="settings-project-path"
+            class="max-w-80 truncate font-mono text-13-regular text-v2-text-text-muted"
+            title={pathValue()}
+          >
+            {pathValue()}
+          </span>
+          <Show when={props.isLocal && platform.platform === "desktop"}>
             <Button
-              variant="secondary"
+              data-action="settings-project-path-browse"
+              variant="neutral"
               size="small"
               disabled={relocating()}
-              onClick={() => void applyNewPath(pathValue())}
+              onClick={() => void browseDirectory()}
             >
-              保存
-            </Button>
-          </Show>
-          <Show when={props.isLocal && !!platform.openDirectoryPickerDialog}>
-            <Button variant="ghost-muted" size="small" disabled={relocating()} onClick={() => void browseDirectory()}>
               浏览...
             </Button>
           </Show>
@@ -190,6 +237,10 @@ function SingleProjectExtensions(props: { project: LocalProject; isLocal: boolea
   const globalMcpSet = createMemo(() => {
     const names = new Set((data.location.mcp.server.list() ?? []).map((server) => server.name))
 
+    for (const custom of scopeStore.customMcps()) {
+      names.add(custom.name)
+    }
+
     if (!props.isLocal) {
       for (const item of ideGlobal.mcps()) {
         names.add(item.name)
@@ -202,20 +253,31 @@ function SingleProjectExtensions(props: { project: LocalProject; isLocal: boolea
   const mcps = createMemo(() => {
     const projectList = data.location.mcp.server.list({ directory: props.project.worktree }) ?? []
     const globalList = data.location.mcp.server.list() ?? []
-    const byName = new Map<string, (typeof globalList)[number] & { fromIdeGlobal?: boolean }>()
+    const byName = new Map<string, { name: string; status: { status: string }; fromIdeGlobal?: boolean }>()
 
     if (!props.isLocal) {
       for (const item of ideGlobal.mcps()) {
+        if (scopeStore.isMcpRemoved(item.name)) continue
         byName.set(item.name, { ...item, fromIdeGlobal: true })
       }
     }
 
     for (const item of globalList) {
+      if (scopeStore.isMcpRemoved(item.name)) continue
       byName.set(item.name, item)
     }
 
     for (const item of projectList) {
+      if (scopeStore.isMcpRemoved(item.name)) continue
       byName.set(item.name, item)
+    }
+
+    for (const custom of scopeStore.customMcps()) {
+      if (scopeStore.isMcpRemoved(custom.name) || byName.has(custom.name)) continue
+      byName.set(custom.name, {
+        name: custom.name,
+        status: { status: custom.enabled ? "connected" : "disabled" },
+      })
     }
 
     return Array.from(byName.values()).toSorted((a, b) => a.name.localeCompare(b.name))
@@ -235,7 +297,7 @@ function SingleProjectExtensions(props: { project: LocalProject; isLocal: boolea
       }
     }
 
-    return Array.from(byKey.values()).toSorted((a, b) => {
+    return scopeStore.mergeSkills(Array.from(byKey.values())).toSorted((a, b) => {
       const aLocal = isProjectLocalSkill(a.path, props.project.worktree) ? 1 : 0
       const bLocal = isProjectLocalSkill(b.path, props.project.worktree) ? 1 : 0
 
