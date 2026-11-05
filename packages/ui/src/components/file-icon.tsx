@@ -47,6 +47,13 @@ let sources: Partial<Record<IconName, () => Promise<string>>> | undefined
 
 function loadSymbol(name: IconName) {
   if (requested.has(name)) return
+
+  if (typeof document !== "undefined" && document.getElementById(symbolID(name))) {
+    requested.add(name)
+
+    return
+  }
+
   requested.add(name)
   sources ??= Object.fromEntries(
     Object.entries(
@@ -54,7 +61,7 @@ function loadSymbol(name: IconName) {
     ).map(([path, load]) => [toIconName(path), load]),
   )
   sources[name]?.()
-    .then((text) => insertSymbol(name, text))
+    .then((text) => setTimeout(() => insertSymbol(name, text), 0))
     .catch(() => requested.delete(name))
 }
 

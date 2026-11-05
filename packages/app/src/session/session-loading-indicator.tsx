@@ -1,4 +1,5 @@
 import { createSignal, onCleanup, onMount } from "solid-js"
+import { Loader } from "@opencode/ui/loader"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
 import "./session-loading-indicator.css"
 
@@ -68,10 +69,10 @@ export function SessionLoadingIndicator(props: {
           </div>
         </div>
 
-        <div class="mt-6 flex w-full max-w-[320px] flex-col gap-2.5 rounded-xl border border-v2-border-border-subtle bg-v2-surface-surface-primary/95 px-4 py-3.5 shadow-sm backdrop-blur-sm">
+        <div class="mt-6 flex w-full max-w-[330px] flex-col gap-3 rounded-xl border border-v2-border-border-subtle bg-v2-surface-surface-primary/95 px-4 py-3.5 shadow-sm backdrop-blur-sm">
           <div class="flex items-center justify-between gap-3">
-            <div class="flex min-w-0 items-center gap-2 text-[13px] font-medium leading-[var(--line-height-compact)] text-v2-text-text-base">
-              <span class="size-2 shrink-0 rounded-full bg-v2-icon-icon-base animate-pulse" />
+            <div class="flex min-w-0 items-center gap-2.5 text-[13px] font-medium leading-[var(--line-height-compact)] text-v2-text-text-base">
+              <Loader width={18} height={18} class="shrink-0 text-v2-icon-icon-base" />
               <TextShimmer text={props.label ?? "正在加载会话内容..."} active />
             </div>
             <span class="shrink-0 font-mono text-[11px] tabular-nums text-v2-text-text-muted">

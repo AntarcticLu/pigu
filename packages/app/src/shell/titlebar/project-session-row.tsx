@@ -6,6 +6,7 @@ import { ActivityRing } from "@opencode/ui/activity-ring"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
+import { Loader } from "@opencode/ui/loader"
 import { Menu } from "@opencode/ui/menu"
 import { TextInput } from "@opencode/ui/text-input"
 import { useLanguage } from "@/runtime/i18n/language"
@@ -14,6 +15,7 @@ import { useGlobal } from "@/runtime/server/runtime"
 import { useSessionTabAvatarState } from "@/shell/layout/project-avatar-state"
 import { errorMessage } from "@/shell/layout/helpers"
 import { showToast } from "@/shell/notifications/toast"
+import { isSessionUiLoading, startSessionUiLoading } from "@/session/loading-state"
 import { sessionTreeIDs } from "@/session/requests/session-request-tree"
 import { sessionLabel } from "@/session/title"
 import { notifySessionTabsRemoved } from "./session-events"
@@ -188,10 +190,27 @@ export function ProjectSessionRow(props: {
           current.data.session.remember(props.session)
           void current.data.session.message.sync(props.session.id).catch(() => undefined)
         }}
-        onClick={props.onOpen}
+        onClick={() => {
+          if (!props.active) {
+            startSessionUiLoading(props.session.id)
+            requestAnimationFrame(() => props.onOpen())
+
+            return
+          }
+
+          props.onOpen()
+        }}
         onKeyDown={(event: KeyboardEvent) => {
           if (event.key === "Enter" || event.key === " ") {
             event.preventDefault()
+
+            if (!props.active) {
+              startSessionUiLoading(props.session.id)
+              requestAnimationFrame(() => props.onOpen())
+
+              return
+            }
+
             props.onOpen()
           }
         }}
@@ -216,14 +235,21 @@ export function ProjectSessionRow(props: {
         </span>
         <span class="flex size-3.5 shrink-0 items-center justify-center">
           <Show
-            when={status.loading()}
+            when={isSessionUiLoading(props.session.id)}
             fallback={
-              <Show when={status.unread() && !props.active}>
-                <span class="size-1.5 rounded-full bg-v2-text-text-base" />
+              <Show
+                when={status.loading()}
+                fallback={
+                  <Show when={status.unread() && !props.active}>
+                    <span class="size-1.5 rounded-full bg-v2-text-text-base" />
+                  </Show>
+                }
+              >
+                <ActivityRing width={14} height={14} />
               </Show>
             }
           >
-            <ActivityRing width={14} height={14} />
+            <Loader width={14} height={14} class="text-v2-text-text-base" />
           </Show>
         </span>
       </Menu.Context.Trigger>

@@ -48,6 +48,7 @@ import {
 } from "./cold-mount"
 import { prefersReducedMotion } from "@opencode/ui/motion"
 import { holdLandingWidth } from "@/shell/panel-motion"
+import { stopSessionUiLoading } from "../loading-state"
 import { SessionLoadingIndicator } from "../session-loading-indicator"
 import type { TimelineFollow } from "./follow"
 import { defersAdjustments, END_EPSILON, MIN_OVERFLOW, needsEndProbe, ZOOM_SLACK } from "./machine"
@@ -659,6 +660,7 @@ export function createTimelineVirtualizer(input: Input) {
   let contentObserver: MutationObserver | undefined
   let viewportObserver: ResizeObserver | undefined
   let revealTimer: ReturnType<typeof setTimeout> | undefined
+  let checkFrame: number | undefined
 
   // Within the zoom slack only a write finds the end the browser reaches: one that does not move proves the view is
   // already there, and one that does is undone before anything paints.
@@ -746,7 +748,11 @@ export function createTimelineVirtualizer(input: Input) {
     }
 
     if (effect.type === "check.schedule") {
-      queueMicrotask(() => dispatchCold({ type: "check.ready", attempt: effect.attempt }))
+      if (checkFrame !== undefined) cancelAnimationFrame(checkFrame)
+      checkFrame = requestAnimationFrame(() => {
+        checkFrame = undefined
+        dispatchCold({ type: "check.ready", attempt: effect.attempt })
+      })
 
       return
     }
@@ -765,6 +771,12 @@ export function createTimelineVirtualizer(input: Input) {
     }
 
     clearTimeout(revealTimer)
+
+    if (checkFrame !== undefined) {
+      cancelAnimationFrame(checkFrame)
+      checkFrame = undefined
+    }
+
     contentObserver?.disconnect()
     viewportObserver?.disconnect()
   }
@@ -777,9 +789,13 @@ export function createTimelineVirtualizer(input: Input) {
     // Markdown can finish before ResizeObserver delivers its new box. The
     // normal measureElement path skips reads while scrolling; this gate needs
     // current boxes before expanding the estimated range or revealing it.
+    const measured: Array<{ index: number; height: number }> = []
     virtualizer.elementsCache.forEach((element) => {
-      if (element.isConnected) virtualizer.resizeItem(virtualizer.indexFromElement(element), element.offsetHeight)
+      if (element.isConnected) {
+        measured.push({ index: virtualizer.indexFromElement(element), height: element.offsetHeight })
+      }
     })
+    measured.forEach((item) => virtualizer.resizeItem(item.index, item.height))
 
     if (pendingSizes.size || pendingMeasurements()) return "waiting"
     const pinned = input.follow.following()
@@ -805,6 +821,11 @@ export function createTimelineVirtualizer(input: Input) {
 
   onMount(() => dispatchCold({ type: "mounted", active: active() }))
   createEffect(on(active, (value) => dispatchCold(value ? ACTIVATED : DEACTIVATED), { defer: true }))
+  createEffect(() => {
+    if (active() && !coldHidden()) {
+      stopSessionUiLoading(ownerSessionKey.split(":").at(-1))
+    }
+  })
 
   let measuredSessionKey = input.sessionKey()
   createEffect(() => {

@@ -43,6 +43,7 @@ import { TimelineSearchBar } from "./timeline/search-bar"
 import { createTimelineQuote, TimelineQuote } from "./timeline/quote"
 import { createTimelineQuoteHighlight } from "./timeline/quote-highlight"
 import { ActiveSessionComposerRegion, createActiveSessionRegion } from "./composer/region"
+import { isTimelineWarm, startSessionUiLoading, stopSessionUiLoading } from "./loading-state"
 import { SessionIdentityHeader, SessionLocation } from "./session-identity-header"
 import { SessionLoadingIndicator } from "./session-loading-indicator"
 import { SessionHeaderDrag, windowDragEnabled } from "./header/drag-area"
@@ -137,6 +138,42 @@ function SessionScreenContent(props: {
   })
 
   const messagesReady = timeline.ready
+
+  const [timelineArmed, setTimelineArmed] = createSignal(isTimelineWarm(untrack(session.identity.sessionKey)))
+
+  createEffect(() => {
+    const key = session.identity.sessionKey()
+    const id = session.identity.sessionID()
+
+    if (!id) {
+      setTimelineArmed(true)
+
+      return
+    }
+
+    if (isTimelineWarm(key)) {
+      setTimelineArmed(true)
+      stopSessionUiLoading(id)
+
+      return
+    }
+
+    startSessionUiLoading(id)
+    setTimelineArmed(false)
+    let secondFrame = 0
+
+    const firstFrame = requestAnimationFrame(() => {
+      secondFrame = requestAnimationFrame(() => {
+        setTimelineArmed(true)
+      })
+    })
+
+    onCleanup(() => {
+      cancelAnimationFrame(firstFrame)
+
+      if (secondFrame) cancelAnimationFrame(secondFrame)
+    })
+  })
 
   const [store, setStore] = createStore<{
     timelineScrollbarHidden: boolean
@@ -429,7 +466,7 @@ function SessionScreenContent(props: {
             )}
           </Match>
           <Match when={session.identity.params.id}>
-            <Show when={!messagesReady()}>
+            <Show when={!messagesReady() || !timelineArmed()}>
               <div class="flex h-full min-h-0 flex-col">
                 <Show when={isDesktop()}>
                   <SessionIdentityHeader sessionID={session.identity.params.id ?? ""} session={session.data.info()} />
@@ -441,7 +478,7 @@ function SessionScreenContent(props: {
                 />
               </div>
             </Show>
-            <Show when={messagesReady() && session.identity.params.id}>{timelineView()}</Show>
+            <Show when={messagesReady() && timelineArmed() && session.identity.params.id}>{timelineView()}</Show>
           </Match>
         </Switch>
       </div>

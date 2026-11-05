@@ -1,6 +1,7 @@
 import type { SessionInfo } from "@opencode/client/promise"
 import type { MountedSession, SessionScreen } from "@opencode/plugin/gui"
 import { Icon } from "@opencode/ui/icon"
+import { Loader } from "@opencode/ui/loader"
 import { Menu } from "@opencode/ui/menu"
 import { Tooltip } from "@opencode/ui/tooltip"
 import {
@@ -42,6 +43,7 @@ import { sessionTitle } from "./title"
 import { SessionHeaderSeparator } from "./header/separator"
 import { createSessionHeaderFit } from "./header/fit"
 import { SessionWorkingIndicator } from "./header/session-working-indicator"
+import { isSessionUiLoading } from "./loading-state"
 import { CollapsedSidebarToggleSpace } from "@/shell/sidebar-toggle"
 import "./session-identity-header.css"
 
@@ -614,6 +616,13 @@ export function SessionIdentityHeader(props: { sessionID: string; session?: Sess
       <SessionTitleHeader>
         <SessionHeaderLayout
           title={title()}
+          actions={() => (
+            <Show when={isSessionUiLoading(props.sessionID)}>
+              <div class="flex items-center gap-1.5 pe-2 text-[12px] text-v2-text-text-muted">
+                <Loader width={15} height={15} class="text-v2-icon-icon-base" />
+              </div>
+            </Show>
+          )}
           location={
             <>
               <SessionLocation

@@ -14,6 +14,7 @@ import {
 import { DataContext, useData } from "@opencode/session-ui/context"
 import { MarkdownContext, useMarkdown } from "@opencode/session-ui/context/markdown"
 import { createScopedCache } from "@/runtime/server/scoped-cache"
+import { clearWarmTimelines, markTimelineWarm, unmarkTimelineWarm } from "@/session/loading-state"
 import { useWorkspaceLocation, WorkspaceLocationContext } from "@/workspaces/location"
 import type { TimelineSessionSource } from "./controller"
 
@@ -107,6 +108,8 @@ export function createTimelineCache(
             active,
           )
 
+        markTimelineWarm(key)
+
         return {
           value: provide(WorkspaceLocationContext, select(location), () =>
             provide(
@@ -164,6 +167,7 @@ export function createTimelineCache(
     {
       maxEntries: 16,
       dispose: (entry, key) => {
+        unmarkTimelineWarm(key)
         entry.dispose()
 
         for (const [id, value] of keys) if (value.key === key) keys.delete(id)
@@ -171,7 +175,10 @@ export function createTimelineCache(
     },
   )
 
-  onCleanup(cache.clear)
+  onCleanup(() => {
+    clearWarmTimelines()
+    cache.clear()
+  })
 
   return () => {
     const key = session.identity.sessionKey()
