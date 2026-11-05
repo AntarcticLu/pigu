@@ -1,5 +1,6 @@
 import { Show, createEffect, createMemo, createSignal, type Component, type JSX } from "solid-js"
 import { Button } from "@opencode/ui/button"
+import { Dialog, DialogBody, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Select } from "@opencode/ui/select"
@@ -14,6 +15,7 @@ import type { LocalProject } from "@/shell/state/layout"
 import { pathKey } from "@/workspaces/path-key"
 import { useExtensionScopeStore } from "@/shell/titlebar/extension-scope-store"
 import { useArchiveState } from "@/shell/titlebar/archive-store"
+import { SettingsServerDataScope } from "../server-scope"
 import { SettingsList } from "../list"
 import { SettingsRow } from "../row"
 import { createEditProjectModel } from "./project-model"
@@ -201,6 +203,40 @@ function ProjectBasicInfoSection(props: {
         </div>
       </SettingsRow>
     </SettingsList>
+  )
+}
+
+export const DialogEditProject: Component<{
+  project: LocalProject
+  server: ServerConnection.Any
+}> = (props) => {
+  const servers = useServers()
+  const [currentProject, setCurrentProject] = createSignal(props.project)
+
+  createEffect(() => {
+    setCurrentProject(props.project)
+  })
+
+  return (
+    <Dialog fit containerClass="!w-[min(92vw,520px)] !rounded-[10px]">
+      <DialogHeader>
+        <DialogTitleGroup title="编辑项目" />
+      </DialogHeader>
+      <DialogBody class="px-4 pb-4 pt-0">
+        <SettingsServerDataScope server={props.server}>
+          <Show when={currentProject()} keyed>
+            {(project) => (
+              <ProjectBasicInfoSection
+                project={project}
+                server={props.server}
+                isLocal={servers.local(props.server)}
+                onRelocated={(next) => setCurrentProject(next)}
+              />
+            )}
+          </Show>
+        </SettingsServerDataScope>
+      </DialogBody>
+    </Dialog>
   )
 }
 

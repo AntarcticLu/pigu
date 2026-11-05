@@ -5,7 +5,6 @@ import { usePlatform } from "@/runtime/platform/platform"
 import { ServerConnection } from "@/runtime/server/registry"
 import { isServerUnauthorized } from "@/runtime/server/health-machine"
 import { useGlobal } from "@/runtime/server/runtime"
-import { useSettingsSurface } from "@/settings/surface"
 import { errorMessage } from "@/shell/layout/helpers"
 import { showToast } from "@/shell/notifications/toast"
 import type { LocalProject } from "@/shell/state/layout"
@@ -18,8 +17,6 @@ export function createProjectActions() {
   const dialog = useDialog()
 
   const language = useLanguage()
-
-  const settings = useSettingsSurface()
 
   const global = useGlobal()
 
@@ -83,7 +80,9 @@ export function createProjectActions() {
         })
     },
     edit(conn: ServerConnection.Any, project: LocalProject) {
-      settings.openProject({ server: ServerConnection.key(conn), project: project.worktree })
+      void import("@/settings/workspaces/projects").then(({ DialogEditProject }) => {
+        void dialog.show(() => <DialogEditProject server={conn} project={project} />)
+      })
     },
     hasUnread(conn: ServerConnection.Any, project: LocalProject) {
       const notification = global.serverCtx(ServerConnection.key(conn))?.notification

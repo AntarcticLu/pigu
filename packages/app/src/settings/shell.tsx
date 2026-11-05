@@ -39,7 +39,6 @@ const rootClientTabs = [
 const serverTabs = [
   { value: "models", icon: pageIcons.models, label: "API" },
   { value: "extensions", icon: pageIcons.extensions, label: "拓展" },
-  { value: "projects", icon: pageIcons.projects, label: "项目" },
 ] as const
 
 // The heading of each per-server page, which its unreachable state keeps.
@@ -172,6 +171,12 @@ function RootSettings() {
   createEffect(() => {
     const view = surface.view()
 
+    if (view.type === "project") {
+      surface.open("general")
+
+      return
+    }
+
     if (view.type !== "root") return
 
     if (view.tab === "providers") {
@@ -180,13 +185,9 @@ function RootSettings() {
       return
     }
 
-    if (view.tab === "workspaces") {
-      surface.open("projects")
-
-      return
-    }
-
     if (
+      view.tab === "workspaces" ||
+      view.tab === "projects" ||
       view.tab === "appearance" ||
       view.tab === "notifications" ||
       view.tab === "experimental" ||
