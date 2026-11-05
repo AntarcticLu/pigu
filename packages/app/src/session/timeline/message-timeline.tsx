@@ -19,13 +19,9 @@ import type { TimelineFollow } from "./follow"
 import { createTimelineVirtualizer } from "./virtualizer"
 import { createSelectedEffect } from "./selected-effect"
 import { containsDirectory } from "@opencode/util/path"
-import { isWorkspaceDirectory } from "@/workspaces/paths"
 import { parseCommentNote, readPromptPresentation } from "@/composer/comment-note"
 import { parseVoiceDelegation } from "./voice-delegation"
 import { useCommand } from "@/shell/commands/command"
-import { SessionHeaderLayout, SessionTitleHeader } from "../session-identity-header"
-import { SessionHeaderSpacer } from "@/session/header/session-header"
-import { SessionHeaderGap } from "@/session/header/drag-area"
 
 type BlockingTask = { type: "shell" | "subagent"; partID: string; id?: string; label?: string }
 
@@ -139,8 +135,6 @@ function MessageTimelineView(
       : projects.find((item) => containsDirectory(item.worktree, sessionDirectory()))
   })
 
-  const workspaceSession = createMemo(() => isWorkspaceDirectory(project(), sessionDirectory()))
-
   createSelectedEffect(
     project,
     () => props.active !== false,
@@ -152,7 +146,7 @@ function MessageTimelineView(
     },
   )
   const turnPadding = () => "px-4 md:px-6"
-  const showHeader = createMemo(() => !props.hideHeader && (props.data.showHeader() || workspaceSession()))
+  const showHeader = () => false
   const messageByID = projection.messageByID
 
   const virtualized = createTimelineVirtualizer({
@@ -426,28 +420,7 @@ function MessageTimelineView(
           }}
         </Show>
       )}
-      header={
-        <Show when={!props.hideHeader}>
-          <SessionTitleHeader>
-            <SessionHeaderLayout
-              title={undefined}
-              location={null}
-              actions={() => (
-                <Show when={sessionID()} keyed>
-                  {(_id) => (
-                    <>
-                      {props.search}
-                      <SessionHeaderSpacer visible={props.reserveReviewToggle} />
-                    </>
-                  )}
-                </Show>
-              )}
-            >
-              <SessionHeaderGap active={props.active !== false} register={props.registerHeaderGap} />
-            </SessionHeaderLayout>
-          </SessionTitleHeader>
-        </Show>
-      }
+      header={null}
     />
   )
 }

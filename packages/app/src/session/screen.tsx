@@ -44,7 +44,7 @@ import { createTimelineQuote, TimelineQuote } from "./timeline/quote"
 import { createTimelineQuoteHighlight } from "./timeline/quote-highlight"
 import { ActiveSessionComposerRegion, createActiveSessionRegion } from "./composer/region"
 import { isTimelineWarm, startSessionUiLoading, stopSessionUiLoading } from "./loading-state"
-import { SessionIdentityHeader, SessionLocation } from "./session-identity-header"
+import { SessionLocation } from "./session-identity-header"
 import { SessionLoadingIndicator } from "./session-loading-indicator"
 import { SessionHeaderDrag, windowDragEnabled } from "./header/drag-area"
 import { usePlatform } from "@/runtime/platform/platform"
@@ -468,9 +468,6 @@ function SessionScreenContent(props: {
           <Match when={session.identity.params.id}>
             <Show when={!messagesReady() || !timelineArmed()}>
               <div class="flex h-full min-h-0 flex-col">
-                <Show when={isDesktop()}>
-                  <SessionIdentityHeader sessionID={session.identity.params.id ?? ""} session={session.data.info()} />
-                </Show>
                 <SessionLoadingIndicator />
               </div>
             </Show>
@@ -507,11 +504,12 @@ function SessionScreenContent(props: {
           {/* Keep the control outside panel animations. */}
           <Show when={isDesktop() && messagesReady() && session.identity.params.id}>
             <div
-              class="absolute end-[var(--session-header-inset-end,12px)] top-0 z-30 h-12 flex items-center"
+              class="absolute end-[var(--session-header-inset-end,12px)] top-0 z-30 h-12 flex items-center gap-2"
               data-slot="session-review-toggle"
               onPointerDown={hideTimelineScrollbar}
               onClick={hideTimelineScrollbar}
             >
+              <TimelineSearchBar controller={timelineSearch} />
               <SessionReviewToggle
                 onToggle={region.toggle}
                 glyph={(fill) => {
