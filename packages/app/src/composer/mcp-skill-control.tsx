@@ -1,8 +1,9 @@
 import { For, Show, createEffect, createMemo, onCleanup } from "solid-js"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
-import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
+import { Dialog, DialogBody, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
 import { Icon } from "@opencode/ui/icon"
+import { Switch } from "@opencode/ui/switch"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useData, useServer } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
@@ -18,6 +19,7 @@ import {
   type ScopedSkillInfo,
 } from "@/shell/titlebar/extension-scope-store"
 import type { ComposerModel } from "./model"
+import "@/settings/settings.css"
 
 type McpPickerItem = {
   name: string
@@ -178,7 +180,6 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
 
 function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) {
   const language = useLanguage()
-  const dialog = useDialog()
   const data = useData()
   const scopeStore = useExtensionScopeStore()
   const ideGlobal = useIdeGlobalExtensions()
@@ -245,18 +246,22 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
     skills().filter((item) => scopeStore.isProjectSkillEnabled(props.directory, item)).length
 
   return (
-    <Dialog size="large">
+    <Dialog
+      size="x-large"
+      containerClass="!w-[min(92vw,860px)] !h-[min(80vh,560px)] !rounded-[10px]"
+    >
       <DialogHeader>
-        <DialogTitleGroup title="选择 MCP 与 Skill" />
+        <DialogTitleGroup title="MCP 与 Skill" />
       </DialogHeader>
 
-      <DialogBody class="px-4 py-2">
-        <div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-          <div class="flex min-w-0 flex-col gap-2">
-            <div class="flex items-center justify-between px-1">
-              <div class="flex items-center gap-1.5">
-                <span class="text-[13px] font-semibold text-v2-text-text-base">MCP</span>
-                <span class="rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[11px] font-medium text-v2-text-text-muted">
+      <DialogBody class="min-h-0 flex-1 px-4 pb-4 pt-0">
+        <div class="grid h-full min-h-0 flex-1 grid-cols-1 gap-4 md:grid-cols-2">
+          <div class="flex min-h-0 flex-col overflow-hidden rounded-[8px] bg-v2-background-bg-base shadow-[inset_0_0_0_0.5px_var(--v2-border-border-muted)]">
+            <div class="flex shrink-0 items-center justify-between border-b border-v2-border-border-base px-4 py-3">
+              <div class="flex items-center gap-2">
+                <Icon name="mcp" size="small" class="text-v2-icon-icon-muted" />
+                <span class="text-13-medium text-v2-text-text-base">MCP</span>
+                <span class="rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-11-regular text-v2-text-text-muted">
                   {enabledMcpCount()} / {mcps().length}
                 </span>
               </div>
@@ -290,11 +295,14 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
               </Show>
             </div>
 
-            <div class="flex max-h-[52vh] flex-col gap-1 overflow-y-auto rounded-lg border border-v2-border-border-muted p-1.5">
+            <div
+              class="min-h-0 flex-1 overflow-y-auto px-4"
+              style={{ "--settings-list-row-padding": "12px" }}
+            >
               <Show
                 when={mcps().length > 0}
                 fallback={
-                  <div class="px-3 py-8 text-center text-[12px] text-v2-text-text-faint">
+                  <div class="flex h-full items-center justify-center py-12 text-13-regular text-v2-text-text-faint">
                     暂无 MCP 服务
                   </div>
                 }
@@ -304,8 +312,7 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                     const checked = () =>
                       scopeStore.isProjectMcpEnabled(props.directory, mcp.name, mcp.connected)
 
-                    const handleToggle = () => {
-                      const next = !checked()
+                    const applyToggle = (next: boolean) => {
                       scopeStore.setProjectMcpEnabled(props.directory, mcp.name, next)
 
                       if (next && !mcp.connected && !toggleMcp.isPending) {
@@ -314,34 +321,42 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                     }
 
                     return (
-                      <button
-                        type="button"
-                        role="checkbox"
-                        aria-checked={checked()}
-                        class="flex w-full items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-                        onClick={handleToggle}
+                      <div
+                        class="settings-extension-row !min-h-[48px] cursor-pointer"
+                        onClick={(event) => {
+                          if (event.target instanceof Element && event.target.closest("[data-component='switch']"))
+                            return
+                          applyToggle(!checked())
+                        }}
                       >
-                        <span
-                          class={`flex size-4 shrink-0 items-center justify-center rounded border transition-colors ${
-                            checked()
-                              ? "border-v2-interactive-bg-accent-base bg-v2-interactive-bg-accent-base text-white"
-                              : "border-v2-border-border-strong bg-transparent"
-                          }`}
-                        >
-                          <Show when={checked()}>
-                            <Icon name="check" size="small" />
-                          </Show>
-                        </span>
-                        <span
-                          class="min-w-0 flex-1 truncate text-[13px] font-medium"
-                          classList={{
-                            "text-v2-text-text-base": checked(),
-                            "text-v2-text-text-muted": !checked(),
-                          }}
-                        >
-                          {mcp.name}
-                        </span>
-                      </button>
+                        <div class="settings-extension-lead min-w-0 flex-1">
+                          <span class="settings-mcp-status">
+                            <span
+                              class="mcp-status-dot"
+                              data-status={checked() ? "connected" : "disabled"}
+                              aria-hidden="true"
+                            />
+                          </span>
+                          <span
+                            class="settings-extension-name truncate"
+                            classList={{
+                              "text-v2-text-text-base": checked(),
+                              "text-v2-text-text-muted": !checked(),
+                            }}
+                          >
+                            {mcp.name}
+                          </span>
+                        </div>
+                        <div class="settings-extension-trailing !min-w-0">
+                          <Switch
+                            checked={checked()}
+                            hideLabel
+                            onChange={(next) => applyToggle(next)}
+                          >
+                            {mcp.name}
+                          </Switch>
+                        </div>
+                      </div>
                     )
                   }}
                 </For>
@@ -349,11 +364,12 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
             </div>
           </div>
 
-          <div class="flex min-w-0 flex-col gap-2">
-            <div class="flex items-center justify-between px-1">
-              <div class="flex items-center gap-1.5">
-                <span class="text-[13px] font-semibold text-v2-text-text-base">Skill</span>
-                <span class="rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[11px] font-medium text-v2-text-text-muted">
+          <div class="flex min-h-0 flex-col overflow-hidden rounded-[8px] bg-v2-background-bg-base shadow-[inset_0_0_0_0.5px_var(--v2-border-border-muted)]">
+            <div class="flex shrink-0 items-center justify-between border-b border-v2-border-border-base px-4 py-3">
+              <div class="flex items-center gap-2">
+                <Icon name="post-skill" size="small" class="text-v2-icon-icon-muted" />
+                <span class="text-13-medium text-v2-text-text-base">Skill</span>
+                <span class="rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-11-regular text-v2-text-text-muted">
                   {enabledSkillCount()} / {skills().length}
                 </span>
               </div>
@@ -387,11 +403,14 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
               </Show>
             </div>
 
-            <div class="flex max-h-[52vh] flex-col gap-1 overflow-y-auto rounded-lg border border-v2-border-border-muted p-1.5">
+            <div
+              class="min-h-0 flex-1 overflow-y-auto px-4"
+              style={{ "--settings-list-row-padding": "12px" }}
+            >
               <Show
                 when={skills().length > 0}
                 fallback={
-                  <div class="px-3 py-8 text-center text-[12px] text-v2-text-text-faint">
+                  <div class="flex h-full items-center justify-center py-12 text-13-regular text-v2-text-text-faint">
                     暂无可用 Skill
                   </div>
                 }
@@ -402,41 +421,42 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                     const desc = () => localizeSkillDescription(skill, language.locale())
 
                     return (
-                      <button
-                        type="button"
-                        role="checkbox"
-                        aria-checked={checked()}
-                        class="flex w-full items-start gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors hover:bg-v2-overlay-simple-overlay-hover"
-                        onClick={() => scopeStore.setProjectSkillEnabled(props.directory, skill, !checked())}
+                      <div
+                        class="settings-extension-row !min-h-[52px] cursor-pointer"
+                        onClick={(event) => {
+                          if (event.target instanceof Element && event.target.closest("[data-component='switch']"))
+                            return
+                          scopeStore.setProjectSkillEnabled(props.directory, skill, !checked())
+                        }}
                       >
-                        <span
-                          class={`mt-0.5 flex size-4 shrink-0 items-center justify-center rounded border transition-colors ${
-                            checked()
-                              ? "border-v2-interactive-bg-accent-base bg-v2-interactive-bg-accent-base text-white"
-                              : "border-v2-border-border-strong bg-transparent"
-                          }`}
-                        >
-                          <Show when={checked()}>
-                            <Icon name="check" size="small" />
-                          </Show>
-                        </span>
-                        <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span
-                            class="truncate text-[13px] font-medium"
-                            classList={{
-                              "text-v2-text-text-base": checked(),
-                              "text-v2-text-text-muted": !checked(),
-                            }}
+                        <div class="settings-extension-lead min-w-0 flex-1">
+                          <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <span
+                              class="settings-extension-name truncate"
+                              classList={{
+                                "text-v2-text-text-base": checked(),
+                                "text-v2-text-text-muted": !checked(),
+                              }}
+                            >
+                              {skill.name}
+                            </span>
+                            <Show when={desc()}>
+                              <span class="truncate text-11-regular text-v2-text-text-faint" title={desc()}>
+                                {desc()}
+                              </span>
+                            </Show>
+                          </div>
+                        </div>
+                        <div class="settings-extension-trailing !min-w-0">
+                          <Switch
+                            checked={checked()}
+                            hideLabel
+                            onChange={(next) => scopeStore.setProjectSkillEnabled(props.directory, skill, next)}
                           >
                             {skill.name}
-                          </span>
-                          <Show when={desc()}>
-                            <span class="truncate text-[11px] text-v2-text-text-faint" title={desc()}>
-                              {desc()}
-                            </span>
-                          </Show>
+                          </Switch>
                         </div>
-                      </button>
+                      </div>
                     )
                   }}
                 </For>
@@ -445,12 +465,6 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
           </div>
         </div>
       </DialogBody>
-
-      <DialogFooter>
-        <Button variant="contrast" onClick={() => dialog.close()}>
-          完成
-        </Button>
-      </DialogFooter>
     </Dialog>
   )
 }
