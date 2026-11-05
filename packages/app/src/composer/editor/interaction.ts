@@ -1,4 +1,5 @@
 import { Predicate } from "effect"
+import { Skill } from "@opencode/schema/skill"
 import { createEffect, createMemo, createSignal, on, onCleanup, type Accessor } from "solid-js"
 import { createStore, reconcile } from "solid-js/store"
 import { useFilteredList } from "@opencode/ui/hooks"
@@ -791,6 +792,22 @@ export function createComposerEditor(input: {
     },
     setQuery(value: string) {
       dispatch({ type: "popover.query", value })
+    },
+    insertSkill(skill: { id: string; name: string }) {
+      const length = promptLength(draft.state.prompt)
+      const cursor = Math.min(draft.state.cursor ?? length, length)
+      draft.addMention(
+        {
+          type: "skill",
+          id: Skill.ID.make(skill.id),
+          name: Skill.Name.make(skill.name),
+          content: `@${skill.id}`,
+          start: cursor,
+          end: cursor,
+        },
+        { start: cursor, end: cursor },
+      )
+      restoreFocus()
     },
   }
 }

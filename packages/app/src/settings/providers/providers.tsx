@@ -50,6 +50,7 @@ export const SettingsProviders: Component<{
   directory: string | undefined
   onSelectProvider?: (providerID: string) => void
   headerAction?: JSX.Element
+  embedded?: boolean
 }> = (props) => {
   const dialog = useDialog()
   const language = useLanguage()
@@ -414,19 +415,28 @@ export const SettingsProviders: Component<{
 
   return (
     <>
-      <div class="settings-tab-header">
-        <div class="settings-tab-header-row">
-          <div class="flex min-w-0 flex-col gap-1">
-            <h2 class="settings-tab-title">{language.t("settings.providers.title")}</h2>
-            <span class="text-11-regular text-v2-text-text-muted">{language.t("settings.providers.description")}</span>
+      <Show when={!props.embedded}>
+        <div class="settings-tab-header">
+          <div class="settings-tab-header-row">
+            <div class="flex min-w-0 flex-col gap-1">
+              <h2 class="settings-tab-title">{language.t("settings.providers.title")}</h2>
+              <span class="text-11-regular text-v2-text-text-muted">{language.t("settings.providers.description")}</span>
+            </div>
+            <div class="settings-tab-header-actions">{props.headerAction}</div>
           </div>
-          <div class="settings-tab-header-actions">{props.headerAction}</div>
         </div>
-      </div>
+      </Show>
 
-      <div class="settings-tab-body settings-tab-body--sectioned settings-providers">
+      <div class={props.embedded ? "settings-providers mb-6" : "settings-tab-body settings-tab-body--sectioned settings-providers"}>
         <div class="settings-section" data-component="connected-providers-section">
-          <h3 class="settings-section-title">{language.t("settings.providers.section.connected")}</h3>
+          <div class="flex items-center justify-between">
+            <h3 class="settings-section-title">{language.t("settings.providers.section.connected")}</h3>
+            <Show when={props.embedded}>
+              <Button size="small" variant="neutral" icon="plus" onClick={() => connect("pigu")}>
+                配置 API (URL + Key)
+              </Button>
+            </Show>
+          </div>
           <SettingsList variant="catalog">
             <Show
               when={displayed().length > 0}
@@ -570,41 +580,43 @@ export const SettingsProviders: Component<{
           </SettingsList>
         </div>
 
-        <div class="settings-section">
-          <h3 class="settings-section-title">{language.t("settings.providers.section.popular")}</h3>
-          <SettingsList variant="catalog">
-            <For each={popular()}>
-              {(item) => (
-                <div class="settings-provider-row">
-                  <div class="settings-provider-lead">
-                    <ProviderModelIcon provider={item} class="settings-provider-icon shrink-0" />
+        <Show when={!props.embedded}>
+          <div class="settings-section">
+            <h3 class="settings-section-title">{language.t("settings.providers.section.popular")}</h3>
+            <SettingsList variant="catalog">
+              <For each={popular()}>
+                {(item) => (
+                  <div class="settings-provider-row">
+                    <div class="settings-provider-lead">
+                      <ProviderModelIcon provider={item} class="settings-provider-icon shrink-0" />
 
-                    <div class="settings-provider-copy">
-                      <div class="settings-provider-main">
-                        <span class="settings-provider-name">
-                          {item.name}
-                        </span>
-                        <Show when={item.id === "opencode" || item.id === "opencode-go"}>
-                          <Badge>{language.t("dialog.provider.tag.recommended")}</Badge>
+                      <div class="settings-provider-copy">
+                        <div class="settings-provider-main">
+                          <span class="settings-provider-name">
+                            {item.name}
+                          </span>
+                          <Show when={item.id === "opencode" || item.id === "opencode-go"}>
+                            <Badge>{language.t("dialog.provider.tag.recommended")}</Badge>
+                          </Show>
+                        </div>
+                        <Show when={note(item.id)}>
+                          {(key) => <p class="settings-provider-description">{language.t(key())}</p>}
                         </Show>
                       </div>
-                      <Show when={note(item.id)}>
-                        {(key) => <p class="settings-provider-description">{language.t(key())}</p>}
-                      </Show>
                     </div>
+                    <Button size="normal" variant="neutral" icon="plus" onClick={() => connect(item.id)}>
+                      {language.t("common.connect")}
+                    </Button>
                   </div>
-                  <Button size="normal" variant="neutral" icon="plus" onClick={() => connect(item.id)}>
-                    {language.t("common.connect")}
-                  </Button>
-                </div>
-              )}
-            </For>
-          </SettingsList>
+                )}
+              </For>
+            </SettingsList>
 
-          <button type="button" class="settings-providers-view-all" onClick={() => connect()}>
-            {language.t("dialog.provider.viewAll")}
-          </button>
-        </div>
+            <button type="button" class="settings-providers-view-all" onClick={() => connect()}>
+              {language.t("dialog.provider.viewAll")}
+            </button>
+          </div>
+        </Show>
       </div>
     </>
   )

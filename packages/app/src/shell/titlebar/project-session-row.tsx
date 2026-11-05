@@ -19,12 +19,58 @@ import { sessionLabel } from "@/session/title"
 import { notifySessionTabsRemoved } from "./session-events"
 import "./tab-nav.css"
 
+export function resolveSessionSource(session: SessionInfo) {
+  const raw = String(session.metadata?.source ?? "pigu").toLowerCase()
+
+  if (raw === "codex") {
+    return {
+      label: "Codex",
+      class: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400",
+    }
+  }
+
+  if (raw === "claude") {
+    return {
+      label: "Claude",
+      class: "bg-amber-500/15 text-amber-600 dark:text-amber-400",
+    }
+  }
+
+  if (raw === "agy") {
+    return {
+      label: "AGY",
+      class: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+    }
+  }
+
+  if (raw === "opencode") {
+    return {
+      label: "OpenCode",
+      class: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400",
+    }
+  }
+
+  if (raw === "pi") {
+    return {
+      label: "Pi",
+      class: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+    }
+  }
+
+  return {
+    label: "Pigu",
+    class: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
+  }
+}
+
 export function ProjectSessionRow(props: {
   server: ServerConnection.Key
   session: SessionInfo
   openTab: boolean
   active: boolean
+  archived?: boolean
   onOpen: () => void
+  onToggleArchive?: () => void
 }) {
   const language = useLanguage()
 
@@ -126,15 +172,22 @@ export function ProjectSessionRow(props: {
   return (
     <Menu.Context modal={false}>
       <Menu.Context.Trigger
-        as="button"
-        type="button"
+        as="div"
+        role="button"
+        tabIndex={0}
         data-titlebar-tab-action
         data-state={props.active ? "pressed" : undefined}
-        class="relative flex h-7 w-full shrink-0 items-center gap-2 rounded-[6px] ps-8 pe-2 text-start text-[13px] leading-[var(--line-height-compact)] font-medium focus-visible:outline-none"
+        class="group/session relative flex h-7 w-full shrink-0 cursor-pointer items-center gap-1.5 rounded-[6px] ps-8 pe-1.5 text-start text-[13px] leading-[var(--line-height-compact)] font-medium focus-visible:outline-none"
         classList={{ "text-v2-text-text-base": props.active, "text-v2-text-text-faint": !props.active }}
         aria-current={props.active ? "page" : undefined}
         title={sessionLabel(props.session)}
         onClick={props.onOpen}
+        onKeyDown={(event: KeyboardEvent) => {
+          if (event.key === "Enter" || event.key === " ") {
+            event.preventDefault()
+            props.onOpen()
+          }
+        }}
       >
         <Show when={props.openTab}>
           <span
@@ -149,7 +202,12 @@ export function ProjectSessionRow(props: {
         <span class="min-w-0 flex-1 truncate" dir="auto">
           {sessionLabel(props.session)}
         </span>
-        <span class="flex size-4 shrink-0 items-center justify-center">
+        <span
+          class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${resolveSessionSource(props.session).class}`}
+        >
+          {resolveSessionSource(props.session).label}
+        </span>
+        <span class="flex size-3.5 shrink-0 items-center justify-center">
           <Show
             when={status.loading()}
             fallback={
@@ -168,6 +226,12 @@ export function ProjectSessionRow(props: {
             if (dialog.active) event.preventDefault()
           }}
         >
+          <Show when={props.onToggleArchive}>
+            <Menu.Item onSelect={() => props.onToggleArchive?.()}>
+              {props.archived ? "恢复展示会话" : "收纳会话"}
+            </Menu.Item>
+            <Menu.Separator />
+          </Show>
           <Menu.Item
             disabled={!ctx()}
             onSelect={() => dialog.show(() => <RenameDialog title={sessionLabel(props.session)} onRename={rename} />)}

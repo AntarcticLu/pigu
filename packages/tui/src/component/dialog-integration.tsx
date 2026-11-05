@@ -114,8 +114,9 @@ export function DialogIntegration(
   )
 
   createEffect(() => {
-    if (!props.autoConnect) return
-    const integration = integrations()[0]
+    const list = integrations()
+    const integration =
+      list.find((item) => item.id === "pigu") ?? (props.autoConnect || list.length === 1 ? list[0] : undefined)
     if (!integration) return
     const methods = connectMethods(integration)
     if (credentialConnections(integration).length) {
@@ -204,7 +205,7 @@ function manageConnections(
           ...(methods.length
             ? [
                 {
-                  title: "Add account",
+                  title: "Configure / Add API (URL + Key)",
                   value: "add",
                   onSelect: () => selectMethod(current() ?? integration, methods, location, dialog, onConnected),
                 },

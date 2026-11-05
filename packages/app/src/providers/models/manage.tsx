@@ -13,6 +13,7 @@ import { useDialog } from "@opencode/ui/context/dialog"
 import { DialogConnectProvider } from "@/providers/connect/dialog"
 import { decode64 } from "@/runtime/persistence/base64"
 import { consoleModelGroup, ProviderModelSections } from "@/providers/models/provider-group"
+import { ModelProtocolSelect } from "@/providers/models/protocol"
 import "@/settings/settings.css"
 import "@/shell/search-list.css"
 import "./manage.css"
@@ -86,7 +87,8 @@ export const DialogManageModels: Component = () => {
               <div class="search-list-row-text">
                 <span class="search-list-title">{item.name}</span>
               </div>
-              <div class="search-list-trailing" onClick={(event) => event.stopPropagation()}>
+              <div class="search-list-trailing flex items-center gap-2" onClick={(event) => event.stopPropagation()}>
+                <ModelProtocolSelect providerID={item.provider.id} modelID={item.id} selection={local.model} />
                 <Switch checked={visible(item)} onChange={(checked) => setModelVisibility(item, checked)} hideLabel>
                   {item.name}
                 </Switch>

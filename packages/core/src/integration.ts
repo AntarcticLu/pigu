@@ -375,7 +375,11 @@ const layer = Layer.effect(
 
     const createCredential = Effect.fnUntraced(function* (input: Parameters<Credential.Interface["create"]>[0]) {
       if (input.label !== undefined) return yield* credentials.create(input)
-      const name = state.get().integrations.get(input.integrationID)?.ref.name ?? input.integrationID
+      const baseURL = input.value.type === "key" ? input.value.metadata?.baseURL : undefined
+      const name =
+        typeof baseURL === "string" && baseURL.trim()
+          ? baseURL.trim()
+          : (state.get().integrations.get(input.integrationID)?.ref.name ?? input.integrationID)
       const labels = new Set((yield* credentials.list(input.integrationID)).map((credential) => credential.label))
       const label =
         Array.from({ length: labels.size + 1 }, (_, index) => (index === 0 ? name : `${name} ${index + 1}`)).find(

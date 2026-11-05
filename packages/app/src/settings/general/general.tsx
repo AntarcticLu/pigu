@@ -1,23 +1,19 @@
-import { Component, Show, createMemo, createResource } from "solid-js"
-import { createMediaQuery } from "@solid-primitives/media"
+import { Component, Show, createMemo } from "solid-js"
 import { Select } from "@opencode/ui/select"
 import { Switch } from "@opencode/ui/switch"
-import { TimelineDetailControl } from "@/settings/timeline-detail"
+import { TextInput } from "@opencode/ui/text-input"
 import { useLanguage } from "@/runtime/i18n/language"
-import { usePlatform } from "@/runtime/platform/platform"
 import { PluginSettingsSections } from "@/runtime/plugin/settings-page-view"
-import {
-  type BackgroundActivity,
-  type FollowUpBehavior,
-  type TimelineWidth,
-  type WorkspaceDefaultDestination,
-  useSettings,
-} from "@/settings/model"
+import { type FollowUpBehavior, useSettings } from "@/settings/model"
 import { formatKeybind } from "@/shell/commands/command"
 import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
 import { createShellOptions } from "./behavior"
-import type { ShellSettingsController } from "./controllers"
+import {
+  createAppearanceSettingsController,
+  type AppearanceSettingsController,
+  type ShellSettingsController,
+} from "./controllers"
 import { InterfaceModeSetting } from "./interface-mode"
 import "@/settings/settings.css"
 
@@ -36,35 +32,6 @@ const AutoApprovePermissionsSetting: Component = () => {
           onChange={(checked) => settings.permissions.setAutoApproveDefault(checked)}
         />
       </div>
-    </SettingsRow>
-  )
-}
-
-const WorkspaceDestinationSetting: Component = () => {
-  const language = useLanguage()
-  const settings = useSettings()
-
-  const options = createMemo((): { value: WorkspaceDefaultDestination; label: string }[] => [
-    { value: "last-used", label: language.t("settings.workspaces.default.lastUsed") },
-    { value: "local", label: language.t("settings.workspaces.default.local") },
-    { value: "new", label: language.t("settings.workspaces.default.new") },
-  ])
-
-  return (
-    <SettingsRow
-      title={language.t("settings.workspaces.default.title")}
-      description={language.t("settings.workspaces.default.description")}
-    >
-      <Select
-        data-action="settings-workspace-destination"
-        options={options()}
-        current={options().find((option) => option.value === settings.workspaces.defaultDestination())}
-        value={(option) => option.value}
-        label={(option) => option.label}
-        placement="bottom-end"
-        gutter={6}
-        onSelect={(option) => option && settings.workspaces.setDefaultDestination(option.value)}
-      />
     </SettingsRow>
   )
 }
@@ -138,67 +105,6 @@ const FollowUpBehaviorSetting: Component = () => {
   )
 }
 
-const BackgroundActivitySetting = () => {
-  const language = useLanguage()
-  const settings = useSettings()
-
-  const options = createMemo((): { value: BackgroundActivity; label: string }[] => [
-    { value: "off", label: language.t("settings.timeline.row.backgroundActivity.off") },
-    { value: "left", label: language.t("settings.timeline.row.backgroundActivity.left") },
-    { value: "center", label: language.t("settings.timeline.row.backgroundActivity.center") },
-    { value: "right", label: language.t("settings.timeline.row.backgroundActivity.right") },
-  ])
-
-  return (
-    <SettingsRow
-      title={language.t("settings.timeline.row.backgroundActivity.title")}
-      description={language.t("settings.timeline.row.backgroundActivity.description")}
-    >
-      <Select
-        data-action="settings-background-activity"
-        aria-label={language.t("settings.timeline.row.backgroundActivity.title")}
-        options={options()}
-        current={options().find((option) => option.value === settings.general.backgroundActivity())}
-        value={(option) => option.value}
-        label={(option) => option.label}
-        placement="bottom-end"
-        gutter={6}
-        onSelect={(option) => option && settings.general.setBackgroundActivity(option.value)}
-      />
-    </SettingsRow>
-  )
-}
-
-const TimelineWidthSetting = () => {
-  const language = useLanguage()
-  const settings = useSettings()
-
-  const options = createMemo((): { value: TimelineWidth; label: string }[] => [
-    { value: "focused", label: language.t("settings.timeline.row.width.focused") },
-    { value: "comfortable", label: language.t("settings.timeline.row.width.comfortable") },
-    { value: "wide", label: language.t("settings.timeline.row.width.wide") },
-  ])
-
-  return (
-    <SettingsRow
-      title={language.t("settings.timeline.row.width.title")}
-      description={language.t("settings.timeline.row.width.description")}
-    >
-      <Select
-        data-action="settings-timeline-width"
-        aria-label={language.t("settings.timeline.row.width.title")}
-        options={options()}
-        current={options().find((option) => option.value === settings.general.timelineWidth())}
-        value={(option) => option.value}
-        label={(option) => option.label}
-        placement="bottom-end"
-        gutter={6}
-        onSelect={(option) => option && settings.general.setTimelineWidth(option.value)}
-      />
-    </SettingsRow>
-  )
-}
-
 const LanguageSetting = () => {
   const language = useLanguage()
 
@@ -228,37 +134,65 @@ const LanguageSetting = () => {
   )
 }
 
+const schemeOptions: ("system" | "light" | "dark")[] = ["system", "light", "dark"]
+
+const fontSettings = {
+  ui: {
+    action: "settings-ui-font",
+    title: "settings.general.row.uiFont.title",
+    description: "settings.general.row.uiFont.description",
+    font: "ui",
+    input: "setUI",
+  },
+  code: {
+    action: "settings-code-font",
+    title: "settings.general.row.font.title",
+    description: "settings.general.row.font.description",
+    font: "code",
+    input: "setCode",
+  },
+  terminal: {
+    action: "settings-terminal-font",
+    title: "settings.general.row.terminalFont.title",
+    description: "settings.general.row.terminalFont.description",
+    font: "terminal",
+    input: "setTerminal",
+  },
+} as const
+
+const FontSetting: Component<{
+  kind: "ui" | "code" | "terminal"
+  fonts: AppearanceSettingsController["fonts"]
+}> = (props) => {
+  const language = useLanguage()
+  const config = () => fontSettings[props.kind]
+
+  return (
+    <SettingsRow title={language.t(config().title)} description={language.t(config().description)}>
+      <div class="w-full sm:w-[220px]">
+        <TextInput
+          data-action={config().action}
+          type="text"
+          appearance="base"
+          value={props.fonts[config().font]().value}
+          onInput={(event) => props.fonts[config().input](event.currentTarget.value)}
+          placeholder={props.fonts[config().font]().placeholder}
+          spellcheck={false}
+          autocorrect="off"
+          autocomplete="off"
+          autocapitalize="off"
+          aria-label={language.t(config().title)}
+          style={{ "font-family": props.fonts[config().font]().family }}
+        />
+      </div>
+    </SettingsRow>
+  )
+}
+
 export const SettingsGeneral: Component = () => {
   const language = useLanguage()
-  const platform = usePlatform()
   const settings = useSettings()
-  const mobile = createMediaQuery("(max-width: 767px)")
-  const desktop = createMemo(() => platform.platform === "desktop")
-
-  const [pinchZoom, { mutate: setPinchZoom }] = createResource(
-    () => desktop() && "getPinchZoomEnabled" in platform,
-    () => Promise.resolve(platform.getPinchZoomEnabled?.() ?? false).catch(() => false),
-    { initialValue: false },
-  )
-
-  const onPinchZoomChange = (checked: boolean) => {
-    setPinchZoom(checked)
-    const update = platform.setPinchZoomEnabled?.(checked)
-
-    if (!update) return
-    void update.catch(() => setPinchZoom(!checked))
-  }
-
-  const [spellcheck, { mutate: setSpellcheck }] = createResource(
-    () => desktop() && "getSpellcheckEnabled" in platform,
-    () => platform.getSpellcheckEnabled?.().catch(() => true) ?? true,
-    { initialValue: true },
-  )
-
-  const onSpellcheckChange = (checked: boolean) => {
-    setSpellcheck(checked)
-    void platform.setSpellcheckEnabled?.(checked).catch(() => setSpellcheck(!checked))
-  }
+  const appearance = createAppearanceSettingsController()
 
   const GeneralSection = () => (
     <div class="settings-section">
@@ -266,56 +200,98 @@ export const SettingsGeneral: Component = () => {
       <SettingsList>
         <InterfaceModeSetting />
         <LanguageSetting />
-
-        <WorkspaceDestinationSetting />
         <AutoApprovePermissionsSetting />
+        <FollowUpBehaviorSetting />
 
         <SettingsRow
-          title={language.t("settings.general.row.showCustomAgents.title")}
-          description={language.t("settings.general.row.showCustomAgents.description")}
+          title={language.t("settings.timeline.row.turnDiffs.title")}
+          description={language.t("settings.timeline.row.turnDiffs.description")}
         >
-          <div data-action="settings-show-custom-agents">
+          <div data-action="settings-show-turn-diffs">
             <Switch
-              checked={settings.general.showCustomAgents()}
-              onChange={(checked) => settings.general.setShowCustomAgents(checked)}
+              checked={settings.general.showTurnDiffs()}
+              onChange={(checked) => settings.general.setShowTurnDiffs(checked)}
             />
           </div>
         </SettingsRow>
 
-        <FollowUpBehaviorSetting />
-
-        <Show when={desktop()}>
-          <SettingsRow
-            title={language.t("settings.general.row.pinchZoom.title")}
-            description={language.t("settings.general.row.pinchZoom.description")}
-          >
-            <div data-action="settings-pinch-zoom">
-              <Switch checked={pinchZoom.latest} onChange={onPinchZoomChange} />
-            </div>
-          </SettingsRow>
-          <SettingsRow
-            title={language.t("settings.general.row.spellcheck.title")}
-            description={language.t("settings.general.row.spellcheck.description")}
-          >
-            <div data-action="settings-spellcheck">
-              <Switch checked={spellcheck.latest} onChange={onSpellcheckChange} />
-            </div>
-          </SettingsRow>
-        </Show>
+        <SettingsRow
+          title={language.t("settings.general.notifications.agent.title")}
+          description={language.t("settings.general.notifications.agent.description")}
+        >
+          <div data-action="settings-notifications-agent">
+            <Switch
+              checked={settings.notifications.agent()}
+              onChange={(checked) => settings.notifications.setAgent(checked)}
+            />
+          </div>
+        </SettingsRow>
 
         <PluginSettingsSections page="general" section="general" />
+      </SettingsList>
+    </div>
+  )
 
-        <Show when={mobile()}>
+  const AppearanceSection = () => (
+    <div class="settings-section">
+      <h3 class="settings-section-title">{language.t("settings.general.section.appearance")}</h3>
+      <SettingsList>
+        <SettingsRow
+          title={language.t("settings.general.row.colorScheme.title")}
+          description={language.t("settings.general.row.colorScheme.description")}
+        >
+          <Select
+            data-action="settings-color-scheme"
+            options={schemeOptions}
+            current={schemeOptions.find((option) => option === appearance.scheme.current())}
+            placement="bottom-end"
+            gutter={6}
+            label={(option) => {
+              if (option === "system") return language.t("theme.scheme.system")
+
+              if (option === "light") return language.t("theme.scheme.light")
+
+              return language.t("theme.scheme.dark")
+            }}
+            onSelect={(option) => option && appearance.scheme.select(option)}
+          />
+        </SettingsRow>
+
+        <SettingsRow
+          title={language.t("settings.general.row.theme.title")}
+          description={language.t("settings.general.row.theme.description")}
+        >
+          <Select
+            data-action="settings-theme"
+            options={appearance.theme.options()}
+            current={appearance.theme.current()}
+            placement="bottom-end"
+            gutter={6}
+            value={(option) => option.id}
+            label={(option) => option.name}
+            onSelect={appearance.theme.select}
+          />
+        </SettingsRow>
+
+        <FontSetting kind="code" fonts={appearance.fonts} />
+        <FontSetting kind="terminal" fonts={appearance.fonts} />
+        <FontSetting kind="ui" fonts={appearance.fonts} />
+
+        <Show when={appearance.zoom.available()}>
           <SettingsRow
-            title={language.t("settings.general.row.mobileTitlebarBottom.title")}
-            description={language.t("settings.general.row.mobileTitlebarBottom.description")}
+            title={language.t("settings.appearance.row.zoom.title")}
+            description={language.t("settings.appearance.row.zoom.description")}
           >
-            <div data-action="settings-mobile-titlebar-bottom">
-              <Switch
-                checked={settings.general.mobileTitlebarPosition() === "bottom"}
-                onChange={(checked) => settings.general.setMobileTitlebarPosition(checked ? "bottom" : "top")}
-              />
-            </div>
+            <Select
+              data-action="settings-zoom"
+              options={appearance.zoom.options}
+              current={appearance.zoom.current()}
+              placement="bottom-end"
+              gutter={6}
+              value={(level) => String(level)}
+              label={appearance.zoom.label}
+              onSelect={(level) => level && appearance.zoom.select(level)}
+            />
           </SettingsRow>
         </Show>
       </SettingsList>
@@ -327,41 +303,16 @@ export const SettingsGeneral: Component = () => {
       <div class="settings-tab-header">
         <div class="settings-tab-header-row">
           <div class="flex flex-col gap-1">
-            <h2 class="settings-tab-title">{language.t("settings.tab.preferences")}</h2>
+            <h2 class="settings-tab-title">通用与外观</h2>
             <span class="text-11-regular text-v2-text-text-muted">
-              {language.t("settings.preferences.description")}
+              配置语言、权限、终端、主题配色与代码字体
             </span>
           </div>
         </div>
       </div>
       <div class="settings-tab-body settings-tab-body--sectioned">
         <GeneralSection />
-
-        <section class="settings-section" aria-label={language.t("settings.timeline.title")}>
-          <h3 class="settings-section-title">{language.t("settings.timeline.title")}</h3>
-          <SettingsList>
-            <div class="border-b-[0.5px] border-v2-border-border-base py-5">
-              <TimelineDetailControl
-                value={settings.general.timelineDetail()}
-                onChange={settings.general.setTimelineDetail}
-              />
-            </div>
-            <TimelineWidthSetting />
-            <BackgroundActivitySetting />
-            <SettingsRow
-              title={language.t("settings.timeline.row.turnDiffs.title")}
-              description={language.t("settings.timeline.row.turnDiffs.description")}
-            >
-              <div data-action="settings-show-turn-diffs">
-                <Switch
-                  checked={settings.general.showTurnDiffs()}
-                  onChange={(checked) => settings.general.setShowTurnDiffs(checked)}
-                />
-              </div>
-            </SettingsRow>
-          </SettingsList>
-        </section>
-
+        <AppearanceSection />
         <PluginSettingsSections page="general" />
       </div>
     </>

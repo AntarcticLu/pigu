@@ -11,7 +11,7 @@ type DevOptions = { server: ServerSource; electron: string[] }
 
 async function main() {
   process.env.OPENCODE_CHANNEL = "local"
-  process.env.OPENCODE_VERSION ??= `2.0.0-local-${Date.now()}`
+  process.env.OPENCODE_VERSION ??= "2.0.0-local"
   process.env.OPENCODE_DISABLE_CHANNEL_DB = "0"
   const options = selectOptions()
 
@@ -52,7 +52,8 @@ function selectOptions(): DevOptions {
 async function prepareServer(source: ServerSource) {
   if (source.type === "download")
     return downloadCliToResources(source.version, windowsify("resources/opencode-cli-dev"))
-  buildWebUi()
+
+  if (process.env.PIGU_BUILD_PAIRING_WEB === "1") buildWebUi()
   process.env.OPENCODE_DESKTOP_CLI_DEV = join(import.meta.dirname, "../../cli")
 
   if (process.platform !== "win32") return

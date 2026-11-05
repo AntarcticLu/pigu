@@ -46,8 +46,8 @@ const PermissionParams = {
   ),
 }
 
-const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME : "opencode", {
-  description: "OpenCode command line interface",
+const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME : "pigu", {
+  description: "Pigu command line interface",
   params: {
     ...ServerParams,
     ...PermissionParams,
@@ -182,6 +182,11 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
               Argument.withDescription("Integration ID, name, or well-known provider URL"),
               Argument.optional,
             ),
+            url: Flag.String("url").pipe(
+              Flag.withDescription("API Base URL (e.g. https://api.openai.com/v1)"),
+              Flag.optional,
+            ),
+            key: Flag.String("key").pipe(Flag.withDescription("API key"), Flag.optional),
             method: Flag.String("method").pipe(Flag.withDescription("Authentication method ID"), Flag.optional),
             answer: Flag.String("answer").pipe(
               Flag.withDescription("Provider form answer (key=value; repeat for multiple fields)"),
@@ -325,6 +330,17 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
           },
         }),
       ],
+    }),
+    Spec.make("config", {
+      description: "Configure API Base URL and API Key and fetch available models",
+      globalFlags: ServerFlags,
+      params: {
+        url: Flag.String("url").pipe(
+          Flag.withDescription("API Base URL (e.g. https://api.openai.com/v1)"),
+          Flag.optional,
+        ),
+        key: Flag.String("key").pipe(Flag.withDescription("API key"), Flag.optional),
+      },
     }),
     Spec.make("models", {
       description: "List all available models",

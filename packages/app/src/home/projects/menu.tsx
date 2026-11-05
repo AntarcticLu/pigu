@@ -9,14 +9,15 @@ import { fileManagerApp } from "./file-manager"
 export function ProjectMenuItems(props: {
   server: ServerConnection.Any
   project: LocalProject
-  unread: boolean
-  canImportSession: boolean
+  unread?: boolean
+  archived?: boolean
+  canImportSession?: boolean
   canRevealProject: (server: ServerConnection.Any) => boolean
   onOpenProjectNewSession: (server: ServerConnection.Any, directory: string) => void
-  onImportSession: (server: ServerConnection.Any, project: LocalProject) => void
+  onImportSession?: (server: ServerConnection.Any, project: LocalProject) => void
   onEditProject: (server: ServerConnection.Any, project: LocalProject) => void
   onRevealProject: (server: ServerConnection.Any, project: LocalProject) => void
-  onClearNotifications: (server: ServerConnection.Any, project: LocalProject) => void
+  onClearNotifications?: (server: ServerConnection.Any, project: LocalProject) => void
   onHideProject: (server: ServerConnection.Any, project: LocalProject) => void
 }) {
   const language = useLanguage()
@@ -25,14 +26,13 @@ export function ProjectMenuItems(props: {
 
   return (
     <>
+      <Menu.Item onSelect={() => props.onHideProject(props.server, props.project)}>
+        {props.archived ? "恢复展示项目" : "收纳项目"}
+      </Menu.Item>
+      <Menu.Separator />
       <Menu.Item onSelect={() => props.onOpenProjectNewSession(props.server, props.project.worktree)}>
         {language.t("command.session.new")}
       </Menu.Item>
-      <Show when={props.canImportSession}>
-        <Menu.Item onSelect={() => props.onImportSession(props.server, props.project)}>
-          {language.t("command.session.import")}
-        </Menu.Item>
-      </Show>
       <Menu.Item onSelect={() => props.onEditProject(props.server, props.project)}>
         {language.t("dialog.project.edit.title")}
       </Menu.Item>
@@ -43,13 +43,6 @@ export function ProjectMenuItems(props: {
           )}
         </Menu.Item>
       </Show>
-      <Menu.Item disabled={!props.unread} onSelect={() => props.onClearNotifications(props.server, props.project)}>
-        {language.t("sidebar.project.clearNotifications")}
-      </Menu.Item>
-      <Menu.Separator />
-      <Menu.Item onSelect={() => props.onHideProject(props.server, props.project)}>
-        {language.t("common.close")}
-      </Menu.Item>
     </>
   )
 }

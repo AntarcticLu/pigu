@@ -66,6 +66,7 @@ import type { FileDiff } from "@opencode/schema/file-diff"
 import { Job } from "./job.js"
 import type { Command } from "./command.js"
 import { SessionEnvironment } from "./session/environment.js"
+import { SessionExternal } from "./session/external.js"
 import { InstructionEntry } from "./session/instruction-entry.js"
 
 // get project -> project.locations
@@ -279,7 +280,15 @@ const layer = Layer.effect(
     const jobs = yield* Job.Service
     const environments = yield* SessionEnvironment.Service
     const locations = yield* LocationServiceMap.Service
+    const fs = yield* FSUtil.Service
     const sessions = yield* Session.make()
+    const syncExternal = () =>
+      SessionExternal.sync({
+        db,
+        fs,
+        projects,
+        version: app.version,
+      }).pipe(Effect.ignoreCause)
     const mediaBlob = (session: SessionSchema.Info) => SessionBlob.enabledFor(instances, session)
     const isDurableSessionEvent = (item: Bus.LogItem): item is SessionEvent.DurableEvent =>
       Object.hasOwn(SessionEvent.Durable.cases, item.type)
@@ -401,6 +410,7 @@ const layer = Layer.effect(
         yield* bus.remove(sessionID)
       }),
       list: Effect.fn("Session.list")(function* (input = {}) {
+        yield* syncExternal()
         const filter =
           input.cursor === undefined
             ? input

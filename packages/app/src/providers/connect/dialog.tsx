@@ -35,6 +35,7 @@ import { useProviders } from "@/providers/catalog/providers"
 import { consoleProviderGroup, consoleProviderName } from "@/providers/catalog/console"
 import { useIntegrations } from "@/providers/catalog/integrations"
 import { ProviderModelGroup, ProviderModelIcon } from "@/providers/models/provider-group"
+import { ModelProtocolSelect } from "@/providers/models/protocol"
 import type { ModelSelection } from "@/providers/models/selection"
 import { decode64 } from "@/runtime/persistence/base64"
 import { SettingsList } from "@/settings/list"
@@ -56,9 +57,9 @@ import { Menu } from "@opencode/ui/menu"
 import "@/shell/search-list.css"
 import "./models.css"
 
-export function useProviderConnectController() {
-  const [store, setStore] = createStore<{ selected?: string }>({})
-  const reset = () => setStore("selected", undefined)
+export function useProviderConnectController(initial = "pigu") {
+  const [store, setStore] = createStore<{ selected?: string }>({ selected: initial })
+  const reset = () => setStore("selected", "pigu")
 
   return {
     selected: () => store.selected,
@@ -94,10 +95,10 @@ export const DialogConnectProvider: Component<{
     completed: false,
     authorization: false,
     chatgptWelcome: false,
-    picked: false,
+    picked: true,
     stepBack: false,
     accounts: false,
-    title: "",
+    title: "Pigu API",
   })
 
   const language = useLanguage()
@@ -327,6 +328,20 @@ function ProviderPicker(props: { directory?: string; onSelect: (provider: string
     props.onPrepare?.()
     props.onSelect(provider)
   }
+
+  createEffect(() => {
+    if (store.filter) return
+    const items = rows()
+    const pigu = items.find((item) => item.id === "pigu")
+
+    if (pigu) {
+      connect(pigu.id)
+
+      return
+    }
+
+    if (items.length === 1) connect(items[0].id)
+  })
 
   const move = (event: KeyboardEvent, direction: number) => {
     const items = rows()
@@ -1689,27 +1704,40 @@ function ProviderConnection(props: {
 
             return (
               <div data-component="connected-model-row-shell" class="connected-model-row-shell">
-                <button
-                  type="button"
+                <div
                   role="radio"
+                  tabIndex={0}
                   data-component="settings-row"
                   data-first-provider-model=""
                   data-selected={selected() ? "" : undefined}
                   aria-checked={selected()}
-                  class="connected-model-row text-start focus-visible:outline-none"
+                  class="connected-model-row cursor-pointer text-start focus-visible:outline-none"
                   onClick={() => setState("selectedModel", modelKey(model))}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault()
+                      setState("selectedModel", modelKey(model))
+                    }
+                  }}
                 >
                   <div data-slot="settings-row-copy">
                     <div data-slot="settings-row-title">
                       <span class="min-w-0 truncate">{model.name}</span>
                     </div>
                   </div>
-                  <div data-slot="settings-row-control" class="size-4">
-                    <Show when={selected()}>
-                      <Icon name="check" size="small" class="shrink-0 text-v2-icon-icon-base" />
-                    </Show>
+                  <div class="flex shrink-0 items-center gap-2">
+                    <ModelProtocolSelect
+                      providerID={model.providerID}
+                      modelID={model.id}
+                      selection={props.selection}
+                    />
+                    <div data-slot="settings-row-control" class="size-4">
+                      <Show when={selected()}>
+                        <Icon name="check" size="small" class="shrink-0 text-v2-icon-icon-base" />
+                      </Show>
+                    </div>
                   </div>
-                </button>
+                </div>
               </div>
             )
           }}

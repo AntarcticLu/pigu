@@ -12,6 +12,8 @@ import { Persist, persisted } from "@/runtime/persistence/storage"
 import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
 import { CONSOLE_GROUP_KEY, consoleModelGroup, ProviderModelSections } from "@/providers/models/provider-group"
+import { ModelProtocolSelect } from "@/providers/models/protocol"
+import { SettingsProviders } from "@/settings/providers/providers"
 import { SettingsSearchEmpty } from "@/settings/search-empty"
 import { SettingsSearchField } from "@/settings/search-field"
 import { settingsScroller } from "@/settings/scroller"
@@ -86,7 +88,8 @@ export const SettingsModels: Component<{
 
             return (
               <SettingsRow title={item.name} description="">
-                <div>
+                <div class="flex items-center gap-2.5">
+                  <ModelProtocolSelect providerID={item.provider.id} modelID={item.id} />
                   <Switch
                     checked={models.visible(key)}
                     onChange={(checked) => models.setVisibility(key, checked)}
@@ -145,8 +148,10 @@ export const SettingsModels: Component<{
       <div class="settings-tab-header settings-tab-header--stacked">
         <div class="settings-tab-header-row">
           <div class="flex min-w-0 flex-col gap-1">
-            <h2 class="settings-tab-title">{language.t("settings.models.title")}</h2>
-            <span class="text-11-regular text-v2-text-text-muted">{language.t("settings.models.description")}</span>
+            <h2 class="settings-tab-title">API 与模型</h2>
+            <span class="text-11-regular text-v2-text-text-muted">
+              配置 API 地址与密钥（URL + Key），管理模型开关与协议类型（OpenAI / Gemini / Anthropic / Responses）
+            </span>
           </div>
           <div class="settings-tab-header-actions">{props.headerAction}</div>
         </div>
@@ -159,6 +164,9 @@ export const SettingsModels: Component<{
       </div>
 
       <div class="settings-tab-body settings-models">
+        <Show when={!searching()}>
+          <SettingsProviders directory={undefined} embedded />
+        </Show>
         <Show
           when={!list.grouped.loading}
           fallback={

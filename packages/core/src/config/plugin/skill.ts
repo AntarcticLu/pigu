@@ -89,6 +89,19 @@ export const Plugin = define({
         add(Skill.DirectorySource.make({ type: "directory", path: AbsolutePath.make(path.join(directory, "skill")) }))
         add(Skill.DirectorySource.make({ type: "directory", path: AbsolutePath.make(path.join(directory, "skills")) }))
       }
+      const externalDirs = [
+        path.join(location.directory, ".opencode", "skills"),
+        path.join(location.directory, ".claude", "skills"),
+        path.join(location.directory, ".agents", "skills"),
+        path.join(global.home, ".claude", "skills"),
+        path.join(global.home, ".codex", "skills"),
+        path.join(global.home, ".codex", "skills", ".system"),
+        path.join(global.home, ".gemini", "antigravity", "skills"),
+        path.join(global.home, ".gemini", "antigravity", "builtin", "skills"),
+      ]
+      for (const dir of externalDirs) {
+        add(Skill.DirectorySource.make({ type: "directory", path: AbsolutePath.make(dir) }))
+      }
       for (const item of items) {
         if (URL.canParse(item) && /^(https?:)$/.test(new URL(item).protocol)) {
           add(Skill.UrlSource.make({ type: "url", url: item }))

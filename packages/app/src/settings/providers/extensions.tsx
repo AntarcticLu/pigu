@@ -17,6 +17,11 @@ import { ExternalLink } from "@/runtime/platform/external-link"
 import { usePlatform } from "@/runtime/platform/platform"
 import { SettingsList } from "@/settings/list"
 import type { SettingsView } from "@/settings/surface"
+import {
+  localizeSkillDescription,
+  resolveSkillOrigin,
+  useExtensionScopeStore,
+} from "@/shell/titlebar/extension-scope-store"
 import "@/settings/settings.css"
 import "@/shell/search-list.css"
 
@@ -38,6 +43,7 @@ export const SettingsExtensions: Component<{
   const data = useData()
   const dialog = useDialog()
   const platform = usePlatform()
+  const scopeStore = useExtensionScopeStore()
   // MCP connections are per Location, so read and toggle them where the active session runs, as the TUI does. The
   // names come from the default Location so this page lists only the servers available to all projects.
   const location = () => (props.directory ? { directory: props.directory } : data.location.default())
@@ -219,14 +225,49 @@ export const SettingsExtensions: Component<{
               </div>
               <SettingsList variant="catalog">
                 <For each={skills()}>
-                  {(skill) => (
-                    <div class="settings-extension-row">
-                      <div class="settings-extension-lead">
-                        <Icon name="post-skill" class="text-v2-icon-icon-muted shrink-0" />
-                        <span class="settings-extension-name truncate">{skill.name}</span>
+                  {(skill) => {
+                    const origin = () => resolveSkillOrigin(skill.path)
+                    const enabled = () => scopeStore.isGlobalSkillEnabled(skill)
+                    const desc = () => localizeSkillDescription(skill, language.locale())
+
+                    return (
+                      <div class="settings-extension-row">
+                        <div class="settings-extension-lead min-w-0 flex-1">
+                          <Icon name="post-skill" class="text-v2-icon-icon-muted shrink-0" />
+                          <div class="flex min-w-0 flex-1 flex-col gap-0.5">
+                            <div class="flex items-center gap-2">
+                              <span
+                                class="settings-extension-name truncate"
+                                classList={{
+                                  "text-v2-text-text-base": enabled(),
+                                  "text-v2-text-text-faint": !enabled(),
+                                }}
+                              >
+                                {skill.name}
+                              </span>
+                              <span
+                                class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${origin().class}`}
+                              >
+                                {origin().label}
+                              </span>
+                            </div>
+                            <Show when={desc()}>
+                              <span class="truncate text-11-regular text-v2-text-text-faint" title={desc()}>
+                                {desc()}
+                              </span>
+                            </Show>
+                          </div>
+                        </div>
+                        <Switch
+                          checked={enabled()}
+                          hideLabel
+                          onChange={(next) => scopeStore.setGlobalSkillEnabled(skill, next)}
+                        >
+                          {skill.name}
+                        </Switch>
                       </div>
-                    </div>
-                  )}
+                    )
+                  }}
                 </For>
               </SettingsList>
             </div>

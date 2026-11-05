@@ -173,7 +173,7 @@ export const { use: useSettingsSurface, provider: SettingsSurfaceProvider } = cr
           return true
         },
       },
-      open(tab: SettingsRootTab | SettingsPluginTab = "general") {
+      open(tab: SettingsRootTab | SettingsPluginTab = "models") {
         show({ type: "root", tab })
       },
       /** Shows another server on the per-server pages, staying on the current page. */
@@ -190,14 +190,14 @@ export const { use: useSettingsSurface, provider: SettingsSurfaceProvider } = cr
         show(view)
       },
       openProject(input: { server: string; project: string; tab?: SettingsProjectTab }) {
-        show({ type: "project", ...input, tab: input.tab ?? "general" })
+        show({ type: "project", ...input, tab: input.tab ?? "extensions" })
       },
       select(tab: string) {
         const current = view()
 
         const next: SettingsView =
-          current.type === "root" && (isRootTab(tab) || isPluginTab(tab, plugins.tabs()))
-            ? { ...current, tab }
+          isRootTab(tab) || isPluginTab(tab, plugins.tabs())
+            ? { type: "root", server: current.server, tab }
             : current.type === "project" && isProjectTab(tab)
               ? { ...current, tab }
               : current
@@ -208,18 +208,43 @@ export const { use: useSettingsSurface, provider: SettingsSurfaceProvider } = cr
         show({ ...view(), subtab, target: undefined })
       },
       back() {
-        const current = view()
+        const origin = source()
 
-        if (current.type === "root") {
+        if (origin.type === "session" || origin.type === "draft") {
           command.trigger("common.goBack")
 
           return
         }
 
-        show({ type: "root", tab: "projects", server: current.server })
+        const last = tabs.store.at(-1)
+
+        if (last) {
+          tabs.select(last)
+
+          return
+        }
+
+        command.trigger("tab.new")
       },
       close() {
-        if (open()) command.trigger("common.goBack")
+        if (!open()) return
+        const origin = source()
+
+        if (origin.type === "session" || origin.type === "draft") {
+          command.trigger("common.goBack")
+
+          return
+        }
+
+        const last = tabs.store.at(-1)
+
+        if (last) {
+          tabs.select(last)
+
+          return
+        }
+
+        command.trigger("tab.new")
       },
     }
   },

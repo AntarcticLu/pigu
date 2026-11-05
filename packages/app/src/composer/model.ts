@@ -24,6 +24,7 @@ import { Session } from "@opencode/schema/session"
 import { abort } from "@opencode/util/abort"
 import { parseSessionMention } from "@opencode/util/session-mention"
 import { createKnownServerSessions, createServerSessionEntries } from "@/shell/commands/palette"
+import { formatProtocolVariantLabel } from "@/providers/models/protocol"
 import { rankSessionTitle } from "./session-match"
 import { useTabs } from "@/shell/tabs/tabs"
 import type { ComposerAdapter, ComposerControls, ComposerQueue } from "./adapter"
@@ -35,6 +36,7 @@ import { createComposerSubmit } from "./submit"
 import { composerSubmitView } from "./machine"
 import { useAttachmentDestination } from "./attachments/destination"
 import { parseClientSlashCommand } from "./client-slash-command"
+import { localizeSkillDescription, useExtensionScopeStore } from "@/shell/titlebar/extension-scope-store"
 
 export type ComposerModel = ComposerEditorModel & {
   readonly model: ComposerControls["model"]
@@ -210,7 +212,14 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
       })),
   )
 
-  const skills = createMemo(() => data.location.skill.list({ directory: sdk().directory }) ?? [])
+  const scopeStore = useExtensionScopeStore()
+
+  const skills = createMemo(() => {
+    const sessionID = adapter.kind === "active-session" ? adapter.session().id : undefined
+    const list = data.location.skill.list({ directory: sdk().directory }) ?? []
+
+    return list.filter((skill) => scopeStore.isSessionSkillEnabled(sessionID, sdk().directory, skill))
+  })
 
   let sessionSearch: string | undefined
   const [sessionSearched, setSessionSearched] = createSignal<string>()
@@ -243,7 +252,7 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
       id: `skill:${skill.id}`,
       kind: "skill" as const,
       label: `@${skill.id}`,
-      description: skill.description,
+      description: localizeSkillDescription(skill, language.locale()),
       mention: {
         type: "skill" as const,
         id: Skill.ID.make(skill.id),
@@ -541,8 +550,12 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
       variant: {
         options: () => {
           const preview = adapter.controls().model.preview
+          const modelID = preview?.model ?? adapter.controls().model.selection.current()?.id
 
-          return (preview ? ["default", ...preview.variants] : variants()).map((value) => ({ id: value, label: value }))
+          return (preview ? ["default", ...preview.variants] : variants()).map((value) => ({
+            id: value,
+            label: formatProtocolVariantLabel(value, modelID),
+          }))
         },
         current: () =>
           adapter.controls().model.preview?.variant ??

@@ -307,11 +307,11 @@ export const defaultSettings: Settings = {
     newIcons: false,
     foldUserMessages: false,
     newQuestionUI: false,
-    sidebarOrganize: "list",
+    sidebarOrganize: "projects",
     mobileTitlebarPosition: "top",
     followUpBehavior: "steer",
   },
-  appearance: { fontSize: 14, mono: "", sans: "", terminal: "", tabLayout: "horizontal", reduceMotion: "system" },
+  appearance: { fontSize: 14, mono: "", sans: "", terminal: "", tabLayout: "vertical", reduceMotion: "system" },
   keybinds: {},
   permissions: { autoApprove: false, autoApproveProjects: {} },
   workspaces: { defaultDestination: "last-used", lastUsed: {} },
@@ -426,7 +426,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setNewQuestionUI(value: boolean) {
           setStore("general", "newQuestionUI", value)
         },
-        sidebarOrganize: withFallback(() => store.general?.sidebarOrganize, defaultSettings.general.sidebarOrganize),
+        sidebarOrganize: (): "projects" | "list" => "projects",
         setSidebarOrganize(value: "projects" | "list") {
           setStore("general", "sidebarOrganize", value)
         },
@@ -462,7 +462,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setTerminalFont(value: string) {
           setStore("appearance", "terminal", value.trim() ? value : "")
         },
-        tabLayout: withFallback(() => store.appearance?.tabLayout, defaultSettings.appearance.tabLayout),
+        tabLayout: (): TabLayout => "vertical",
         setTabLayout(value: TabLayout) {
           setStore("appearance", "tabLayout", value)
         },

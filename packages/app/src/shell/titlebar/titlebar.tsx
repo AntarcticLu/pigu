@@ -332,7 +332,36 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
               }
             }
 
-            const toggleHome = () => tabs.toggleHome({ home: layout.route().type === "home", current: currentTab() })
+            const returnFromSettings = () => {
+              const next = backPath(history)
+
+              if (next && next.to.url !== "/") {
+                setHistory(next.state)
+                navigate(next.to.url, { state: unwrap(next.to.state) })
+
+                return
+              }
+
+              const target = currentTab() ?? tabsStore.at(-1)
+
+              if (target) {
+                tabs.select(target)
+
+                return
+              }
+
+              openNewTab()
+            }
+
+            const toggleHome = () => {
+              if (layout.route().type === "settings") {
+                returnFromSettings()
+
+                return
+              }
+
+              openSettings()
+            }
 
             const verticalTabStrip = (highlightActive?: () => boolean, onNavigate?: () => void) => (
               <TitlebarTabStrip
@@ -363,8 +392,8 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                     placement="bottom"
                     value={
                       <>
-                        {language.t("home.title")}
-                        <Keybind keys={command.keybindParts("home.toggle")} variant="neutral" />
+                        {language.t("sidebar.settings")}
+                        <Keybind keys={command.keybindParts("settings.open")} variant="neutral" />
                       </>
                     }
                     class="shrink-0"
@@ -374,11 +403,11 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                       variant="ghost-muted"
                       size="large"
                       class="!w-9 shrink-0"
-                      icon={<Icon name="grid-plus" />}
-                      state={layout.route().type === "home" ? "pressed" : undefined}
+                      icon={<Icon name="settings-gear" />}
+                      state={layout.route().type === "settings" ? "pressed" : undefined}
                       onClick={toggleHome}
-                      aria-label={language.t("home.title")}
-                      aria-pressed={layout.route().type === "home"}
+                      aria-label={language.t("sidebar.settings")}
+                      aria-pressed={layout.route().type === "settings"}
                     />
                   </Tooltip>
                 }
@@ -387,16 +416,16 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                   type="button"
                   data-titlebar-tab-action
                   data-action="vertical-tabs-home"
-                  data-state={layout.route().type === "home" ? "pressed" : undefined}
+                  data-state={layout.route().type === "settings" ? "pressed" : undefined}
                   class="group flex h-7 w-full shrink-0 items-center gap-2 rounded-[6px] px-2 text-[13px] leading-4 text-v2-text-text-faint hover:text-v2-text-text-base data-[state=pressed]:text-v2-text-text-base"
                   onClick={toggleHome}
-                  aria-label={language.t("home.title")}
-                  aria-pressed={layout.route().type === "home"}
+                  aria-label={language.t("sidebar.settings")}
+                  aria-pressed={layout.route().type === "settings"}
                 >
-                  <Icon name="grid-plus" class="shrink-0" />
-                  <span class="min-w-0 truncate">{language.t("home.title")}</span>
+                  <Icon name="settings-gear" class="shrink-0" />
+                  <span class="min-w-0 truncate">{language.t("sidebar.settings")}</span>
                   <div class="ms-auto hidden shrink-0 group-hover:block group-focus-visible:block" aria-hidden="true">
-                    <Keybind keys={command.keybindParts("home.toggle")} variant="neutral" dir="ltr" />
+                    <Keybind keys={command.keybindParts("settings.open")} variant="neutral" dir="ltr" />
                   </div>
                 </button>
               </Show>
@@ -436,7 +465,7 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                   onClick={() => command.trigger("sessions.search")}
                 >
                   <Icon name="magnifying-glass" class="shrink-0" />
-                  <span class="min-w-0 truncate">{language.t("command.session.search")}</span>
+                  <span class="min-w-0 truncate">搜索会话</span>
                   <div class="ms-auto hidden shrink-0 group-hover:block group-focus-visible:block" aria-hidden="true">
                     <Keybind keys={command.keybindParts("sessions.search")} variant="neutral" dir="ltr" />
                   </div>
@@ -674,20 +703,6 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                             {language.t("command.session.new")}
                           </button>
                           <div class="flex shrink-0 flex-col gap-1 border-t border-v2-border-border-muted pt-2">
-                            <button
-                              type="button"
-                              data-action="mobile-tabs-home"
-                              data-state={layout.route().type === "home" ? "pressed" : undefined}
-                              aria-current={layout.route().type === "home" ? "page" : undefined}
-                              class="flex h-7 w-full items-center gap-2 rounded-[6px] px-2 text-[13px] leading-4 text-v2-text-text-faint data-[state=pressed]:text-v2-text-text-base focus-visible:outline-none"
-                              onClick={() => {
-                                if (layout.route().type !== "home") toggleHome()
-                                setMobileTabs("open", false)
-                              }}
-                            >
-                              <Icon name="grid-plus" />
-                              {language.t("home.title")}
-                            </button>
                             <div class="flex items-center gap-1">
                               <button
                                 type="button"
@@ -697,18 +712,6 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                               >
                                 <Icon name="settings-gear" size="small" />
                                 {language.t("sidebar.settings")}
-                              </button>
-                              <button
-                                type="button"
-                                data-action="mobile-tabs-help"
-                                class="flex h-7 shrink-0 items-center gap-2 rounded-[6px] px-2 text-[13px] leading-4 text-v2-text-text-faint hover:bg-v2-background-bg-layer-02 focus-visible:outline-none focus-visible:bg-v2-background-bg-layer-02"
-                                onClick={() => {
-                                  setMobileTabs("open", false)
-                                  platform.openExternal("https://opencode.ai/desktop-feedback")
-                                }}
-                              >
-                                <Icon name="help" size="small" />
-                                {language.t("sidebar.help")}
                               </button>
                             </div>
                           </div>

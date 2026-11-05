@@ -175,6 +175,7 @@ export const withVariant = (
     variant
       ? {
           ...model,
+          ...(typeof variant.settings?.piguPackage === "string" ? { package: variant.settings.piguPackage } : {}),
           // Config accepts unknown variant keys, so drop `cache` here too; a variant can't change the prompt cache.
           settings: Provider.mergeOverlay(
             model.settings,

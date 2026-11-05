@@ -2,6 +2,7 @@ import { Icon } from "@opencode/ui/icon"
 import { Switch } from "@opencode/ui/switch"
 import { Tabs } from "@opencode/ui/tabs"
 import { Button } from "@opencode/ui/button"
+import { displayName } from "@opencode/ui/project-avatar"
 import { useQuery } from "@tanstack/solid-query"
 import {
   type Component,
@@ -10,28 +11,30 @@ import {
   createEffect,
   createMemo,
   createResource,
-  createSignal,
   onCleanup,
   type JSX,
 } from "solid-js"
+import { getFilename } from "@opencode/util/path"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useMcpToggle } from "@/providers/connect/mcp"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { useServerSDK } from "@/runtime/server/client"
 import { useData } from "@/runtime/server/current"
 import { pluginLabels } from "@/providers/catalog/plugin"
-import { ExternalLink } from "@/runtime/platform/external-link"
+import type { LocalProject } from "@/shell/state/layout"
+import { ProjectIcon } from "@/shell/layout/project-icon"
+import {
+  isProjectLocalSkill,
+  resolveSkillOrigin,
+  skillScopeKey,
+  useExtensionScopeStore,
+  type ScopedSkillInfo,
+} from "@/shell/titlebar/extension-scope-store"
+import { useSettingsSurface } from "../surface"
 import { ProjectFolderMissing } from "./project-folder-missing"
 import { configuredLanguageServers } from "./project-lsp"
 import { SettingsList } from "@/settings/list"
 import "./project.css"
-
-type SkillItem = {
-  name: string
-  path: string
-}
-
-const skillKey = (item: SkillItem) => `${item.name}\n${item.path}`
 
 const ExtensionCard: Component<{ children: JSX.Element }> = (props) => (
   <SettingsList variant="catalog">{props.children}</SettingsList>
@@ -39,7 +42,7 @@ const ExtensionCard: Component<{ children: JSX.Element }> = (props) => (
 
 const ExtensionRow: Component<{
   icon: "mcp" | "cube" | "post-skill" | "code"
-  name: string
+  name: JSX.Element
   description?: JSX.Element
   children?: JSX.Element
 }> = (props) => (
@@ -47,7 +50,9 @@ const ExtensionRow: Component<{
     <div class="settings-extension-lead">
       <Icon name={props.icon} class="project-settings-extension-row-icon" />
       <div class="project-settings-extension-row-copy">
-        <span class="project-settings-extension-row-name settings-extension-name">{props.name}</span>
+        <span class="project-settings-extension-row-name settings-extension-name flex items-center gap-2">
+          {props.name}
+        </span>
         <Show when={props.description}>
           <span class="project-settings-extension-row-description">{props.description}</span>
         </Show>
@@ -56,68 +61,6 @@ const ExtensionRow: Component<{
     {props.children}
   </div>
 )
-
-const ProjectSectionHeader: Component<{
-  kind: "mcps" | "plugins" | "skills"
-  empty: boolean
-  action: JSX.Element
-}> = (props) => {
-  const language = useLanguage()
-
-  return (
-    <div class="project-settings-extension-section-header">
-      <div class="project-settings-extension-section-copy">
-        <span>
-          {props.empty
-            ? language.t(`project.settings.extensions.empty.${props.kind}.title`)
-            : language.t("project.settings.extensions.added")}
-        </span>
-        <Show when={props.empty}>
-          <span class="project-settings-extension-empty-description">
-            {language.t(`project.settings.extensions.empty.${props.kind}.description`)}
-          </span>
-        </Show>
-      </div>
-      {props.action}
-    </div>
-  )
-}
-
-const SharedSection: Component<{
-  count: number
-  children: JSX.Element
-}> = (props) => {
-  const language = useLanguage()
-  const [open, setOpen] = createSignal(false)
-
-  return (
-    <Show when={props.count > 0}>
-      <div class="project-settings-shared">
-        <button
-          type="button"
-          class="settings-models-group-trigger project-settings-shared-trigger"
-          aria-expanded={open()}
-          onClick={() => setOpen((value) => !value)}
-        >
-          <span class="settings-models-group-chevron">
-            <Icon
-              name="fill-triangle-down"
-              size="small"
-              classList={{ "project-settings-shared-chevron": true, open: open() }}
-            />
-          </span>
-          <span class="project-settings-shared-label">
-            <span class="settings-models-group-title">{language.t("project.settings.extensions.shared")}</span>
-            <span class="project-settings-shared-count">{props.count}</span>
-          </span>
-        </button>
-        <Show when={open()}>
-          <ExtensionCard>{props.children}</ExtensionCard>
-        </Show>
-      </div>
-    </Show>
-  )
-}
 
 const ProjectLanguageServers: Component = () => {
   const language = useLanguage()
@@ -212,6 +155,7 @@ const ProjectLanguageServers: Component = () => {
 }
 
 export const ProjectSettingsExtensions: Component<{
+  project?: LocalProject
   subtab?: "mcps" | "plugins" | "skills" | "lsps"
   onSubtab: (value: "mcps" | "plugins" | "skills" | "lsps") => void
 }> = (props) => {
@@ -219,11 +163,18 @@ export const ProjectSettingsExtensions: Component<{
   const serverSDK = useServerSDK()
   const directorySDK = useWorkspaceLocation()
   const data = useData()
+  const surface = useSettingsSurface()
+  const scopeStore = useExtensionScopeStore()
   const toggleMcp = useMcpToggle(() => directorySDK().directory)
+
+  const directory = () => directorySDK().directory
+
+  const projectTitle = () =>
+    props.project ? displayName(props.project) : getFilename(directory()) || directory()
 
   createEffect(() => {
     if (serverSDK.connection.status() !== "connected") return
-    const ref = { directory: directorySDK().directory }
+    const ref = { directory: directory() }
     void Promise.all([
       data.location.mcp.server.sync(),
       data.location.skill.sync(),
@@ -232,25 +183,22 @@ export const ProjectSettingsExtensions: Component<{
     ]).catch(() => undefined)
   })
 
-  const globalMcpNames = createMemo(() =>
-    [...new Set((data.location.mcp.server.list() ?? []).map((server) => server.name))].sort(),
+  const globalMcpSet = createMemo(
+    () => new Set((data.location.mcp.server.list() ?? []).map((server) => server.name)),
   )
 
-  const projectMcpNames = createMemo(() => {
-    const shared = new Set(globalMcpNames())
+  const allMcps = createMemo(() => {
+    const projectList = data.location.mcp.server.list({ directory: directory() }) ?? []
+    const globalList = data.location.mcp.server.list() ?? []
+    const byName = new Map(globalList.map((item) => [item.name, item]))
 
-    return (data.location.mcp.server.list({ directory: directorySDK().directory }) ?? [])
-      .map((server) => server.name)
-      .filter((name) => !shared.has(name))
-      .sort()
+    for (const item of projectList) {
+      byName.set(item.name, item)
+    }
+
+    return Array.from(byName.values()).toSorted((a, b) => a.name.localeCompare(b.name))
   })
 
-  const mcpEnabled = (name: string) =>
-    data.location.mcp.server.list({ directory: directorySDK().directory })?.find((server) => server.name === name)
-      ?.status.status === "connected"
-
-  // Reading `.latest` rethrows a failed fetch, such as the project's plugin list after its folder is deleted, so these
-  // lists fall back to empty instead of crashing the page.
   const [globalPluginList] = createResource(
     () => serverSDK.connection.status() === "connected",
     () =>
@@ -262,68 +210,78 @@ export const ProjectSettingsExtensions: Component<{
   )
 
   const [projectPluginList] = createResource(
-    () => (serverSDK.connection.status() === "connected" ? directorySDK().directory : undefined),
-    (directory) =>
+    () => (serverSDK.connection.status() === "connected" ? directory() : undefined),
+    (dir) =>
       serverSDK.api.plugin
-        .list({ location: { directory } })
+        .list({ location: { directory: dir } })
         .then((result) => result.data)
         .catch(() => []),
     { initialValue: [] },
   )
 
-  const globalPlugins = createMemo(() => pluginLabels(globalPluginList.latest ?? []))
+  const allPlugins = createMemo(() => {
+    const set = new Set([
+      ...pluginLabels(projectPluginList.latest ?? []),
+      ...pluginLabels(globalPluginList.latest ?? []),
+    ])
 
-  const projectPlugins = createMemo(() => {
-    const shared = new Set(globalPlugins())
-
-    return pluginLabels(projectPluginList.latest ?? []).filter((name) => !shared.has(name))
+    return Array.from(set)
   })
 
-  const serverSkills = createMemo(() => data.location.skill.list() ?? [])
+  const allSkills = createMemo<ScopedSkillInfo[]>(() => {
+    const projectList = data.location.skill.list({ directory: directory() }) ?? []
+    const globalList = data.location.skill.list() ?? []
+    const byKey = new Map<string, ScopedSkillInfo>()
 
-  const projectSkills = createMemo(() => {
-    const shared = new Set(serverSkills().map(skillKey))
+    for (const item of [...projectList, ...globalList]) {
+      const key = skillScopeKey(item)
 
-    return (data.location.skill.list({ directory: directorySDK().directory }) ?? []).filter(
-      (item) => !shared.has(skillKey(item)),
-    )
+      if (!byKey.has(key)) byKey.set(key, item)
+    }
+
+    return Array.from(byKey.values()).toSorted((a, b) => {
+      const aLocal = isProjectLocalSkill(a.path, directory()) ? 1 : 0
+      const bLocal = isProjectLocalSkill(b.path, directory()) ? 1 : 0
+
+      if (aLocal !== bLocal) return bLocal - aLocal
+
+      return a.name.localeCompare(b.name)
+    })
   })
 
-  const mcpRows = (items: string[]) => (
-    <For each={items}>
-      {(name) => (
-        <ExtensionRow icon="mcp" name={name}>
-          <Switch
-            checked={mcpEnabled(name)}
-            disabled={toggleMcp.isPending && toggleMcp.variables === name}
-            hideLabel
-            onChange={() => {
-              if (toggleMcp.isPending) return
-              toggleMcp.mutate(name)
-            }}
-          >
-            {name}
-          </Switch>
-        </ExtensionRow>
-      )}
-    </For>
-  )
+  const enabledSkillCount = () =>
+    allSkills().filter((item) => scopeStore.isProjectSkillEnabled(directory(), item)).length
 
-  const pluginRows = (items: string[]) => <For each={items}>{(name) => <ExtensionRow icon="cube" name={name} />}</For>
-
-  const skillRows = (items: SkillItem[]) => (
-    <For each={items}>{(item) => <ExtensionRow icon="post-skill" name={item.name} />}</For>
-  )
+  const enabledMcpCount = () =>
+    allMcps().filter((item) => item.status.status === "connected").length
 
   return (
     <>
       <div class="settings-tab-header">
         <div class="settings-tab-header-row">
-          <div class="flex flex-col gap-1">
-            <h2 class="settings-tab-title">{language.t("settings.tab.extensions")}</h2>
-            <span class="text-11-regular text-v2-text-text-muted">
-              {language.t("project.settings.extensions.description")}
-            </span>
+          <div class="flex min-w-0 items-center gap-3">
+            <Show when={props.project}>
+              {(project) => (
+                <ProjectIcon
+                  project={project()}
+                  class="!size-8 shrink-0 [&_[data-slot=project-avatar-surface]]:!rounded-[6px] [&_[data-slot=project-avatar-surface]]:!text-[16px]"
+                />
+              )}
+            </Show>
+            <div class="flex min-w-0 flex-col gap-1">
+              <div class="flex items-center gap-2">
+                <h2 class="settings-tab-title truncate">{projectTitle()}</h2>
+                <span class="rounded bg-v2-background-bg-layer-02 px-2 py-0.5 text-[11px] font-medium text-v2-text-text-muted">
+                  项目专属扩展配置
+                </span>
+              </div>
+              <span class="truncate font-mono text-11-regular text-v2-text-text-muted">{directory()}</span>
+            </div>
+          </div>
+          <div class="settings-tab-header-actions">
+            <Button variant="ghost-muted" size="small" onClick={() => surface.open("extensions")}>
+              前往全局 MCP 与扩展库
+            </Button>
           </div>
         </div>
       </div>
@@ -332,64 +290,193 @@ export const ProjectSettingsExtensions: Component<{
         <ProjectFolderMissing />
         <Tabs
           variant="pill"
-          value={props.subtab ?? "mcps"}
+          value={props.subtab ?? "skills"}
           onChange={(value) => {
             if (value === "mcps" || value === "plugins" || value === "skills" || value === "lsps") props.onSubtab(value)
           }}
           class="project-settings-extension-tabs settings-subtabs"
         >
           <Tabs.List>
-            <Tabs.Trigger value="mcps">{language.t("settings.extensions.tab.mcps")}</Tabs.Trigger>
-            <Tabs.Trigger value="plugins">{language.t("settings.extensions.tab.plugins")}</Tabs.Trigger>
-            <Tabs.Trigger value="skills">{language.t("settings.extensions.tab.skills")}</Tabs.Trigger>
-            <Tabs.Trigger value="lsps">{language.t("project.settings.extensions.tab.lsps")}</Tabs.Trigger>
+            <Tabs.Trigger value="skills">
+              Skills ({enabledSkillCount()}/{allSkills().length})
+            </Tabs.Trigger>
+            <Tabs.Trigger value="mcps">
+              MCPs ({enabledMcpCount()}/{allMcps().length})
+            </Tabs.Trigger>
           </Tabs.List>
+
+          <Tabs.Content value="skills">
+            <div class="project-settings-extension-section">
+              <div class="project-settings-extension-section-header">
+                <div class="project-settings-extension-section-copy">
+                  <span>当前项目可用的 Skill 技能（已启用 {enabledSkillCount()} / {allSkills().length}）</span>
+                  <span class="project-settings-extension-empty-description">
+                    可为当前项目单独开关项目内或全局继承（Codex / Claude / AGY）的 Skill，对话中默认继承此处配置。
+                  </span>
+                </div>
+                <Show when={allSkills().length > 0}>
+                  <div class="flex items-center gap-1.5">
+                    <Button
+                      variant="ghost-muted"
+                      size="small"
+                      onClick={() =>
+                        scopeStore.setProjectSkillsBatch(
+                          directory(),
+                          allSkills().map((skill) => ({
+                            skill,
+                            enabled: isProjectLocalSkill(skill.path, directory()),
+                          })),
+                        )
+                      }
+                    >
+                      仅启用项目专属
+                    </Button>
+                    <Button
+                      variant="ghost-muted"
+                      size="small"
+                      onClick={() =>
+                        scopeStore.setProjectSkillsBatch(
+                          directory(),
+                          allSkills().map((skill) => ({ skill, enabled: true })),
+                        )
+                      }
+                    >
+                      全部启用
+                    </Button>
+                    <Button
+                      variant="ghost-muted"
+                      size="small"
+                      onClick={() =>
+                        scopeStore.setProjectSkillsBatch(
+                          directory(),
+                          allSkills().map((skill) => ({ skill, enabled: false })),
+                        )
+                      }
+                    >
+                      全部关闭
+                    </Button>
+                  </div>
+                </Show>
+              </div>
+              <Show when={allSkills().length > 0}>
+                <ExtensionCard>
+                  <For each={allSkills()}>
+                    {(item) => {
+                      const origin = () => resolveSkillOrigin(item.path, directory())
+                      const enabled = () => scopeStore.isProjectSkillEnabled(directory(), item)
+
+                      return (
+                        <ExtensionRow
+                          icon="post-skill"
+                          name={
+                            <>
+                              <span>{item.name}</span>
+                              <span
+                                class={`rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${origin().class}`}
+                              >
+                                {origin().label}
+                              </span>
+                            </>
+                          }
+                          description={item.description}
+                        >
+                          <Switch
+                            checked={enabled()}
+                            hideLabel
+                            onChange={(next) => scopeStore.setProjectSkillEnabled(directory(), item, next)}
+                          >
+                            {item.name}
+                          </Switch>
+                        </ExtensionRow>
+                      )
+                    }}
+                  </For>
+                </ExtensionCard>
+              </Show>
+            </div>
+          </Tabs.Content>
 
           <Tabs.Content value="mcps">
             <div class="project-settings-extension-section">
-              <ProjectSectionHeader
-                kind="mcps"
-                empty={projectMcpNames().length === 0}
-                action={<span>{language.t("settings.extensions.manageConfig")}</span>}
-              />
-              <Show when={projectMcpNames().length > 0}>
-                <ExtensionCard>{mcpRows(projectMcpNames())}</ExtensionCard>
+              <div class="project-settings-extension-section-header">
+                <div class="project-settings-extension-section-copy">
+                  <span>
+                    {allMcps().length === 0
+                      ? language.t("project.settings.extensions.empty.mcps.title")
+                      : `当前项目可用的 MCP 服务（已连接 ${enabledMcpCount()} / ${allMcps().length}）`}
+                  </span>
+                  <span class="project-settings-extension-empty-description">
+                    按项目独立控制 MCP 服务连接状态，不同项目之间互不干扰。
+                  </span>
+                </div>
+                <span>{language.t("settings.extensions.manageConfig")}</span>
+              </div>
+              <Show when={allMcps().length > 0}>
+                <ExtensionCard>
+                  <For each={allMcps()}>
+                    {(item) => {
+                      const isProjectOnly = () => !globalMcpSet().has(item.name)
+
+                      return (
+                        <ExtensionRow
+                          icon="mcp"
+                          name={
+                            <>
+                              <span>{item.name}</span>
+                              <span
+                                class={`rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${
+                                  isProjectOnly()
+                                    ? "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400"
+                                    : "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400"
+                                }`}
+                              >
+                                {isProjectOnly() ? "项目专属" : "全局共享"}
+                              </span>
+                            </>
+                          }
+                        >
+                          <Switch
+                            checked={item.status.status !== "disabled"}
+                            disabled={toggleMcp.isPending}
+                            hideLabel
+                            onChange={(enabled) => {
+                              if (toggleMcp.isPending) return
+                              toggleMcp.mutate({ name: item.name, enabled })
+                            }}
+                          >
+                            {item.name}
+                          </Switch>
+                        </ExtensionRow>
+                      )
+                    }}
+                  </For>
+                </ExtensionCard>
               </Show>
-              <SharedSection count={globalMcpNames().length}>{mcpRows(globalMcpNames())}</SharedSection>
             </div>
           </Tabs.Content>
 
           <Tabs.Content value="plugins">
             <div class="project-settings-extension-section">
-              <ProjectSectionHeader
-                kind="plugins"
-                empty={projectPlugins().length === 0}
-                action={<span>{language.t("settings.extensions.manageConfig")}</span>}
-              />
-              <Show when={projectPlugins().length > 0}>
-                <ExtensionCard>{pluginRows(projectPlugins())}</ExtensionCard>
+              <Show
+                when={allPlugins().length > 0}
+                fallback={
+                  <div class="project-settings-extension-section-header">
+                    <div class="project-settings-extension-section-copy">
+                      <span>{language.t("project.settings.extensions.empty.plugins.title")}</span>
+                      <span class="project-settings-extension-empty-description">
+                        {language.t("project.settings.extensions.empty.plugins.description")}
+                      </span>
+                    </div>
+                  </div>
+                }
+              >
+                <ExtensionCard>
+                  <For each={allPlugins()}>{(name) => <ExtensionRow icon="cube" name={name} />}</For>
+                </ExtensionCard>
               </Show>
-              <SharedSection count={globalPlugins().length}>{pluginRows(globalPlugins())}</SharedSection>
             </div>
           </Tabs.Content>
 
-          <Tabs.Content value="skills">
-            <div class="project-settings-extension-section">
-              <ProjectSectionHeader
-                kind="skills"
-                empty={projectSkills().length === 0}
-                action={
-                  <ExternalLink class="settings-extension-link" href="https://opencode.ai/v2/docs/skills">
-                    {language.t("settings.extensions.addSkills")}
-                  </ExternalLink>
-                }
-              />
-              <Show when={projectSkills().length > 0}>
-                <ExtensionCard>{skillRows(projectSkills())}</ExtensionCard>
-              </Show>
-              <SharedSection count={serverSkills().length}>{skillRows(serverSkills())}</SharedSection>
-            </div>
-          </Tabs.Content>
           <Tabs.Content value="lsps">
             <ProjectLanguageServers />
           </Tabs.Content>

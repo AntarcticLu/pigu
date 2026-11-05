@@ -5,7 +5,7 @@ import type { SettingsRootTab } from "./surface"
 
 export const settingsOpenCommand = { id: "settings.open", keybind: "mod+comma" }
 
-export function useSettingsDialog(defaultValue?: SettingsRootTab) {
+export function useSettingsDialog(defaultValue: SettingsRootTab = "models") {
   const settings = useSettingsSurface()
 
   return () => settings.open(defaultValue)

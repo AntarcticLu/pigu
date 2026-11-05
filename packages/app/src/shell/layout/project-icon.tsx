@@ -1,12 +1,5 @@
-import {
-  displayName,
-  getProjectAvatarGenerated,
-  getProjectAvatarSource,
-  getProjectAvatarVariant,
-  ProjectAvatar,
-  type ProjectAvatarProps,
-} from "@opencode/ui/project-avatar"
-import { splitProps } from "solid-js"
+import { Icon } from "@opencode/ui/icon"
+import type { ProjectAvatarProps } from "@opencode/ui/project-avatar"
 import type { LocalProject } from "@/shell/state/layout"
 
 type ProjectIconProps = Omit<ProjectAvatarProps, "fallback" | "src" | "variant"> & {
@@ -16,16 +9,11 @@ type ProjectIconProps = Omit<ProjectAvatarProps, "fallback" | "src" | "variant">
 }
 
 export function ProjectIcon(props: ProjectIconProps) {
-  const [local, rest] = splitProps(props, ["project", "fallback", "icon"])
-  const icon = () => local.icon ?? local.project.icon
-
   return (
-    <ProjectAvatar
-      {...rest}
-      fallback={local.fallback ?? displayName(local.project)}
-      src={getProjectAvatarSource(local.project.id, icon())}
-      variant={getProjectAvatarVariant(icon()?.color)}
-      generated={getProjectAvatarGenerated({ ...local.project, icon: icon() })}
-    />
+    <span
+      class={`inline-flex shrink-0 items-center justify-center text-v2-icon-icon-muted ${props.class ?? ""}`}
+    >
+      <Icon name="folder" size="small" />
+    </span>
   )
 }

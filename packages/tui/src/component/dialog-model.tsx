@@ -11,7 +11,6 @@ import { useData } from "../context/data"
 import { modelPreferenceKey } from "../model-preference"
 import { useLocation } from "../context/location"
 import { useNewDesigns } from "../config"
-import { DialogFreeModels } from "./dialog-model-free"
 import { FavoriteMarker, ModelDetail, isFreeModel, prioritizeFavorites, sortModelOptions } from "./model-options"
 import { DialogUsage, useUsageLimits } from "./usage"
 import { formatDollars, usageLevel } from "../util/usage-limits"
@@ -19,7 +18,6 @@ import { formatDollars, usageLevel } from "../util/usage-limits"
 export function DialogModel(props: { providerID?: string }) {
   const local = useLocal()
   const dialog = useDialog()
-  const newDesigns = useNewDesigns()
   const connected = useConnected()
 
   function select(providerID: string, modelID: string) {
@@ -39,16 +37,22 @@ export function DialogModel(props: { providerID?: string }) {
 
   function connect() {
     dialog.replace(() => (
-      <DialogIntegration onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)} />
+      <DialogIntegration
+        autoConnect
+        onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)}
+      />
     ))
   }
 
   return (
     <Show
-      when={newDesigns() && !connected() && !props.providerID}
+      when={!connected() && !props.providerID}
       fallback={<DialogConnectedModels providerID={props.providerID} onSelect={select} onConnect={connect} />}
     >
-      <DialogFreeModels onSelect={select} onConnect={connect} />
+      <DialogIntegration
+        autoConnect
+        onConnected={(providerID) => dialog.replace(() => <DialogModel providerID={providerID} />)}
+      />
     </Show>
   )
 }

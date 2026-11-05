@@ -214,10 +214,11 @@ export const loadPackage = Effect.fn("Provider.loadPackage")(function* (input: s
 
 const settingsKeys = Struct.keys(Provider.Settings.schema.fields)
 const providerOnlyKeys = settingsKeys.filter((key) => !(key in Model.Settings.schema.fields))
+const internalModelSettingsKeys = ["piguPackage", "piguProtocol"] as const
 
 /** The provider options: every settings key OpenCode doesn't read itself. */
 export function nativeSettings(settings: Settings) {
-  return Struct.omit(settings, settingsKeys)
+  return Struct.omit(settings, [...settingsKeys, ...internalModelSettingsKeys])
 }
 
 /** Settings a model inherits from its provider. */

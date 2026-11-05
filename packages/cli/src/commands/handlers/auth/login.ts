@@ -32,27 +32,30 @@ export default Runtime.handler(
   Effect.fn("cli.auth.login")((input) =>
     login({
       target: Option.getOrUndefined(input.target),
+      url: Option.getOrUndefined(input.url),
+      key: Option.getOrUndefined(input.key),
       method: Option.getOrUndefined(input.method),
       answer: input.answer,
     }).pipe(handlePromptErrors),
   ),
 )
 
-const login = Effect.fn("cli.auth.login.run")(function* (input: {
+export const login = Effect.fn("cli.auth.login.run")(function* (input: {
   target?: string
+  url?: string
+  key?: string
   method?: string
   answer?: ReadonlyArray<string>
 }) {
-  if (!input.target)
-    yield* requireInteractive("Pass an integration ID or name when running without an interactive terminal")
-  intro("Connect an integration")
+  intro("Configure Pigu API")
   const client = yield* createClient()
   const integration = yield* findIntegration(client, input.target)
   const methods = connectMethods(integration)
   if (methods.length === 0) yield* Effect.fail(new Error(`${integration.name} has no interactive login methods`))
   const method = yield* chooseMethod(methods, input.method)
-  const answer = yield* answerForm(method.type === "command" ? undefined : method.form, input.answer)
-  yield* authenticate(client, integration, method, answer)
+  const rawAnswers = [...(input.answer ?? []), ...(input.url ? [`baseURL=${input.url}`] : [])]
+  const answer = yield* answerForm(method.type === "command" ? undefined : method.form, rawAnswers)
+  yield* authenticate(client, integration, method, answer, input.key)
   outro("Done")
 })
 
@@ -72,6 +75,8 @@ const findIntegration = Effect.fn("cli.auth.login.integration")(function* (clien
   if (target) return yield* resolveIntegration(integrations, target)
   const choices = loginChoices(integrations)
   if (choices.length === 0) return yield* Effect.fail(new Error("No authentication integrations are available"))
+  if (choices.length === 1) return yield* resolveIntegration(integrations, choices[0].value)
+  yield* requireInteractive("Pass an integration ID or name when running without an interactive terminal")
   const id = yield* prompt<string>(() => selectIntegration(choices))
   return yield* resolveIntegration(integrations, id)
 })
@@ -121,8 +126,9 @@ const authenticate = Effect.fn("cli.auth.login.authenticate")(function* (
   integration: IntegrationInfo,
   method: ConnectMethod,
   answer?: FormAnswer,
+  providedKey?: string,
 ) {
-  if (method.type === "key") return yield* keyLogin(client, integration, method, answer)
+  if (method.type === "key") return yield* keyLogin(client, integration, method, answer, providedKey)
   if (method.type === "command") return yield* commandLogin(client, integration, method)
   if (method.type === "external") return yield* externalLogin(client, integration, method, answer)
   return yield* oauthLogin(client, integration, method, answer)
@@ -152,17 +158,37 @@ const keyLogin = Effect.fn("cli.auth.login.key")(function* (
   integration: IntegrationInfo,
   method: Extract<ConnectMethod, { type: "key" }>,
   answer?: FormAnswer,
+  providedKey?: string,
 ) {
-  const key = yield* secret(method.label ?? `Enter your ${integration.name} API key`)
+  const key = providedKey?.trim() || (yield* secret(method.label ?? `Enter your ${integration.name} API key`))
   const progress = spinner()
-  progress.start("Saving credential...")
+  progress.start("Saving credential and fetching models...")
   yield* request((signal) =>
     client.integration.connect.key({ integrationID: integration.id, key, answer, location }, { signal }),
-  ).pipe(
-    Effect.tap(() => Effect.sync(() => progress.stop(`Connected to ${integration.name}`))),
-    Effect.tapCause(() => Effect.sync(() => progress.stop("Authentication failed", 1))),
+  ).pipe(Effect.tapCause(() => Effect.sync(() => progress.stop("Authentication failed", 1))))
+  const discovered = yield* waitForModels(client, integration.id)
+  progress.stop(
+    discovered.length > 0
+      ? `Connected to ${integration.name} (${discovered.length} models loaded)`
+      : `Connected to ${integration.name}`,
   )
+  if (discovered.length > 0) {
+    const preview = discovered.slice(0, 10).join(", ")
+    const suffix = discovered.length > 10 ? ` (+${discovered.length - 10} more)` : ""
+    log.info(`Available models: ${preview}${suffix}`)
+  }
 })
+
+const waitForModels: (client: OpenCodeClient, integrationID: string, remaining?: number) => Effect.Effect<string[], Error> =
+  Effect.fn("cli.auth.login.waitForModels")(function* (client: OpenCodeClient, integrationID: string, remaining = 15) {
+    const response = yield* request((signal) => client.model.list({ location }, { signal })).pipe(
+      Effect.orElseSucceed(() => ({ data: [] })),
+    )
+    const matching = response.data.filter((item) => item.providerID === integrationID).map((item) => item.id)
+    if (matching.length > 0 || remaining <= 1) return matching
+    yield* Effect.sleep("200 millis")
+    return yield* waitForModels(client, integrationID, remaining - 1)
+  })
 
 export const oauthLogin = Effect.fn("cli.auth.login.oauth")(function* (
   client: OpenCodeClient,

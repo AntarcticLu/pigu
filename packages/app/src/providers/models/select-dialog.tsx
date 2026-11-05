@@ -38,6 +38,7 @@ import { createSafeTriangle } from "@/shell/commands/safe-triangle"
 import { formatKeybindParts, matchKeybind, parseKeybind } from "@/shell/commands/command"
 import { createEventListener } from "@solid-primitives/event-listener"
 import { matchesModelSearch } from "./search"
+import { formatProtocolVariantLabel } from "./protocol"
 import { SettingsList } from "@/settings/list"
 import {
   CONSOLE_GROUP_KEY,
@@ -946,7 +947,7 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
         <Show when={usage(item())}>{(value) => <ModelUsageTag usage={value()} />}</Show>
         <Show when={active()}>
           <span data-slot="model-dialog-variant">
-            <span class="truncate capitalize">{variant(item()) ?? language.t("common.default")}</span>
+            <span class="truncate">{formatProtocolVariantLabel(variant(item()) ?? "default", item().id)}</span>
             <Icon name="chevron-right" size="small" />
           </span>
         </Show>
@@ -1053,8 +1054,8 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
                     onMouseLeave={(event) => event.currentTarget.removeAttribute("data-highlighted")}
                     onClick={() => choose(item(), value ?? null)}
                   >
-                    <span data-slot="menu-v2-item-content" class="capitalize">
-                      {value ?? language.t("common.default")}
+                    <span data-slot="menu-v2-item-content">
+                      {formatProtocolVariantLabel(value ?? "default", item().id)}
                     </span>
                     <span data-slot="menu-v2-item-indicator" data-checked={variant(item()) === value ? "" : undefined}>
                       <Icon name="check" size="small" />
