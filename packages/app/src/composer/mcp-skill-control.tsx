@@ -61,10 +61,18 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
   })
 
   const mcps = createMemo(() => {
-    const localList = data.location.mcp.server.list({ directory: directory() }) ?? []
+    const localList = (data.location.mcp.server.list({ directory: directory() }) ?? []).filter(
+      (item) => !scopeStore.isMcpRemoved(item.name),
+    )
 
     if (isLocalServer()) return localList
-    const byName = new Map(ideGlobal.mcps().map((item) => [item.name, item]))
+
+    const byName = new Map(
+      ideGlobal
+        .mcps()
+        .filter((item) => !scopeStore.isMcpRemoved(item.name))
+        .map((item) => [item.name, item]),
+    )
 
     for (const item of localList) {
       byName.set(item.name, item)
@@ -84,7 +92,7 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
       if (!byKey.has(key)) byKey.set(key, item)
     }
 
-    return Array.from(byKey.values())
+    return scopeStore.mergeSkills(Array.from(byKey.values()))
   })
 
   // Keep backend `session.permissions` synchronized with Global -> Project -> Session MCP & Skill switches
@@ -203,11 +211,13 @@ function DialogSessionMcpSkills(props: {
 
     if (!props.isLocal) {
       for (const item of ideGlobal.mcps()) {
+        if (scopeStore.isMcpRemoved(item.name)) continue
         byName.set(item.name, { ...item, fromIdeGlobal: true })
       }
     }
 
     for (const item of localList) {
+      if (scopeStore.isMcpRemoved(item.name)) continue
       byName.set(item.name, item)
     }
 
@@ -225,7 +235,7 @@ function DialogSessionMcpSkills(props: {
       if (!byKey.has(key)) byKey.set(key, item)
     }
 
-    return Array.from(byKey.values()).toSorted((a, b) => {
+    return scopeStore.mergeSkills(Array.from(byKey.values())).toSorted((a, b) => {
       const aLocal = isProjectLocalSkill(a.path, props.directory) ? 1 : 0
       const bLocal = isProjectLocalSkill(b.path, props.directory) ? 1 : 0
 

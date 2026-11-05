@@ -16,12 +16,66 @@ export type ScopedSkillInfo = {
   fromIdeGlobal?: boolean
 }
 
+export type CustomMcpRecord = {
+  name: string
+  type: "local" | "remote"
+  command?: string
+  url?: string
+  enabled: boolean
+}
+
+export type CustomPluginRecord = {
+  id: string
+  name: string
+  target: string
+  description?: string
+  enabled: boolean
+}
+
+export type CustomSkillRecord = {
+  id: string
+  name: string
+  description: string
+  content: string
+  path: string
+}
+
+const CustomMcpSchema = Persistence.struct({
+  name: Schema.String,
+  type: Schema.Literals(["local", "remote"]),
+  command: Schema.optional(Schema.String),
+  url: Schema.optional(Schema.String),
+  enabled: Schema.Boolean,
+})
+
+const CustomPluginSchema = Persistence.struct({
+  id: Schema.String,
+  name: Schema.String,
+  target: Schema.String,
+  description: Schema.optional(Schema.String),
+  enabled: Schema.Boolean,
+})
+
+const CustomSkillSchema = Persistence.struct({
+  id: Schema.String,
+  name: Schema.String,
+  description: Schema.String,
+  content: Schema.String,
+  path: Schema.String,
+})
+
 const ExtensionScopeState = Persistence.struct({
   globalSkills: Persistence.record(Schema.Boolean),
   projectSkills: Persistence.record(Persistence.record(Schema.Boolean)),
   projectMcps: Persistence.record(Persistence.record(Schema.Boolean)),
   sessionSkills: Persistence.record(Persistence.record(Schema.Boolean)),
   sessionMcps: Persistence.record(Persistence.record(Schema.Boolean)),
+  customMcps: Schema.optional(Persistence.record(CustomMcpSchema)),
+  removedMcps: Schema.optional(Persistence.record(Schema.Boolean)),
+  customPlugins: Schema.optional(Persistence.record(CustomPluginSchema)),
+  removedPlugins: Schema.optional(Persistence.record(Schema.Boolean)),
+  customSkills: Schema.optional(Persistence.record(CustomSkillSchema)),
+  removedSkills: Schema.optional(Persistence.record(Schema.Boolean)),
 })
 
 const ZH_SKILL_DESCRIPTIONS = new Map<string, string>([
@@ -83,6 +137,14 @@ export function isProjectLocalSkill(skillPath: string, worktree?: string) {
 }
 
 export function resolveSkillOrigin(skillPath: string, worktree?: string, fromIdeGlobal?: boolean) {
+  if (skillPath.startsWith("custom://")) {
+    return {
+      label: "自定义",
+      isLocal: false,
+      class: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+    }
+  }
+
   if (isProjectLocalSkill(skillPath, worktree)) {
     return {
       label: "项目专属",
@@ -193,8 +255,135 @@ export function useExtensionScopeStore() {
       projectMcps: {},
       sessionSkills: {},
       sessionMcps: {},
+      customMcps: {},
+      removedMcps: {},
+      customPlugins: {},
+      removedPlugins: {},
+      customSkills: {},
+      removedSkills: {},
     },
   )
+
+  const customMcps = () => Object.values(store.customMcps ?? {})
+
+  const isMcpRemoved = (name: string) => Boolean(store.removedMcps?.[name])
+
+  const saveCustomMcp = (record: CustomMcpRecord, previousName?: string) => {
+    batch(() => {
+      if (previousName && previousName !== record.name) {
+        const nextCustom = { ...(store.customMcps ?? {}) }
+        delete nextCustom[previousName]
+        nextCustom[record.name] = record
+        setStore("customMcps", nextCustom)
+        setStore("removedMcps", { ...(store.removedMcps ?? {}), [previousName]: true, [record.name]: false })
+
+        return
+      }
+
+      setStore("customMcps", { ...(store.customMcps ?? {}), [record.name]: record })
+      setStore("removedMcps", { ...(store.removedMcps ?? {}), [record.name]: false })
+    })
+  }
+
+  const removeMcp = (name: string) => {
+    batch(() => {
+      const nextCustom = { ...(store.customMcps ?? {}) }
+      delete nextCustom[name]
+      setStore("customMcps", nextCustom)
+      setStore("removedMcps", { ...(store.removedMcps ?? {}), [name]: true })
+    })
+  }
+
+  const customPlugins = () => Object.values(store.customPlugins ?? {})
+
+  const isPluginRemoved = (id: string) => Boolean(store.removedPlugins?.[id])
+
+  const saveCustomPlugin = (record: CustomPluginRecord, previousID?: string) => {
+    batch(() => {
+      if (previousID && previousID !== record.id) {
+        const nextCustom = { ...(store.customPlugins ?? {}) }
+        delete nextCustom[previousID]
+        nextCustom[record.id] = record
+        setStore("customPlugins", nextCustom)
+        setStore("removedPlugins", { ...(store.removedPlugins ?? {}), [previousID]: true, [record.id]: false })
+
+        return
+      }
+
+      setStore("customPlugins", { ...(store.customPlugins ?? {}), [record.id]: record })
+      setStore("removedPlugins", { ...(store.removedPlugins ?? {}), [record.id]: false })
+    })
+  }
+
+  const removePlugin = (id: string) => {
+    batch(() => {
+      const nextCustom = { ...(store.customPlugins ?? {}) }
+      delete nextCustom[id]
+      setStore("customPlugins", nextCustom)
+      setStore("removedPlugins", { ...(store.removedPlugins ?? {}), [id]: true })
+    })
+  }
+
+  const customSkills = () => Object.values(store.customSkills ?? {})
+
+  const isSkillRemoved = (skill: ScopedSkillInfo) => {
+    const sKey = skillScopeKey(skill)
+
+    return Boolean(store.removedSkills?.[sKey] || store.removedSkills?.[skill.name])
+  }
+
+  const saveCustomSkill = (record: CustomSkillRecord, previousKey?: string) => {
+    batch(() => {
+      const nextCustom = { ...(store.customSkills ?? {}) }
+
+      if (previousKey && previousKey !== record.id) {
+        delete nextCustom[previousKey]
+        nextCustom[record.id] = record
+        setStore("customSkills", nextCustom)
+        setStore("removedSkills", { ...(store.removedSkills ?? {}), [previousKey]: true, [record.id]: false })
+
+        return
+      }
+
+      nextCustom[record.id] = record
+      setStore("customSkills", nextCustom)
+      setStore("removedSkills", { ...(store.removedSkills ?? {}), [record.id]: false, [record.name]: false })
+    })
+  }
+
+  const removeSkill = (skill: ScopedSkillInfo) => {
+    const sKey = skillScopeKey(skill)
+    batch(() => {
+      const nextCustom = { ...(store.customSkills ?? {}) }
+      delete nextCustom[sKey]
+      delete nextCustom[skill.name]
+      setStore("customSkills", nextCustom)
+      setStore("removedSkills", { ...(store.removedSkills ?? {}), [sKey]: true, [skill.name]: true })
+      setStore("globalSkills", sKey, false)
+    })
+  }
+
+  const mergeSkills = (discovered: ReadonlyArray<ScopedSkillInfo>): ScopedSkillInfo[] => {
+    const byKey = new Map<string, ScopedSkillInfo>()
+
+    for (const item of discovered) {
+      if (isSkillRemoved(item)) continue
+      byKey.set(skillScopeKey(item), item)
+    }
+
+    for (const custom of customSkills()) {
+      if (store.removedSkills?.[custom.id]) continue
+      byKey.set(custom.id, {
+        id: custom.id,
+        name: custom.name,
+        description: custom.description,
+        content: custom.content,
+        path: custom.path,
+      })
+    }
+
+    return Array.from(byKey.values()).toSorted((a, b) => a.name.localeCompare(b.name))
+  }
 
   const isGlobalSkillEnabled = (skill: ScopedSkillInfo) => {
     const sKey = skillScopeKey(skill)
@@ -428,6 +617,19 @@ export function useExtensionScopeStore() {
   }
 
   return {
+    customMcps,
+    isMcpRemoved,
+    saveCustomMcp,
+    removeMcp,
+    customPlugins,
+    isPluginRemoved,
+    saveCustomPlugin,
+    removePlugin,
+    customSkills,
+    isSkillRemoved,
+    saveCustomSkill,
+    removeSkill,
+    mergeSkills,
     isGlobalSkillEnabled,
     setGlobalSkillEnabled,
     isProjectSkillEnabled,
