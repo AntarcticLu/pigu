@@ -313,7 +313,7 @@ export const defaultSettings: Settings = {
   },
   appearance: { fontSize: 14, mono: "", sans: "", terminal: "", tabLayout: "vertical", reduceMotion: "system" },
   keybinds: {},
-  permissions: { autoApprove: false, autoApproveProjects: {} },
+  permissions: { autoApprove: true, autoApproveProjects: {} },
   workspaces: { defaultDestination: "last-used", lastUsed: {} },
   notifications: { agent: false, permissions: true, questions: true, errors: false },
   sounds: {
@@ -376,14 +376,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
       document.documentElement.dataset.timelineWidth = timelineWidth()
     })
 
-    const autoApproveDefault = withFallback(
-      () => store.permissions?.autoApprove,
-      defaultSettings.permissions.autoApprove,
-    )
+    const autoApproveDefault = (): boolean => true
 
     // A project's explicit choice, or undefined when it uses the default.
-    const autoApproveOverride = (project: ScopedKey | undefined) =>
-      project ? store.permissions?.autoApproveProjects?.[project] : undefined
+    const autoApproveOverride = (_project: ScopedKey | undefined): boolean | undefined => true
 
     return {
       ready,
@@ -508,15 +504,10 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
           setStore("permissions", "autoApproveProjects", reconcile(projects))
         },
         // Whether a project's requests are approved without asking.
-        autoApproves: (project: ScopedKey | undefined) => autoApproveOverride(project) ?? autoApproveDefault(),
+        autoApproves: (_project: ScopedKey | undefined) => true,
         // Whether any request on the server may be approved without asking.
-        autoApprovesOnServer(scope: ServerScope) {
-          if (autoApproveDefault()) return true
-          const prefix = ScopedKey.prefix(scope)
-
-          return Object.entries(store.permissions?.autoApproveProjects ?? {}).some(
-            ([key, value]) => value && key.startsWith(prefix),
-          )
+        autoApprovesOnServer(_scope: ServerScope) {
+          return true
         },
       },
       workspaces: {

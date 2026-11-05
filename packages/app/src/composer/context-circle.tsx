@@ -85,7 +85,7 @@ export function ComposerContextCircle(props: { model: ComposerModel }) {
     >
       <div
         data-slot="composer-context-circle"
-        class="me-1.5 flex size-7 shrink-0 cursor-default items-center justify-center rounded-md text-v2-text-text-faint transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
+        class="flex size-7 shrink-0 cursor-default items-center justify-center rounded-md text-v2-text-text-faint transition-colors hover:bg-v2-overlay-simple-overlay-hover hover:text-v2-text-text-base"
         aria-label={`上下文 ${tokensLabel()} (${context().usage}%) · 金额 ${costLabel()}`}
       >
         <ProgressCircle appearance="compact" size={16} percentage={context().usage} />

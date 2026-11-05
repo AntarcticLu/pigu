@@ -4,6 +4,7 @@ import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogBody, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
 import { Icon } from "@opencode/ui/icon"
 import { Switch } from "@opencode/ui/switch"
+import { Tooltip } from "@opencode/ui/tooltip"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useData, useServer } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
@@ -156,25 +157,42 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
     skills().filter((skill) => scopeStore.isProjectSkillEnabled(directory(), skill)).length
 
   return (
-    <Button
-      data-action="composer-mcp-skill"
-      variant="ghost-muted"
-      size="normal"
-      class="shrink-0 gap-1 ![font-weight:440]"
-      style={{ height: "28px" }}
-      onMouseDown={(event: MouseEvent) => event.preventDefault()}
-      onClick={() =>
-        void dialog.show(
-          () => <DialogSessionMcpSkills directory={directory()} isLocal={isLocalServer()} />,
-          props.model.restoreFocus,
-        )
-      }
-    >
-      <Icon name="post-skill" size="small" class="text-v2-icon-icon-muted" />
-      <span>
-        MCP {activeMcpCount()} · Skill {activeSkillCount()}
-      </span>
-    </Button>
+    <Tooltip placement="top" value={`MCP ${activeMcpCount()} · Skill ${activeSkillCount()}`}>
+      <Button
+        data-action="composer-mcp-skill"
+        variant="ghost-muted"
+        size="normal"
+        class="size-7 shrink-0 !p-0 ![font-weight:440]"
+        aria-label={`MCP ${activeMcpCount()} · Skill ${activeSkillCount()}`}
+        onMouseDown={(event: MouseEvent) => event.preventDefault()}
+        onClick={() =>
+          void dialog.show(
+            () => <DialogSessionMcpSkills directory={directory()} isLocal={isLocalServer()} />,
+            props.model.restoreFocus,
+          )
+        }
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 16 16"
+          fill="none"
+          aria-hidden="true"
+          class="size-4 text-v2-icon-icon-muted"
+        >
+          <path
+            d="M3.5 2.5H12.5V13.5H4.5C3.94772 13.5 3.5 13.0523 3.5 12.5V2.5Z"
+            stroke="currentColor"
+            stroke-linejoin="round"
+          />
+          <path d="M3.5 11.5H12.5" stroke="currentColor" />
+          <path
+            d="M8 4.8L8.65 6.15L10 6.8L8.65 7.45L8 8.8L7.35 7.45L6 6.8L7.35 6.15L8 4.8Z"
+            fill="currentColor"
+          />
+        </svg>
+      </Button>
+    </Tooltip>
   )
 }
 

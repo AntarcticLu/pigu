@@ -11,6 +11,7 @@ import { DialogConnectProvider } from "@/providers/connect/dialog"
 import { DialogSelectModel, ModelSelectorDrawer } from "@/providers/models/select-dialog"
 import { formatKeybind, useCommand } from "@/shell/commands/command"
 import { useLanguage } from "@/runtime/i18n/language"
+import { useSettings } from "@/settings/model"
 import type { ComposerModel } from "./model"
 import type { ComposerModelLabel } from "./model-label"
 import { ComposerContextCircle } from "./context-circle"
@@ -64,7 +65,12 @@ export function Composer(props: {
         alternateKeybind={[formatKeybind("mod", language.t), "↵"]}
         exitShellKeybind={[formatKeybind("esc", language.t)]}
         suggestionBoundary={props.suggestionBoundary}
-        trailingControl={<ComposerContextCircle model={props.model} />}
+        trailingControl={
+          <div class="flex items-center gap-0.5">
+            <ComposerContextCircle model={props.model} />
+            <ComposerFollowUpControl />
+          </div>
+        }
         modelControl={
           <div class="flex min-w-0 items-center gap-1">
             <ComposerModelControl
@@ -199,5 +205,29 @@ function ComposerModelControl(props: {
         </Show>
       </Tooltip>
     </Show>
+  )
+}
+
+function ComposerFollowUpControl() {
+  const settings = useSettings()
+  const isSteer = () => settings.general.followUpBehavior() === "steer"
+
+  return (
+    <Tooltip
+      placement="top"
+      value={`后续消息行为：${isSteer() ? "引导" : "排队"}（点击切换，运行中按 ⌘Enter 可临时切换）`}
+    >
+      <Button
+        data-action="composer-follow-up-behavior"
+        type="button"
+        variant="ghost-muted"
+        size="normal"
+        class="me-1.5 h-7 shrink-0 rounded-md px-2 text-[12px] ![font-weight:440]"
+        onMouseDown={(event: MouseEvent) => event.preventDefault()}
+        onClick={() => settings.general.setFollowUpBehavior(isSteer() ? "queue" : "steer")}
+      >
+        <span>{isSteer() ? "引导" : "排队"}</span>
+      </Button>
+    </Tooltip>
   )
 }

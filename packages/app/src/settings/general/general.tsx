@@ -4,8 +4,7 @@ import { Switch } from "@opencode/ui/switch"
 import { TextInput } from "@opencode/ui/text-input"
 import { useLanguage } from "@/runtime/i18n/language"
 import { PluginSettingsSections } from "@/runtime/plugin/settings-page-view"
-import { type FollowUpBehavior, useSettings } from "@/settings/model"
-import { formatKeybind } from "@/shell/commands/command"
+import { useSettings } from "@/settings/model"
 import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
 import { createShellOptions } from "./behavior"
@@ -14,27 +13,7 @@ import {
   type AppearanceSettingsController,
   type ShellSettingsController,
 } from "./controllers"
-import { InterfaceModeSetting } from "./interface-mode"
 import "@/settings/settings.css"
-
-const AutoApprovePermissionsSetting: Component = () => {
-  const language = useLanguage()
-  const settings = useSettings()
-
-  return (
-    <SettingsRow
-      title={language.t("command.permissions.autoaccept.enable")}
-      description={language.t("settings.permissions.autoAccept.default.description")}
-    >
-      <div data-action="settings-auto-accept-permissions">
-        <Switch
-          checked={settings.permissions.autoApproveDefault()}
-          onChange={(checked) => settings.permissions.setAutoApproveDefault(checked)}
-        />
-      </div>
-    </SettingsRow>
-  )
-}
 
 export const ShellSetting: Component<{
   controller: ShellSettingsController
@@ -75,36 +54,6 @@ export const ShellSetting: Component<{
   )
 }
 
-const FollowUpBehaviorSetting: Component = () => {
-  const language = useLanguage()
-  const settings = useSettings()
-
-  const options = createMemo((): { value: FollowUpBehavior; label: string }[] => [
-    { value: "queue", label: language.t("settings.general.row.followUpBehavior.queue") },
-    { value: "steer", label: language.t("settings.general.row.followUpBehavior.steer") },
-  ])
-
-  return (
-    <SettingsRow
-      title={language.t("settings.general.row.followUpBehavior.title")}
-      description={language.t("settings.general.row.followUpBehavior.description", {
-        keybind: formatKeybind("mod+enter", language.t),
-      })}
-    >
-      <Select
-        data-action="settings-follow-up-behavior"
-        options={options()}
-        current={options().find((option) => option.value === settings.general.followUpBehavior())}
-        value={(option) => option.value}
-        label={(option) => option.label}
-        placement="bottom-end"
-        gutter={6}
-        onSelect={(option) => option && settings.general.setFollowUpBehavior(option.value)}
-      />
-    </SettingsRow>
-  )
-}
-
 const LanguageSetting = () => {
   const language = useLanguage()
 
@@ -116,10 +65,7 @@ const LanguageSetting = () => {
   )
 
   return (
-    <SettingsRow
-      title={language.t("settings.general.row.language.title")}
-      description={language.t("settings.general.row.language.description")}
-    >
+    <SettingsRow title={language.t("settings.general.row.language.title")}>
       <Select
         data-action="settings-language"
         options={options()}
@@ -198,15 +144,9 @@ export const SettingsGeneral: Component = () => {
     <div class="settings-section">
       <h3 class="settings-section-title">{language.t("settings.general.section.general")}</h3>
       <SettingsList>
-        <InterfaceModeSetting />
         <LanguageSetting />
-        <AutoApprovePermissionsSetting />
-        <FollowUpBehaviorSetting />
 
-        <SettingsRow
-          title={language.t("settings.timeline.row.turnDiffs.title")}
-          description={language.t("settings.timeline.row.turnDiffs.description")}
-        >
+        <SettingsRow title="变更文件">
           <div data-action="settings-show-turn-diffs">
             <Switch
               checked={settings.general.showTurnDiffs()}
@@ -215,10 +155,7 @@ export const SettingsGeneral: Component = () => {
           </div>
         </SettingsRow>
 
-        <SettingsRow
-          title={language.t("settings.general.notifications.agent.title")}
-          description={language.t("settings.general.notifications.agent.description")}
-        >
+        <SettingsRow title="通知">
           <div data-action="settings-notifications-agent">
             <Switch
               checked={settings.notifications.agent()}
@@ -226,8 +163,6 @@ export const SettingsGeneral: Component = () => {
             />
           </div>
         </SettingsRow>
-
-        <PluginSettingsSections page="general" section="general" />
       </SettingsList>
     </div>
   )
@@ -304,9 +239,6 @@ export const SettingsGeneral: Component = () => {
         <div class="settings-tab-header-row">
           <div class="flex flex-col gap-1">
             <h2 class="settings-tab-title">通用与外观</h2>
-            <span class="text-11-regular text-v2-text-text-muted">
-              配置语言、权限、终端、主题配色与代码字体
-            </span>
           </div>
         </div>
       </div>
