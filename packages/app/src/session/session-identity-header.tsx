@@ -1,7 +1,6 @@
 import type { SessionInfo } from "@opencode/client/promise"
 import type { MountedSession, SessionScreen } from "@opencode/plugin/gui"
 import { Icon } from "@opencode/ui/icon"
-import { Loader } from "@opencode/ui/loader"
 import { Menu } from "@opencode/ui/menu"
 import { Tooltip } from "@opencode/ui/tooltip"
 import {
@@ -33,17 +32,14 @@ import { useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
 import { errorMessage } from "@/shell/layout/helpers"
 import { useLayout, type LocalProject } from "@/shell/state/layout"
-import { tabKey, useTabs } from "@/shell/tabs/tabs"
+import { useTabs } from "@/shell/tabs/tabs"
 import { useSettingsSurface } from "@/settings/surface"
-import { pathKey } from "@/workspaces/path-key"
-import { isProjectDirectory, workspaceDirectories } from "@/workspaces/paths"
+import { workspaceDirectories } from "@/workspaces/paths"
 import { sessionHref } from "@/shell/routes/session"
 import { showToast } from "@/shell/notifications/toast"
 import { sessionTitle } from "./title"
 import { SessionHeaderSeparator } from "./header/separator"
 import { createSessionHeaderFit } from "./header/fit"
-import { SessionWorkingIndicator } from "./header/session-working-indicator"
-import { isSessionUiLoading } from "./loading-state"
 import { CollapsedSidebarToggleSpace } from "@/shell/sidebar-toggle"
 import "./session-identity-header.css"
 
@@ -541,124 +537,10 @@ export function useOpenSessionRoute() {
   }
 }
 
-export function SessionIdentityHeader(props: { sessionID: string; session?: SessionInfo }) {
-  const server = useServer()
-  const tabs = useTabs()
-  const language = useLanguage()
-  const pending = createMemo(() => tabs.pendingSession(server.key, props.sessionID))
-
-  const tab = createMemo(() =>
-    tabs.store.find(
-      (item) =>
-        item.type === "session" &&
-        item.server === server.key &&
-        (item.sessionId === props.sessionID || item.routeSessionId === props.sessionID),
-    ),
-  )
-
-  const info = createMemo(() => {
-    const current = tab()
-
-    return current ? tabs.info[tabKey(current)] : undefined
-  })
-
-  const parentID = createMemo(() => {
-    if (props.session?.parentID) return props.session.parentID
-    const current = tab()
-
-    if (current?.type !== "session" || current.routeSessionId !== props.sessionID) return
-
-    return current.routeParentId ?? current.sessionId
-  })
-
-  const parent = createMemo(() => {
-    const id = parentID()
-
-    return id ? server.ctx.data.session.get(id) : undefined
-  })
-
-  const parentTitle = createMemo(() => {
-    const id = parentID()
-    const current = tab()
-
-    return sessionTitle(
-      parent()?.title ?? (current?.type === "session" && current.sessionId === id ? info()?.title : undefined),
-    )
-  })
-
-  const directory = createMemo(
-    () => props.session?.location.directory ?? pending()?.draft.directory ?? info()?.directory,
-  )
-
-  const title = createMemo(() =>
-    pending()
-      ? language.t("session.tab.session")
-      : sessionTitle(props.session?.title ?? (parentID() ? undefined : info()?.title)),
-  )
-
-  const project = createMemo(() => {
-    if (props.session) return server.ctx.projects.forSession(props.session)
-    const projects = server.ctx.projects.list()
-    const value = directory()
-
-    if (!value) return undefined
-    const key = pathKey(value)
-
-    return (
-      projects.find(
-        (item) => pathKey(item.worktree) === key || item.sandboxes?.some((sandbox) => pathKey(sandbox) === key),
-      ) ?? server.ctx.sync.data.project.find((item) => isProjectDirectory(item, value))
-    )
-  })
-
+export function SessionIdentityHeader(_props: { sessionID: string; session?: SessionInfo }) {
   return (
-    <Show when={title() || parentTitle()}>
-      <SessionTitleHeader>
-        <SessionHeaderLayout
-          title={title()}
-          actions={() => (
-            <Show when={isSessionUiLoading(props.sessionID)}>
-              <div class="flex items-center gap-1.5 pe-2 text-[12px] text-v2-text-text-muted">
-                <Loader width={15} height={15} class="text-v2-icon-icon-base" />
-              </div>
-            </Show>
-          )}
-          location={
-            <>
-              <SessionLocation
-                project={project()}
-                directory={directory()}
-                compact={!!parentID()}
-                trailing={!!(title() || parentID())}
-              />
-              <Show when={parentID()}>
-                {(id) => (
-                  <SessionAncestorTrail
-                    sessionID={props.sessionID}
-                    parentID={id()}
-                    parentTitle={parentTitle()}
-                    trailing={!!title()}
-                  />
-                )}
-              </Show>
-            </>
-          }
-        >
-          <SessionWorkingIndicator sessionID={props.sessionID} />
-          <Show when={title()}>
-            {(value) => (
-              <h1
-                data-slot={parentID() ? "session-title-child" : undefined}
-                dir="auto"
-                class="w-fit truncate rounded-[6px] px-1 py-1.5 text-[13px] font-[530] leading-4 tracking-[-0.04px] text-v2-text-text-base"
-                classList={{ "max-w-[45%] shrink-0": !!parentID() }}
-              >
-                {value()}
-              </h1>
-            )}
-          </Show>
-        </SessionHeaderLayout>
-      </SessionTitleHeader>
-    </Show>
+    <SessionTitleHeader>
+      <SessionHeaderLayout title={undefined} location={null} />
+    </SessionTitleHeader>
   )
 }

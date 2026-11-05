@@ -78,6 +78,7 @@ export type ComposerEditorProps = {
   borderUnderlay?: boolean
   class?: string
   modelControl?: JSX.Element
+  trailingControl?: JSX.Element
   modelControlsVisible?: boolean
   attachKeybind?: string[]
   attachShortcut?: string
@@ -485,6 +486,7 @@ export function ComposerEditor(props: ComposerEditorProps) {
                   controller={props.controller}
                   keybind={props.alternateKeybind ?? ["Mod", "Enter"]}
                 />
+                {props.trailingControl}
               </Show>
               <Show when={state.mode === "shell"}>
                 <Button

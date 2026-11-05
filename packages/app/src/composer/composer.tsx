@@ -13,6 +13,7 @@ import { formatKeybind, useCommand } from "@/shell/commands/command"
 import { useLanguage } from "@/runtime/i18n/language"
 import type { ComposerModel } from "./model"
 import type { ComposerModelLabel } from "./model-label"
+import { ComposerContextCircle } from "./context-circle"
 import { ComposerMcpSkillControl } from "./mcp-skill-control"
 
 export function Composer(props: {
@@ -63,6 +64,7 @@ export function Composer(props: {
         alternateKeybind={[formatKeybind("mod", language.t), "↵"]}
         exitShellKeybind={[formatKeybind("esc", language.t)]}
         suggestionBoundary={props.suggestionBoundary}
+        trailingControl={<ComposerContextCircle model={props.model} />}
         modelControl={
           <div class="flex min-w-0 items-center gap-1">
             <ComposerModelControl
@@ -78,22 +80,6 @@ export function Composer(props: {
                 dialog.show(() => <DialogConnectProvider selection={props.model.model.selection} standalone />)
               }
             />
-            <Button
-              data-action="composer-config-api"
-              variant="ghost-muted"
-              size="normal"
-              class="shrink-0 ![font-weight:440]"
-              style={{ height: "28px" }}
-              onMouseDown={(event: MouseEvent) => event.preventDefault()}
-              onClick={() =>
-                void dialog.show(
-                  () => <DialogConnectProvider selection={props.model.model.selection} standalone />,
-                  props.model.restoreFocus,
-                )
-              }
-            >
-              配置 API
-            </Button>
             <ComposerMcpSkillControl model={props.model} />
           </div>
         }
