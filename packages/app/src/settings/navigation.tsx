@@ -3,7 +3,6 @@ import { Icon } from "@opencode/ui/icon"
 import { Menu } from "@opencode/ui/menu"
 import { Tabs } from "@opencode/ui/tabs"
 import { createEffect, ErrorBoundary, For, on, Show, type ComponentProps, type JSX } from "solid-js"
-import { useLanguage } from "@/runtime/i18n/language"
 import { ErrorPage } from "@/shell/errors/error"
 import { CollapsedSidebarToggleSpace } from "@/shell/sidebar-toggle"
 import { useSettingsSurface } from "./surface"
@@ -27,23 +26,14 @@ export type SettingsNavGroup = {
 export function SettingsNavigation(props: {
   value: string
   groups: readonly SettingsNavGroup[]
-  backLabel: string
-  onBack: () => void
+  backLabel?: string
+  onBack?: () => void
   onChange: (value: string) => void
   mobileAction?: JSX.Element
   children: JSX.Element
 }) {
   const surface = useSettingsSurface()
   const searchable = () => surface.view().type === "root"
-  const language = useLanguage()
-
-  const back = () => {
-    if (!searchable() && surface.search.back()) return
-    props.onBack()
-  }
-
-  const backLabel = () =>
-    !searchable() && surface.search.state.selected ? language.t("settings.backToSettings") : props.backLabel
 
   const current = () => props.groups.flatMap((group) => group.items).find((item) => item.value === props.value)
 
@@ -69,13 +59,7 @@ export function SettingsNavigation(props: {
     <Tabs ref={root} orientation="vertical" variant="settings" value={props.value} onChange={change} class="settings">
       <div class="settings-mobile-nav">
         <div class="flex min-w-0 items-center">
-          {/* Starts after the shell's 8px inset and this row's 16px padding. Its 32px height makes the row 48px tall,
-              like the session header, so the back button centers on the collapsed sidebar toggle's line. */}
           <CollapsedSidebarToggleSpace start={24} class="h-8" />
-          <button type="button" class="settings-back" onClick={back}>
-            <Icon name="arrow-left" size="small" class="settings-back-icon" />
-            <span>{backLabel()}</span>
-          </button>
         </div>
         <div class="settings-mobile-actions">
           {props.mobileAction}
@@ -121,10 +105,6 @@ export function SettingsNavigation(props: {
       </div>
       <aside class="settings-sidebar" data-searchable={searchable()}>
         <div class="settings-nav">
-          <button type="button" class="settings-back" onClick={back}>
-            <Icon name="arrow-left" size="small" class="settings-back-icon" />
-            <span>{backLabel()}</span>
-          </button>
           <Show when={searchable()}>
             <SettingsSearch />
           </Show>

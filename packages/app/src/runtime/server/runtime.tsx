@@ -248,7 +248,7 @@ function createServerController(
               : [],
           )
         : data.session.list().map((session) => session.id),
-    limit: 3,
+    limit: 12,
   })
 
   const sync = createServerSyncContext(sdk, data)

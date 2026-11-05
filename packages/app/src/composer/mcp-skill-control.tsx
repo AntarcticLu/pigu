@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo } from "solid-js"
+import { For, Show, createEffect, createMemo, onCleanup } from "solid-js"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
@@ -45,10 +45,19 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
   createEffect(() => {
     if (serverSDK.connection.status() !== "connected") return
     const ref = { directory: directory() }
-    void Promise.all([
-      data.location.mcp.server.sync(ref),
-      data.location.skill.sync(ref),
-    ]).catch(() => undefined)
+    const tasks: Promise<unknown>[] = []
+
+    if (data.location.mcp.server.list(ref) === undefined) {
+      tasks.push(data.location.mcp.server.sync(ref))
+    }
+
+    if (data.location.skill.list(ref) === undefined) {
+      tasks.push(data.location.skill.sync(ref))
+    }
+
+    if (tasks.length > 0) {
+      void Promise.all(tasks).catch(() => undefined)
+    }
   })
 
   const mcps = createMemo(() => {
@@ -106,14 +115,18 @@ export function ComposerMcpSkillControl(props: { model: ComposerModel }) {
     const syncKey = `${sessionID}:${nextJson}`
 
     if (nextJson === currentJson || syncKey === lastSyncedKey) return
-    lastSyncedKey = syncKey
 
-    void serverSDK.api.session
-      .update({
-        sessionID,
-        permissions: nextPermissions,
-      })
-      .catch(() => undefined)
+    const timer = setTimeout(() => {
+      lastSyncedKey = syncKey
+      void serverSDK.api.session
+        .update({
+          sessionID,
+          permissions: nextPermissions,
+        })
+        .catch(() => undefined)
+    }, 300)
+
+    onCleanup(() => clearTimeout(timer))
   })
 
   const activeMcpCount = () =>

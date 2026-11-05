@@ -4,7 +4,7 @@ import { useData } from "@/runtime/server/current"
 import { getSessionMessageHandoff } from "@/session/handoff"
 import type { SessionModel } from "../model"
 
-const leadingTurnPageDelay = 200
+const leadingTurnPageDelay = 40
 
 const leadingTurnPageLimit = 3
 

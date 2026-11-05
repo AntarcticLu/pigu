@@ -410,7 +410,7 @@ const layer = Layer.effect(
         yield* bus.remove(sessionID)
       }),
       list: Effect.fn("Session.list")(function* (input = {}) {
-        yield* syncExternal()
+        yield* Effect.forkDetach(syncExternal())
         const filter =
           input.cursor === undefined
             ? input

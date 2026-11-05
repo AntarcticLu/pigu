@@ -42,7 +42,7 @@ import { SettingsList } from "@/settings/list"
 import { useTabs } from "@/shell/tabs/tabs"
 import { Persist, persisted } from "@/runtime/persistence/storage"
 import { Persistence } from "@/runtime/persistence/schema"
-import { Schema } from "effect"
+import { Predicate, Schema } from "effect"
 import type { FormAnswer, FormField, FormValue, IntegrationInfo } from "@opencode/client/promise"
 import { CLAUDE_AGENT_INTEGRATION, CONSOLE_INTEGRATION, createProviderConnectionController } from "./controller"
 import { connectMethods, providerFormDefaults, type ProviderConnectMethod } from "./machine"
@@ -545,13 +545,13 @@ function ProviderConnection(props: {
 
   const activeAccount = () => state.activating ?? serverAccounts()[0]?.id
 
-  const showAccounts = () => !!props.accounts && !state.adding && accounts().length > 0
+  const showAccounts = () => props.provider !== "pigu" && !!props.accounts && !state.adding && accounts().length > 0
 
   const controller = createProviderConnectionController({
     provider: integrationID,
     directory: initialDirectory,
     // Claude Agent explains its setup before connecting, so its lone method never starts on its own.
-    manual: () => isClaudeAgent || (!!props.accounts && accounts().length > 0),
+    manual: () => isClaudeAgent || (props.provider !== "pigu" && !!props.accounts && accounts().length > 0),
     prepare: isConsole ? prepareConsoleCatalog : undefined,
     pollInterval: isConsole ? 500 : undefined,
     onComplete: (method) => {
@@ -1292,6 +1292,178 @@ function ProviderConnection(props: {
     controller.submit(value instanceof File || value === null ? "" : value)
   }
 
+  const isCombinedUrlAndKey = () => {
+    const method = view().method
+
+    if (!method || method.type !== "key") return false
+    const fields = method.form ?? []
+
+    return fields.length === 1 && fields[0]?.key === "baseURL"
+  }
+
+  function CombinedUrlAndKeyView() {
+    let urlRef: HTMLInputElement | undefined
+    const errorID = createUniqueId()
+
+    const urlField = () => {
+      const method = view().method
+
+      return method && method.type === "key" ? method.form?.[0] : undefined
+    }
+
+    const defaultUrl = () => {
+      const def = urlField()?.default
+
+      return Predicate.isString(def) ? def : ""
+    }
+
+    const [localState, setLocalState] = createStore<{
+      name: string
+      baseURL: string
+      apiKey: string
+      saving: boolean
+      localError?: string
+    }>({
+      name: "",
+      baseURL: defaultUrl(),
+      apiKey: "",
+      saving: false,
+    })
+
+    onMount(() => {
+      urlRef?.focus({ preventScroll: true })
+    })
+
+    const combinedError = () => localState.localError ?? entryError()
+
+    const handleSubmit = async (event: SubmitEvent) => {
+      event.preventDefault()
+      const cleanName = localState.name.trim()
+      const cleanUrl = localState.baseURL.trim()
+      const cleanKey = localState.apiKey.trim()
+
+      if (!cleanUrl) {
+        setLocalState("localError", "请输入 API 地址 (URL)")
+
+        return
+      }
+
+      if (!cleanKey) {
+        setLocalState("localError", "请输入 API 密钥 (Key)")
+
+        return
+      }
+
+      setLocalState({ saving: true, localError: undefined })
+
+      try {
+        await sdk.api.credential.create({
+          integrationID: "pigu",
+          label: cleanName || cleanUrl,
+          value: {
+            type: "key",
+            key: cleanKey,
+            metadata: {
+              piguAction: "upsert",
+              name: cleanName || undefined,
+              baseURL: cleanUrl,
+            },
+          },
+        })
+        const ref = location()
+        data.location.provider.invalidate(ref)
+        data.location.model.invalidate(ref)
+        data.location.integration.invalidate(ref)
+        await Promise.all([
+          data.location.provider.sync(ref).catch(() => undefined),
+          data.location.model.sync(ref).catch(() => undefined),
+          data.location.integration.sync(ref).catch(() => undefined),
+        ])
+        showToast({
+          variant: "success",
+          icon: "circle-check",
+          title: "已配置并连接供应商",
+          description: cleanName || cleanUrl,
+        })
+        dialog.close()
+      } catch (error) {
+        setLocalState({
+          saving: false,
+          localError: error instanceof Error ? error.message : "配置供应商失败",
+        })
+      }
+    }
+
+    return (
+      <div class="flex flex-col gap-5 px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-muted">
+        <p>同时输入兼容接口的供应商名称、API 地址与密钥，连接后将自动拉取可用模型列表。</p>
+        <form onSubmit={(event) => void handleSubmit(event)} class="flex flex-col items-start gap-4 self-stretch">
+          <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
+            供应商名称
+            <TextInput
+              class="!w-full"
+              name="providerName"
+              data-input="provider-name"
+              placeholder="例如：PiguToken / DeepSeek（留空自动根据域名命名）"
+              value={localState.name}
+              readOnly={localState.saving}
+              autocomplete="off"
+              spellcheck={false}
+              onInput={(event) => setLocalState({ name: event.currentTarget.value, localError: undefined })}
+            />
+          </label>
+          <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
+            API 地址 (URL)
+            <TextInput
+              ref={urlRef}
+              class="!w-full"
+              name="baseURL"
+              data-input="provider-base-url"
+              placeholder="https://api.openai.com/v1"
+              value={localState.baseURL}
+              readOnly={localState.saving}
+              autocomplete="off"
+              spellcheck={false}
+              onInput={(event) => setLocalState({ baseURL: event.currentTarget.value, localError: undefined })}
+            />
+          </label>
+          <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
+            API 密钥 (Key)
+            <TextInput
+              class="!w-full"
+              name="apiKey"
+              data-input="provider-api-key"
+              placeholder="sk-..."
+              value={localState.apiKey}
+              readOnly={localState.saving}
+              invalid={combinedError() !== undefined}
+              aria-describedby={combinedError() ? errorID : undefined}
+              autocomplete="off"
+              spellcheck={false}
+              onInput={(event) => setLocalState({ apiKey: event.currentTarget.value, localError: undefined })}
+            />
+          </label>
+          <Show when={combinedError()}>
+            {(error) => (
+              <div id={errorID} role="alert" class="-mt-2 text-xs text-v2-state-fg-danger">
+                {error()}
+              </div>
+            )}
+          </Show>
+          <Button
+            type="submit"
+            variant="contrast"
+            data-action="provider-connect-submit"
+            disabled={localState.saving}
+            aria-busy={localState.saving}
+          >
+            {localState.saving ? "正在配置并拉取模型..." : "配置并连接"}
+          </Button>
+        </form>
+      </div>
+    )
+  }
+
   function ApiAuthView() {
     let apiKey: HTMLInputElement | undefined
     const errorID = createUniqueId()
@@ -1880,6 +2052,9 @@ function ProviderConnection(props: {
           </Match>
           <Match when={view().screen === "methods"}>
             <MethodSelection />
+          </Match>
+          <Match when={isCombinedUrlAndKey() && (view().screen === "form" || view().screen === "key")}>
+            <CombinedUrlAndKeyView />
           </Match>
           <Match when={view().screen === "form"}>
             <AuthFormView />

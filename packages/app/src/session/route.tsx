@@ -27,6 +27,7 @@ import { ErrorPage } from "@/shell/errors/error"
 import { useSessionModel } from "./model"
 import { SessionPanelFrame } from "./session-frame"
 import { SessionIdentityHeader } from "./session-identity-header"
+import { SessionLoadingIndicator } from "./session-loading-indicator"
 import { ServerUnavailablePanel } from "./server-unavailable-panel"
 import { SessionErrorFallback, SessionNotFoundPanel } from "./route-error"
 import { sessionRouteView } from "./resolution-machine"
@@ -200,7 +201,14 @@ function ResolvedTargetSessionRoute() {
 function PendingSessionState(props: { sessionID: string }) {
   return (
     <SessionStatePanel>
-      <SessionIdentityHeader sessionID={props.sessionID} />
+      <div class="flex min-h-0 flex-1 flex-col">
+        <SessionIdentityHeader sessionID={props.sessionID} />
+        <SessionLoadingIndicator
+          label="正在连接并加载会话..."
+          subtitle="正在读取会话信息与上下文，请稍候..."
+          initialProgress={18}
+        />
+      </div>
     </SessionStatePanel>
   )
 }

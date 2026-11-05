@@ -48,6 +48,7 @@ import {
 } from "./cold-mount"
 import { prefersReducedMotion } from "@opencode/ui/motion"
 import { holdLandingWidth } from "@/shell/panel-motion"
+import { SessionLoadingIndicator } from "../session-loading-indicator"
 import type { TimelineFollow } from "./follow"
 import { defersAdjustments, END_EPSILON, MIN_OVERFLOW, needsEndProbe, ZOOM_SLACK } from "./machine"
 
@@ -1127,6 +1128,18 @@ export function createTimelineVirtualizer(input: Input) {
           </div>
           <div aria-hidden="true" data-timeline-inset class="shrink-0" style={{ height: `${bottomInset()}px` }} />
         </ScrollView>
+        <Show when={coldHidden()}>
+          <div
+            class="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col bg-v2-surface-surface-primary/95"
+            style={{ top: input.showHeader() ? "var(--session-header-height, 48px)" : "0px" }}
+          >
+            <SessionLoadingIndicator
+              label="正在排版会话内容..."
+              subtitle="正在渲染长对话与代码块，马上就好..."
+              initialProgress={68}
+            />
+          </div>
+        </Show>
         <div
           ref={setVisibleArea}
           data-slot="session-timeline-visible"

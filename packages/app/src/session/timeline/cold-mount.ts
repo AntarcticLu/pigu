@@ -1,7 +1,7 @@
 // A pinned timeline without cached measurements mounts hidden: first only the cheap tail, then the full range, and it
 // reveals once a pass finds every row measured, Markdown ready and the view at its end. The fallback timer bounds that
 // wait, so a block that never reports ready or a gate that never clears cannot leave the timeline invisible.
-export const COLD_REVEAL_TIMEOUT = 3_000
+export const COLD_REVEAL_TIMEOUT = 650
 
 type Hidden = {
   /** Increments on each activation, so a timer or check from an earlier one is ignored. 0 until mounted. */

@@ -441,6 +441,12 @@ export const layer = (options?: Options) =>
         ),
         Effect.forkScoped({ startImmediately: true }),
       )
+      yield* bus.subscribe(Credential.Event.Updated).pipe(
+        Stream.runForEach(() =>
+          reload().pipe(Effect.catchCause((cause) => Effect.logError("failed to reload config on credential update", { cause }))),
+        ),
+        Effect.forkScoped({ startImmediately: true }),
+      )
       yield* bus.subscribe(WellKnown.Event.Updated).pipe(
         Stream.runForEach(() =>
           reload().pipe(Effect.catchCause((cause) => Effect.logError("failed to reload wellknown sources", { cause }))),

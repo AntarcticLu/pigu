@@ -181,6 +181,13 @@ export function ProjectSessionRow(props: {
         classList={{ "text-v2-text-text-base": props.active, "text-v2-text-text-faint": !props.active }}
         aria-current={props.active ? "page" : undefined}
         title={sessionLabel(props.session)}
+        onPointerEnter={() => {
+          const current = ctx()
+
+          if (!current) return
+          current.data.session.remember(props.session)
+          void current.data.session.message.sync(props.session.id).catch(() => undefined)
+        }}
         onClick={props.onOpen}
         onKeyDown={(event: KeyboardEvent) => {
           if (event.key === "Enter" || event.key === " ") {

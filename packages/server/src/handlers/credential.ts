@@ -2,10 +2,11 @@ import { Credential } from "@opencode/core/credential"
 import { FileSystem } from "@opencode/core/filesystem"
 import { Location } from "@opencode/core/location"
 import { LocationServiceMap } from "@opencode/core/location-services"
+import { PiguProvider } from "@opencode/core/plugin/provider/pigu"
 import { AbsolutePath } from "@opencode/core/schema"
 import { ConflictError } from "@opencode/protocol/errors"
 import { Global } from "@opencode/util/global"
-import { Effect } from "effect"
+import { Effect, Predicate } from "effect"
 import { HttpApiBuilder, HttpApiSchema } from "effect/http-api"
 import { Api } from "../api"
 import { requireConnectable } from "./integration"
@@ -28,6 +29,29 @@ export const CredentialHandler = HttpApiBuilder.group(Api, "server.credential", 
       .handle(
         "credential.create",
         Effect.fn(function* (ctx) {
+          if (
+            ctx.payload.integrationID === "pigu" &&
+            ctx.payload.value.type === "key" &&
+            Predicate.isString(ctx.payload.value.metadata?.piguAction)
+          ) {
+            const meta = ctx.payload.value.metadata
+            yield* PiguProvider.manageCustomProvider({
+              action: meta.piguAction === "delete" ? "delete" : "upsert",
+              providerID: Predicate.isString(meta.providerID) ? meta.providerID : undefined,
+              name: Predicate.isString(meta.name) ? meta.name : ctx.payload.label,
+              baseURL: Predicate.isString(meta.baseURL) ? meta.baseURL : undefined,
+              apiKey: ctx.payload.value.key,
+            }).pipe(Effect.provide(services), Effect.orDie)
+            return {
+              data: {
+                id: Credential.ID.create(),
+                integrationID: ctx.payload.integrationID,
+                label: ctx.payload.label ?? "default",
+                active: true,
+                value: ctx.payload.value,
+              },
+            }
+          }
           yield* requireConnectable(ctx.payload.integrationID).pipe(
             Effect.provide(services),
             // The global config directory always exists.

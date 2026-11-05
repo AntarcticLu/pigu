@@ -1,4 +1,3 @@
-import { startTransition } from "solid-js"
 import type { SessionInfo } from "@opencode/client/promise"
 import { useGlobal } from "@/runtime/server/runtime"
 import { ServerConnection } from "@/runtime/server/registry"
@@ -14,6 +13,13 @@ export function createProjectSessionActions() {
       global.serverCtx(ServerConnection.key(conn))?.projects.touch(directory)
       void tabs.newDraft({ server: ServerConnection.key(conn), directory })
     },
+    prefetchProjectSession(conn: ServerConnection.Any, session: SessionInfo) {
+      const ctx = global.serverCtx(ServerConnection.key(conn))
+
+      if (!ctx) return
+      ctx.data.session.remember(session)
+      void ctx.data.session.message.sync(session.id).catch(() => undefined)
+    },
     openProjectSession(
       conn: ServerConnection.Any,
       directory: string,
@@ -23,21 +29,19 @@ export function createProjectSessionActions() {
       const ctx = global.serverCtx(ServerConnection.key(conn))
 
       if (!ctx) return
+      ctx.data.session.remember(session)
+      ctx.projects.touch(directory)
       void ctx.data.session.message.sync(session.id).catch(() => undefined)
-      void startTransition(() => {
-        ctx.data.session.remember(session)
-        ctx.projects.touch(directory)
 
-        if (options?.preview) {
-          tabs.previewSession({ server: ServerConnection.key(conn), sessionId: session.id })
+      if (options?.preview) {
+        tabs.previewSession({ server: ServerConnection.key(conn), sessionId: session.id })
 
-          return
-        }
+        return
+      }
 
-        const tab = tabs.addSessionTab({ server: ServerConnection.key(conn), sessionId: session.id })
+      const tab = tabs.addSessionTab({ server: ServerConnection.key(conn), sessionId: session.id })
 
-        tabs.select(tab)
-      })
+      tabs.select(tab)
     },
   }
 }

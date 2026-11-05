@@ -44,6 +44,7 @@ import { createTimelineQuote, TimelineQuote } from "./timeline/quote"
 import { createTimelineQuoteHighlight } from "./timeline/quote-highlight"
 import { ActiveSessionComposerRegion, createActiveSessionRegion } from "./composer/region"
 import { SessionIdentityHeader, SessionLocation } from "./session-identity-header"
+import { SessionLoadingIndicator } from "./session-loading-indicator"
 import { SessionHeaderDrag, windowDragEnabled } from "./header/drag-area"
 import { usePlatform } from "@/runtime/platform/platform"
 import { useServer } from "@/runtime/server/current"
@@ -428,8 +429,17 @@ function SessionScreenContent(props: {
             )}
           </Match>
           <Match when={session.identity.params.id}>
-            <Show when={isDesktop() && !messagesReady()}>
-              <SessionIdentityHeader sessionID={session.identity.params.id ?? ""} session={session.data.info()} />
+            <Show when={!messagesReady()}>
+              <div class="flex h-full min-h-0 flex-col">
+                <Show when={isDesktop()}>
+                  <SessionIdentityHeader sessionID={session.identity.params.id ?? ""} session={session.data.info()} />
+                </Show>
+                <SessionLoadingIndicator
+                  label="正在加载会话内容..."
+                  subtitle="正在同步历史消息与上下文，内容较多时请稍候..."
+                  initialProgress={32}
+                />
+              </div>
             </Show>
             <Show when={messagesReady() && session.identity.params.id}>{timelineView()}</Show>
           </Match>

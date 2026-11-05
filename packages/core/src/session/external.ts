@@ -170,7 +170,7 @@ const resolveExistingDir = Effect.fnUntraced(function* (fs: FSUtil.Interface, ca
 const scanCodex = Effect.fn("SessionExternal.scanCodex")(function* (
   fs: FSUtil.Interface,
   home: string,
-  existing: ReadonlySet<string>,
+  existing: Set<string>,
 ) {
   const codexRoot = path.join(home, ".codex")
   const sessionsDir = path.join(codexRoot, "sessions")
@@ -209,6 +209,7 @@ const scanCodex = Effect.fn("SessionExternal.scanCodex")(function* (
       const sessionID = makeSessionID("codex", externalID)
 
       if (existing.has(sessionID)) return undefined
+      existing.add(sessionID)
 
       const content = yield* fs.readFileStringSafe(fullPath).pipe(Effect.orElseSucceed(() => undefined))
 
@@ -286,7 +287,7 @@ const scanCodex = Effect.fn("SessionExternal.scanCodex")(function* (
 const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
   fs: FSUtil.Interface,
   home: string,
-  existing: ReadonlySet<string>,
+  existing: Set<string>,
 ) {
   const claudeRoot = path.join(home, ".claude", "projects")
 
@@ -303,6 +304,7 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
       const sessionID = makeSessionID("claude", externalID)
 
       if (existing.has(sessionID)) return undefined
+      existing.add(sessionID)
 
       const content = yield* fs
         .readFileStringSafe(path.join(claudeRoot, rel))
@@ -385,7 +387,7 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
 const scanAgy = Effect.fn("SessionExternal.scanAgy")(function* (
   fs: FSUtil.Interface,
   home: string,
-  existing: ReadonlySet<string>,
+  existing: Set<string>,
 ) {
   const agyRoot = path.join(home, ".gemini", "antigravity", "brain")
 
@@ -399,6 +401,7 @@ const scanAgy = Effect.fn("SessionExternal.scanAgy")(function* (
       const sessionID = makeSessionID("agy", convID)
 
       if (existing.has(sessionID)) return undefined
+      existing.add(sessionID)
 
       const transcriptPath = path.join(agyRoot, convID, ".system_generated", "logs", "transcript.jsonl")
       const content = yield* fs.readFileStringSafe(transcriptPath).pipe(Effect.orElseSucceed(() => undefined))
@@ -473,7 +476,7 @@ const scanAgy = Effect.fn("SessionExternal.scanAgy")(function* (
 const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
   fs: FSUtil.Interface,
   home: string,
-  existing: ReadonlySet<string>,
+  existing: Set<string>,
 ) {
   const piRoot = path.join(home, ".pi", "agent", "sessions")
 
@@ -489,6 +492,7 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
       const sessionID = makeSessionID("pi", rel)
 
       if (existing.has(sessionID)) return undefined
+      existing.add(sessionID)
 
       const content = yield* fs.readFileStringSafe(path.join(piRoot, rel)).pipe(Effect.orElseSucceed(() => undefined))
 
@@ -554,8 +558,9 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
   return results.filter((item): item is DiscoveredSession => item !== undefined)
 })
 
-const SYNC_COOLDOWN_MS = 60_000
+const SYNC_COOLDOWN_MS = 300_000
 let lastSyncAt = 0
+const checkedExternalIDs = new Set<string>()
 
 export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   readonly db: Database.Interface["db"]
@@ -576,13 +581,15 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
     .all()
     .pipe(Effect.orElseSucceed(() => []))
 
-  const existing = new Set<string>(existingRows.map((row) => row.id))
+  for (const row of existingRows) {
+    checkedExternalIDs.add(row.id)
+  }
 
   const [codex, claude, agy, pi] = yield* Effect.all([
-    scanCodex(input.fs, home, existing),
-    scanClaude(input.fs, home, existing),
-    scanAgy(input.fs, home, existing),
-    scanPi(input.fs, home, existing),
+    scanCodex(input.fs, home, checkedExternalIDs),
+    scanClaude(input.fs, home, checkedExternalIDs),
+    scanAgy(input.fs, home, checkedExternalIDs),
+    scanPi(input.fs, home, checkedExternalIDs),
   ])
 
   const all = [...codex, ...claude, ...agy, ...pi]

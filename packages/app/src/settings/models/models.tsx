@@ -1,22 +1,17 @@
 import { useFilteredList } from "@opencode/ui/hooks"
 import { Switch } from "@opencode/ui/switch"
-import { type Component, createEffect, createMemo, For, type JSX, Show } from "solid-js"
+import { type Component, For, type JSX, Show } from "solid-js"
 
 import { Schema } from "effect"
 import { Persistence } from "@/runtime/persistence/schema"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useModels } from "@/providers/models/models"
-import { useServerSDK } from "@/runtime/server/client"
 import { popularProviders } from "@/providers/catalog/providers"
-import { Persist, persisted } from "@/runtime/persistence/storage"
-import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
-import { CONSOLE_GROUP_KEY, consoleModelGroup, ProviderModelSections } from "@/providers/models/provider-group"
 import { ModelProtocolSelect } from "@/providers/models/protocol"
 import { SettingsProviders } from "@/settings/providers/providers"
 import { SettingsSearchEmpty } from "@/settings/search-empty"
 import { SettingsSearchField } from "@/settings/search-field"
-import { settingsScroller } from "@/settings/scroller"
 
 import "@/settings/settings.css"
 
@@ -34,15 +29,6 @@ export const SettingsModels: Component<{
 }> = (props) => {
   const language = useLanguage()
   const models = useModels()
-  const serverSdk = useServerSDK()
-
-  const [store, setStore] = persisted(
-    Persist.serverGlobal(serverSdk.scope, "settings-v2.models.providers"),
-    ModelProvidersSchema,
-    { collapsed: {} },
-  )
-
-  const sections = new Map<string, HTMLElement>()
 
   const list = useFilteredList<ModelItem>({
     items: (_filter) => models.list(),
@@ -69,89 +55,43 @@ export const SettingsModels: Component<{
     },
   })
 
-  const managed = createMemo(() => consoleModelGroup(models.list()))
-  const searching = () => list.filter().length > 0
-  const expanded = (key: string) => searching() || !store.collapsed[key]
+  function ProviderModelsInline(inlineProps: { providerID: string }) {
+    const items = () => list.grouped.latest.find((group) => group.category === inlineProps.providerID)?.items ?? []
 
-  const setProviderVisibility = (providerID: string, visible: boolean) =>
-    models
-      .list()
-      .filter((item) => item.provider.id === providerID)
-      .forEach((item) => models.setVisibility({ providerID, modelID: item.id }, visible))
-
-  function ModelRows(props: { items: ModelItem[] }) {
     return (
-      <SettingsList variant="catalog">
-        <For each={props.items}>
-          {(item) => {
-            const key = { providerID: item.provider.id, modelID: item.id }
+      <Show when={items().length > 0}>
+        <div data-component="provider-inline-models" class="border-t border-v2-border-border-muted/60">
+          <For each={items()}>
+            {(item) => {
+              const key = { providerID: item.provider.id, modelID: item.id }
 
-            return (
-              <SettingsRow title={item.name} description="">
-                <div class="flex items-center gap-2.5">
-                  <ModelProtocolSelect providerID={item.provider.id} modelID={item.id} />
-                  <Switch
-                    checked={models.visible(key)}
-                    onChange={(checked) => models.setVisibility(key, checked)}
-                    hideLabel
-                  >
-                    {item.name}
-                  </Switch>
-                </div>
-              </SettingsRow>
-            )
-          }}
-        </For>
-      </SettingsList>
+              return (
+                <SettingsRow title={item.name} description="">
+                  <div class="flex items-center gap-2.5">
+                    <ModelProtocolSelect providerID={item.provider.id} modelID={item.id} />
+                    <Switch
+                      checked={models.visible(key)}
+                      onChange={(checked) => models.setVisibility(key, checked)}
+                      hideLabel
+                    >
+                      {item.name}
+                    </Switch>
+                  </div>
+                </SettingsRow>
+              )
+            }}
+          </For>
+        </div>
+      </Show>
     )
   }
-
-  createEffect(() => {
-    if (!props.active || !props.provider) return
-    const provider = props.provider
-
-    if (list.filter()) {
-      list.clear()
-
-      return
-    }
-
-    if (!list.grouped.latest.some((group) => group.category === provider)) return
-    const section = sections.get(provider)
-
-    if (!section?.isConnected) return
-
-    // Expand only the path to the target so the saved layout of other providers is kept.
-    if (managed()?.providers.some((item) => item.id === provider)) setStore("collapsed", CONSOLE_GROUP_KEY, false)
-    setStore("collapsed", provider, false)
-    requestAnimationFrame(() => {
-      const panel = section.closest<HTMLElement>(".settings-panel")
-      const header = panel?.querySelector<HTMLElement>(".settings-tab-header")
-
-      if (panel && header) {
-        settingsScroller(panel).scrollBy({
-          top: section.getBoundingClientRect().top - header.getBoundingClientRect().bottom - 24,
-        })
-      } else {
-        section.scrollIntoView({ block: "start" })
-      }
-
-      section
-        .querySelector<HTMLElement>(".provider-model-group-trigger, .settings-models-group-trigger")
-        ?.focus({ preventScroll: true })
-      props.onReveal?.()
-    })
-  })
 
   return (
     <>
       <div class="settings-tab-header settings-tab-header--stacked">
         <div class="settings-tab-header-row">
-          <div class="flex min-w-0 flex-col gap-1">
-            <h2 class="settings-tab-title">API 与模型</h2>
-            <span class="text-11-regular text-v2-text-text-muted">
-              配置 API 地址与密钥（URL + Key），管理模型开关与协议类型（OpenAI / Gemini / Anthropic / Responses）
-            </span>
+          <div class="flex min-w-0 items-center">
+            <h2 class="settings-tab-title">API</h2>
           </div>
           <div class="settings-tab-header-actions">{props.headerAction}</div>
         </div>
@@ -159,47 +99,24 @@ export const SettingsModels: Component<{
           value={list.filter()}
           active={props.active ?? true}
           onInput={list.onInput}
-          placeholder={language.t("dialog.model.search.placeholder")}
+          placeholder="搜索供应商或模型..."
         />
       </div>
 
       <div class="settings-tab-body settings-models">
-        <Show when={!searching()}>
-          <SettingsProviders directory={undefined} embedded />
-        </Show>
-        <Show
-          when={!list.grouped.loading}
-          fallback={
-            <div class="settings-models-status">
-              {language.t("common.loading")}
-              {language.t("common.loading.ellipsis")}
-            </div>
+        <SettingsProviders
+          directory={undefined}
+          embedded
+          filter={list.filter()}
+          hasMatchingModels={(providerID) =>
+            list.grouped.latest.some((group) => group.category === providerID && group.items.length > 0)
           }
-        >
-          <Show
-            when={list.flat().length > 0}
-            fallback={
-              <Show
-                when={list.filter()}
-                fallback={<div class="settings-models-status">{language.t("dialog.model.empty")}</div>}
-              >
-                <div class="settings-tab-search-empty">
-                  <SettingsSearchEmpty query={list.filter()} />
-                </div>
-              </Show>
-            }
-          >
-            <ProviderModelSections
-              groups={list.grouped.latest}
-              managed={managed()}
-              expanded={expanded}
-              disabled={searching()}
-              onExpandedChange={(key, value) => setStore("collapsed", key, !value)}
-              onSetVisibility={setProviderVisibility}
-              ref={(providerID, element) => sections.set(providerID, element)}
-              rows={(items) => <ModelRows items={items} />}
-            />
-          </Show>
+          renderModels={(providerID) => <ProviderModelsInline providerID={providerID} />}
+        />
+        <Show when={!list.grouped.loading && list.flat().length === 0 && list.filter().length > 0}>
+          <div class="settings-tab-search-empty">
+            <SettingsSearchEmpty query={list.filter()} />
+          </div>
         </Show>
       </div>
     </>

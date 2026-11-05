@@ -32,13 +32,13 @@ import { PluginSettingsPages } from "@/runtime/plugin/settings-page-view"
 import "@/settings/settings.css"
 
 const rootClientTabs = [
-  { value: "general", icon: pageIcons.general, label: "通用与外观" },
+  { value: "general", icon: pageIcons.general, label: "通用" },
   { value: "shortcuts", icon: pageIcons.shortcuts, label: "快捷键" },
 ] as const
 
 const serverTabs = [
-  { value: "models", icon: pageIcons.models, label: "API 与模型" },
-  { value: "extensions", icon: pageIcons.extensions, label: "MCP 与扩展" },
+  { value: "models", icon: pageIcons.models, label: "API" },
+  { value: "extensions", icon: pageIcons.extensions, label: "拓展" },
   { value: "projects", icon: pageIcons.projects, label: "项目" },
 ] as const
 
@@ -202,17 +202,13 @@ function RootSettings() {
 
   const groups = createMemo<SettingsNavGroup[]>(() => [
     {
-      items: serverTabs.map((item) => ({
-        ...item,
-      })),
-    },
-    {
       items: [
+        ...serverTabs.map((item) => ({ ...item })),
         ...rootClientTabs.map((item) => ({ ...item })),
         {
           value: "servers",
           icon: pageIcons.servers,
-          label: "服务器 / SSH",
+          label: "SSH",
         },
       ],
     },
@@ -227,8 +223,6 @@ function RootSettings() {
     <SettingsNavigation
       value={activeTab()}
       groups={groups()}
-      backLabel={language.t("settings.backToApp")}
-      onBack={() => surface.close()}
       onChange={change}
     >
       <Tabs.Content value="general" class="settings-panel">

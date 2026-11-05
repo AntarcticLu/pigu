@@ -1,18 +1,33 @@
 import { Button } from "@opencode/ui/button"
 import { Badge } from "@opencode/ui/badge"
 import { useDialog } from "@opencode/ui/context/dialog"
+import { Dialog, DialogBody, DialogHeader, DialogTitle } from "@opencode/ui/dialog"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Menu } from "@opencode/ui/menu"
+import { TextField } from "@opencode/ui/text-field"
 import { OpenCodeLogo } from "@/providers/opencode-logo"
 import { showToast } from "@/shell/notifications/toast"
 import { popularProviders, useProviders } from "@/providers/catalog/providers"
 import { consoleProviderGroup } from "@/providers/catalog/console"
 import { useIntegrations } from "@/providers/catalog/integrations"
-import { createEffect, createMemo, createSignal, on, untrack, type Component, For, type JSX, Show } from "solid-js"
+import {
+  createEffect,
+  createMemo,
+  createSignal,
+  on,
+  onMount,
+  untrack,
+  type Component,
+  For,
+  type JSX,
+  Show,
+} from "solid-js"
 import { createStore } from "solid-js/store"
+import { Predicate } from "effect"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useServerSDK } from "@/runtime/server/client"
+import { useData } from "@/runtime/server/current"
 import { formatServerError } from "@/runtime/server/errors"
 import { CONSOLE_INTEGRATION } from "@/providers/connect/controller"
 import { DialogConnectProvider, useProviderConnectController } from "@/providers/connect/dialog"
@@ -51,22 +66,239 @@ export const SettingsProviders: Component<{
   onSelectProvider?: (providerID: string) => void
   headerAction?: JSX.Element
   embedded?: boolean
+  filter?: string
+  hasMatchingModels?: (providerID: string) => boolean
+  renderModels?: (providerID: string) => JSX.Element
 }> = (props) => {
   const dialog = useDialog()
   const language = useLanguage()
   const serverSdk = useServerSDK()
+  const data = useData()
   const providers = useProviders(() => props.directory)
   const integrations = useIntegrations(() => props.directory)
   const providerConnect = useProviderConnectController()
   const accountActions = useProviderAccountActions(() => props.directory)
 
+  const [configuredMap, setConfiguredMap] = createSignal<
+    Record<string, { name?: string; baseURL?: string; apiKey?: string }>
+  >({})
+
+  const refetchConfigured = async () => {
+    const entries = await serverSdk.api.config.get().catch(() => [])
+    const map: Record<string, { name?: string; baseURL?: string; apiKey?: string }> = {}
+    entries.forEach((entry) => {
+      if (entry.type !== "document" || !entry.info.providers) return
+      Object.entries(entry.info.providers).forEach(([id, info]) => {
+        const baseURL = Predicate.isString(info.settings?.baseURL) ? info.settings.baseURL : undefined
+        const apiKey = Predicate.isString(info.settings?.apiKey) ? info.settings.apiKey : undefined
+        map[id] = {
+          name: info.name ?? map[id]?.name,
+          baseURL: baseURL ?? map[id]?.baseURL,
+          apiKey: apiKey ?? map[id]?.apiKey,
+        }
+      })
+    })
+    setConfiguredMap(map)
+  }
+
+  onMount(() => {
+    void refetchConfigured()
+  })
+
+  const refreshProviderData = async () => {
+    const loc = props.directory ? { directory: props.directory } : undefined
+    data.location.provider.invalidate(loc)
+    data.location.model.invalidate(loc)
+    data.location.integration.invalidate(loc)
+    await Promise.all([
+      data.location.provider.sync(loc).catch(() => undefined),
+      data.location.model.sync(loc).catch(() => undefined),
+      data.location.integration.sync(loc).catch(() => undefined),
+      refetchConfigured(),
+    ])
+  }
+
+  const openManageProvider = (initial?: {
+    providerID?: string
+    name?: string
+    baseURL?: string
+    apiKey?: string
+  }) => {
+    const isEditing = !!initial?.providerID
+    void dialog.show(() => {
+      const [form, setForm] = createStore<{
+        name: string
+        baseURL: string
+        apiKey: string
+        saving: boolean
+        error?: string
+      }>({
+        name: initial?.name ?? "",
+        baseURL: initial?.baseURL ?? "",
+        apiKey: initial?.apiKey ?? "",
+        saving: false,
+      })
+
+      const submit = async (event: SubmitEvent) => {
+        event.preventDefault()
+        const cleanURL = form.baseURL.trim()
+        const cleanKey = form.apiKey.trim()
+        const cleanName = form.name.trim()
+
+        if (!cleanURL) {
+          setForm("error", "请输入 API 地址 (Base URL)")
+
+          return
+        }
+
+        if (!cleanKey && !isEditing) {
+          setForm("error", "请输入 API 密钥 (API Key)")
+
+          return
+        }
+
+        setForm({ saving: true, error: undefined })
+
+        try {
+          await serverSdk.api.credential.create({
+            integrationID: "pigu",
+            label: cleanName || cleanURL,
+            value: {
+              type: "key",
+              key: cleanKey,
+              metadata: {
+                piguAction: "upsert",
+                providerID: initial?.providerID,
+                name: cleanName || undefined,
+                baseURL: cleanURL,
+              },
+            },
+          })
+          await refreshProviderData()
+          dialog.close()
+          showToast({
+            variant: "success",
+            icon: "circle-check",
+            title: isEditing ? "已更新供应商" : "已添加供应商",
+            description: cleanName || cleanURL,
+          })
+        } catch (error) {
+          setForm({
+            saving: false,
+            error: error instanceof Error ? error.message : "保存供应商失败",
+          })
+        }
+      }
+
+      return (
+        <Dialog containerClass="!w-[min(calc(100vw_-_16px),520px)] !rounded-[12px] !bg-v2-background-bg-base">
+          <DialogHeader closeLabel={language.t("common.close")}>
+            <DialogTitle>{isEditing ? `编辑供应商 · ${initial?.name ?? initial?.providerID}` : "新增供应商 (API)"}</DialogTitle>
+          </DialogHeader>
+          <DialogBody class="px-5 pb-5 pt-2">
+            <form data-component="provider-manage-form" class="flex flex-col gap-4" onSubmit={(e) => void submit(e)}>
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
+                  供应商名称
+                </label>
+                <TextField
+                  data-input="manage-provider-name"
+                  type="text"
+                  placeholder="例如：PiguToken / DeepSeek（留空自动根据域名命名）"
+                  value={form.name}
+                  onChange={(value) => setForm({ name: value, error: undefined })}
+                />
+              </div>
+
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
+                  API 地址 (URL)
+                </label>
+                <TextField
+                  data-input="manage-provider-url"
+                  type="text"
+                  placeholder="https://api.openai.com/v1"
+                  value={form.baseURL}
+                  onChange={(value) => setForm({ baseURL: value, error: undefined })}
+                />
+              </div>
+
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
+                  API 密钥 (Key)
+                </label>
+                <TextField
+                  data-input="manage-provider-key"
+                  type="text"
+                  placeholder={isEditing ? "留空则保留原密钥，或输入新密钥 sk-..." : "sk-..."}
+                  value={form.apiKey}
+                  onChange={(value) => setForm({ apiKey: value, error: undefined })}
+                />
+              </div>
+
+              <Show when={form.error}>
+                {(err) => <div class="text-xs text-[var(--v2-state-fg-danger)]">{err()}</div>}
+              </Show>
+
+              <div class="flex items-center justify-end gap-2 pt-1">
+                <Button type="button" variant="ghost-muted" onClick={() => dialog.close()}>
+                  取消
+                </Button>
+                <Button type="submit" variant="contrast" disabled={form.saving}>
+                  {form.saving ? "正在保存并拉取模型..." : isEditing ? "保存修改" : "保存并连接"}
+                </Button>
+              </div>
+            </form>
+          </DialogBody>
+        </Dialog>
+      )
+    })
+  }
+
+  const deleteCustomProvider = async (item: ProviderItem) => {
+    try {
+      await serverSdk.api.credential.create({
+        integrationID: "pigu",
+        label: item.id,
+        value: {
+          type: "key",
+          key: "__delete__",
+          metadata: {
+            piguAction: "delete",
+            providerID: item.id,
+          },
+        },
+      })
+
+      if (canDisconnect(item)) {
+        disconnect(item, item.name)
+      }
+
+      await refreshProviderData()
+      showToast({
+        variant: "success",
+        icon: "circle-check",
+        title: "已删除供应商",
+        description: item.name,
+      })
+    } catch (error) {
+      showToast({
+        variant: "error",
+        title: "删除供应商失败",
+        description: error instanceof Error ? error.message : item.name,
+      })
+    }
+  }
+
   const [state, setState] = createStore<{
     consoleExpanded: boolean
+    collapsed: Record<string, boolean>
     credentialID?: string
     renaming?: string
     held?: ProviderItem[]
   }>({
     consoleExpanded: false,
+    collapsed: {},
   })
 
   const [disconnects, setDisconnects] = createSignal(createProviderDisconnectState())
@@ -199,10 +431,28 @@ export const SettingsProviders: Component<{
   const displayed = createMemo(() => {
     const group = consoleGroup()
 
-    if (!group) return connected()
-    const grouped = new Set(group.providers.filter((item) => item.id !== group.root.id).map((item) => item.id))
+    const base = group
+      ? (() => {
+          const grouped = new Set(group.providers.filter((item) => item.id !== group.root.id).map((item) => item.id))
 
-    return connected().filter((item) => !grouped.has(item.id))
+          return connected().filter((item) => !grouped.has(item.id))
+        })()
+      : connected()
+
+    const query = props.filter?.trim().toLowerCase() ?? ""
+
+    if (!query) return base
+
+    return base.filter((item) => {
+      const cfg = configuredMap()[item.id]
+
+      const matchesMeta =
+        item.name.toLowerCase().includes(query) ||
+        item.id.toLowerCase().includes(query) ||
+        (cfg?.baseURL?.toLowerCase().includes(query) ?? false)
+
+      return matchesMeta || (props.hasMatchingModels?.(item.id) ?? false)
+    })
   })
 
   const popular = createMemo(() => {
@@ -432,8 +682,14 @@ export const SettingsProviders: Component<{
           <div class="flex items-center justify-between">
             <h3 class="settings-section-title">{language.t("settings.providers.section.connected")}</h3>
             <Show when={props.embedded}>
-              <Button size="small" variant="neutral" icon="plus" onClick={() => connect("pigu")}>
-                配置 API (URL + Key)
+              <Button
+                size="small"
+                variant="neutral"
+                icon="plus"
+                data-action="provider-add"
+                onClick={() => openManageProvider()}
+              >
+                新增供应商
               </Button>
             </Show>
           </div>
@@ -445,53 +701,74 @@ export const SettingsProviders: Component<{
               <For each={displayed()}>
                 {(item) => {
                   const managedGroup = () => (consoleGroup()?.root.id === item.id ? consoleGroup() : undefined)
+                  const cfg = () => configuredMap()[item.id]
 
                   return (
                     <Show
                       when={managedGroup()}
                       fallback={
-                        <div class="settings-provider-row group">
-                          <div class="settings-provider-lead">
-                            <ProviderModelIcon provider={item} class="settings-provider-icon shrink-0" />
+                        <div class="flex flex-col">
+                          <div class="settings-provider-row group">
+                            <button
+                              type="button"
+                              data-action={`provider-toggle-${item.id}`}
+                              aria-expanded={!state.collapsed[item.id]}
+                              class="settings-provider-lead cursor-pointer text-left focus-visible:outline-none"
+                              onClick={() => setState("collapsed", item.id, !state.collapsed[item.id])}
+                            >
+                              <Show when={props.renderModels}>
+                                <Icon
+                                  name="chevron-down"
+                                  size="small"
+                                  class="shrink-0 text-v2-icon-icon-muted transition-transform"
+                                  classList={{ "-rotate-90": !!state.collapsed[item.id] }}
+                                />
+                              </Show>
+                              <ProviderModelIcon provider={item} class="settings-provider-icon shrink-0" />
 
-                            <div class="settings-provider-main">
-                              <span class="settings-provider-name truncate">
-                                {item.name}
-                              </span>
-                              <Badge>{type(item)}</Badge>
-                            </div>
-                          </div>
-                          <Show
-                            when={canManageAccounts(item)}
-                            fallback={
-                              <Show
-                                when={canDisconnect(item)}
-                                fallback={
-                                  <span class="settings-provider-env-hint">
-                                    {language.t("settings.providers.connected.environmentDescription")}
-                                  </span>
+                              <div class="settings-provider-main">
+                                <span class="settings-provider-name truncate">
+                                  {item.name}
+                                </span>
+                                <Badge>{type(item)}</Badge>
+                                <Show when={cfg()?.baseURL}>
+                                  {(url) => (
+                                    <span class="truncate text-11-regular text-v2-text-text-muted">
+                                      {url()}
+                                    </span>
+                                  )}
+                                </Show>
+                              </div>
+                            </button>
+                            <div class="flex items-center gap-1.5">
+                              <Button
+                                size="small"
+                                variant="ghost-muted"
+                                data-action={`provider-edit-${item.id}`}
+                                onClick={() =>
+                                  openManageProvider({
+                                    providerID: item.id,
+                                    name: cfg()?.name ?? item.name,
+                                    baseURL: cfg()?.baseURL ?? "",
+                                    apiKey: cfg()?.apiKey ?? "",
+                                  })
                                 }
                               >
-                                <Button size="normal" variant="ghost-muted" onClick={() => disconnect(item, item.name)}>
-                                  {language.t("common.disconnect")}
-                                </Button>
-                              </Show>
-                            }
-                          >
-                            <Show when={activeProviderAccount(integration(item))?.status}>
-                              {(status) => (
-                                <Button
-                                  size="normal"
-                                  variant="ghost-muted"
-                                  class="text-[var(--v2-state-fg-warning)]"
-                                  title={status().message}
-                                  onClick={() => connect(item.id)}
-                                >
-                                  {language.t("dialog.provider.needsSignIn")}
-                                </Button>
-                              )}
-                            </Show>
-                            <AccountMenu provider={item} />
+                                编辑
+                              </Button>
+                              <Button
+                                size="small"
+                                variant="ghost-muted"
+                                data-action={`provider-delete-${item.id}`}
+                                class="text-v2-text-text-muted hover:text-[var(--v2-state-fg-danger)]"
+                                onClick={() => void deleteCustomProvider(item)}
+                              >
+                                删除
+                              </Button>
+                            </div>
+                          </div>
+                          <Show when={!state.collapsed[item.id]}>
+                            {props.renderModels?.(item.id)}
                           </Show>
                         </div>
                       }

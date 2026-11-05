@@ -1,12 +1,23 @@
+export * as PiguProvider from "./pigu.js"
+
+import path from "path"
+import { applyEdits, modify, parse } from "jsonc-parser"
 import { define } from "@opencode/plugin/effect/plugin"
 import { Form } from "@opencode/schema/form"
-import { Duration, Effect, Option, Schema } from "effect"
+import { FSUtil } from "@opencode/util/fs-util"
+import { Global } from "@opencode/util/global"
+import { isRecord } from "@opencode/util/record"
+import { Duration, Effect, Option, Predicate, Schema } from "effect"
 import { HttpClient, HttpClientRequest } from "effect/http"
 import { App } from "../../app.js"
+import { Bus } from "../../bus.js"
+import { ConfigDiscovery } from "../../config/discovery.js"
+import { Credential } from "../../credential.js"
 import { Integration } from "../../integration.js"
 import { IntegrationConnection } from "../../integration/connection.js"
 import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
+import { AbsolutePath } from "../../schema.js"
 import { SharedCache } from "../../shared-cache.js"
 import type { PluginInternal } from "../internal.js"
 import { configuredSettings } from "./configured.js"
@@ -215,7 +226,7 @@ export const PiguProviderPlugin = define({
         .filter((record) => record.provider.id !== providerID)
         .forEach((record) => {
           const providerURL =
-            typeof record.provider.settings?.baseURL === "string"
+            Predicate.isString(record.provider.settings?.baseURL)
               ? normalizeBaseURL(record.provider.settings.baseURL)
               : ""
           Array.from(record.models.values()).forEach((model) => {
@@ -237,7 +248,7 @@ export const PiguProviderPlugin = define({
 } satisfies PluginInternal.InternalPlugin)
 
 export function normalizeBaseURL(input: unknown): string {
-  if (typeof input !== "string") return ""
+  if (!Predicate.isString(input)) return ""
   const trimmed = input.trim().replace(/\/+$/, "")
   if (!trimmed) return ""
   const isLocal = /^(localhost|127\.0\.0\.1|0\.0\.0\.0)(:\d+)?(\/|$)/i.test(trimmed)
@@ -272,10 +283,167 @@ function parseModels(text: string): readonly DiscoveredModel[] {
         {
           id: rawID,
           name: item.name?.replace(/^models\//i, "").trim() || rawID,
-          ...(typeof context === "number" && context > 0 ? { context } : {}),
-          ...(typeof output === "number" && output > 0 ? { output } : {}),
+          ...(Predicate.isNumber(context) && context > 0 ? { context } : {}),
+          ...(Predicate.isNumber(output) && output > 0 ? { output } : {}),
         },
       ]
     })
     .toSorted((a, b) => a.id.localeCompare(b.id))
 }
+
+function deriveProviderName(baseURL: string): string {
+  if (!URL.canParse(baseURL)) return "Custom API"
+  const host = new URL(baseURL).hostname.replace(/^api\./i, "")
+  return host || "Custom API"
+}
+
+function deriveProviderID(name: string, baseURL: string): string {
+  const slug = name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  if (slug) return slug
+  if (URL.canParse(baseURL)) {
+    const hostSlug = new URL(baseURL).hostname
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+    if (hostSlug) return hostSlug
+  }
+  return `pigu-${Date.now()}`
+}
+
+export const manageCustomProvider = Effect.fn("PiguProvider.manageCustomProvider")(function* (input: {
+  readonly action: "upsert" | "delete"
+  readonly providerID?: string
+  readonly name?: string
+  readonly baseURL?: string
+  readonly apiKey?: string
+}) {
+  const globalService = yield* Global.Service
+  const fs = yield* FSUtil.Service
+  const http = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
+  const credential = yield* Credential.Service
+  const bus = yield* Bus.Service
+
+  const directory = AbsolutePath.make(globalService.config)
+  const candidates = ConfigDiscovery.names.map((name) => path.join(directory, name))
+  const existingFiles = yield* Effect.filter(candidates, fs.isFile)
+  const filepath = existingFiles.at(-1) ?? path.join(directory, "opencode.json")
+  const text = (yield* fs.readFileStringSafe(filepath)) ?? "{}\n"
+
+  if (input.action === "delete") {
+    const targetID = input.providerID?.trim()
+    if (!targetID) return
+    const allCreds = yield* credential.all()
+    yield* Effect.forEach(
+      allCreds.filter((item) => item.integrationID === targetID),
+      (item) => credential.remove(item.id),
+      { discard: true },
+    )
+    const parsed = parse(text)
+    const clearModel =
+      isRecord(parsed) && Predicate.isString(parsed.model) && parsed.model.startsWith(`${targetID}/`)
+    const step1 = applyEdits(
+      text,
+      modify(text, ["provider", targetID], undefined, { formattingOptions: { tabSize: 2, insertSpaces: true } }),
+    )
+    const step2 = applyEdits(
+      step1,
+      modify(step1, ["providers", targetID], undefined, { formattingOptions: { tabSize: 2, insertSpaces: true } }),
+    )
+    const updated = clearModel
+      ? applyEdits(
+          step2,
+          modify(step2, ["model"], undefined, { formattingOptions: { tabSize: 2, insertSpaces: true } }),
+        )
+      : step2
+    yield* fs.writeWithDirs(filepath, updated.endsWith("\n") ? updated : `${updated}\n`)
+    yield* bus.publish(Credential.Event.Updated, {})
+    yield* Effect.sleep("120 millis")
+    return
+  }
+
+  const baseURL = normalizeBaseURL(input.baseURL)
+  if (!baseURL) return
+  const name = input.name?.trim() || deriveProviderName(baseURL)
+  const targetID = input.providerID?.trim() || deriveProviderID(name, baseURL)
+
+  const parsed = parse(text)
+  const existingProviders = isRecord(parsed)
+    ? isRecord(parsed.provider)
+      ? parsed.provider
+      : isRecord(parsed.providers)
+        ? parsed.providers
+        : undefined
+    : undefined
+  const existingEntry = existingProviders && isRecord(existingProviders[targetID]) ? existingProviders[targetID] : undefined
+  const existingOptions =
+    existingEntry && isRecord(existingEntry.options)
+      ? existingEntry.options
+      : existingEntry && isRecord(existingEntry.settings)
+        ? existingEntry.settings
+        : undefined
+  const existingKey = existingOptions && Predicate.isString(existingOptions.apiKey) ? existingOptions.apiKey : ""
+  const effectiveApiKey = input.apiKey?.trim() || existingKey
+
+  const existingModels =
+    existingEntry && isRecord(existingEntry.models) ? existingEntry.models : {}
+
+  const discovered = yield* http
+    .execute(
+      HttpClientRequest.get(`${baseURL}/models`).pipe(
+        ...(effectiveApiKey ? [HttpClientRequest.bearerToken(effectiveApiKey)] : []),
+        HttpClientRequest.acceptJson,
+      ),
+    )
+    .pipe(
+      Effect.flatMap((response) => response.text),
+      Effect.map(parseModels),
+      Effect.timeout("10 seconds"),
+      Effect.orElseSucceed((): readonly DiscoveredModel[] => []),
+    )
+
+  const modelsMap =
+    discovered.length > 0
+      ? Object.fromEntries(discovered.map((item) => [item.id, { name: item.name }]))
+      : Object.keys(existingModels).length > 0
+        ? existingModels
+        : {
+            "gpt-4o": { name: "gpt-4o" },
+            "claude-sonnet-4-5": { name: "claude-sonnet-4-5" },
+            "gemini-2.5-pro": { name: "gemini-2.5-pro" },
+          }
+
+  const rootKey =
+    isRecord(parsed) && isRecord(parsed.providers) && !isRecord(parsed.provider) ? "providers" : "provider"
+
+  const entry =
+    rootKey === "providers"
+      ? {
+          package: "aisdk:@ai-sdk/openai-compatible",
+          name,
+          settings: {
+            baseURL,
+            apiKey: effectiveApiKey,
+          },
+          models: modelsMap,
+        }
+      : {
+          npm: "@ai-sdk/openai-compatible",
+          name,
+          options: {
+            baseURL,
+            apiKey: effectiveApiKey,
+          },
+          models: modelsMap,
+        }
+
+  const updated = applyEdits(
+    text,
+    modify(text, [rootKey, targetID], entry, { formattingOptions: { tabSize: 2, insertSpaces: true } }),
+  )
+  yield* fs.writeWithDirs(filepath, updated.endsWith("\n") ? updated : `${updated}\n`)
+  yield* bus.publish(Credential.Event.Updated, {})
+  yield* Effect.sleep("120 millis")
+})

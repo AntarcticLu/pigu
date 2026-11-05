@@ -6,14 +6,17 @@ export const rendererHost = "renderer"
 
 export function loadWindow(win: BrowserWindow, html: string) {
   const devUrl = process.env.ELECTRON_RENDERER_URL
+  const target = devUrl ? new URL(html, devUrl).toString() : `${rendererProtocol}://${rendererHost}/${html}`
 
-  if (devUrl) {
-    void win.loadURL(new URL(html, devUrl).toString())
-
-    return
+  const attempt = (retries: number) => {
+    if (win.isDestroyed()) return
+    void win.loadURL(target).catch(() => {
+      if (retries <= 0 || win.isDestroyed()) return
+      setTimeout(() => attempt(retries - 1), 600)
+    })
   }
 
-  void win.loadURL(`${rendererProtocol}://${rendererHost}/${html}`)
+  attempt(5)
 }
 
 export function isRendererUrl(value?: string, html = false) {

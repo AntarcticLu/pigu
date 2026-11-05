@@ -17,6 +17,8 @@ import { SkillScan } from "./skill-scan.js"
 
 type Source = Skill.DirectorySource | Skill.UrlSource
 
+let cachedGlobalExternalSkills: Skill.Info[] | undefined
+
 export const Plugin = define({
   id: "opencode.config.skill",
   effect: Effect.fn(function* (ctx) {
@@ -93,11 +95,6 @@ export const Plugin = define({
         path.join(location.directory, ".opencode", "skills"),
         path.join(location.directory, ".claude", "skills"),
         path.join(location.directory, ".agents", "skills"),
-        path.join(global.home, ".claude", "skills"),
-        path.join(global.home, ".codex", "skills"),
-        path.join(global.home, ".codex", "skills", ".system"),
-        path.join(global.home, ".gemini", "antigravity", "skills"),
-        path.join(global.home, ".gemini", "antigravity", "builtin", "skills"),
       ]
       for (const dir of externalDirs) {
         add(Skill.DirectorySource.make({ type: "directory", path: AbsolutePath.make(dir) }))
@@ -118,7 +115,18 @@ export const Plugin = define({
       return result
     }
 
-    const load = Effect.fn("ConfigSkillPlugin.load")(function* (source: Source) {
+    const globalExternalSources = () => {
+      const dirs = [
+        path.join(global.home, ".claude", "skills"),
+        path.join(global.home, ".codex", "skills"),
+        path.join(global.home, ".codex", "skills", ".system"),
+        path.join(global.home, ".gemini", "antigravity", "skills"),
+        path.join(global.home, ".gemini", "antigravity", "builtin", "skills"),
+      ]
+      return dirs.map((dir) => Skill.DirectorySource.make({ type: "directory", path: AbsolutePath.make(dir) }))
+    }
+
+    const load = Effect.fn("ConfigSkillPlugin.load")(function* (source: Source, shouldWatch = true) {
       const directories =
         source.type === "directory"
           ? [source.path]
@@ -130,12 +138,14 @@ export const Plugin = define({
                 }).pipe(Effect.as([] as AbsolutePath[])),
               ),
             )
-      const roots = (yield* Effect.forEach(directories, watchDirectory)).flat()
+      const roots = shouldWatch ? (yield* Effect.forEach(directories, watchDirectory)).flat() : []
       const skills: Skill.Info[] = []
       for (const directory of directories) {
         for (const filepath of yield* SkillScan.scan(directory)) {
-          const resolved = yield* fs.realPath(filepath).pipe(Effect.orElseSucceed(() => filepath))
-          if (!roots.some((root) => FSUtil.contains(root, resolved))) yield* watch(resolved, "file")
+          if (shouldWatch) {
+            const resolved = yield* fs.realPath(filepath).pipe(Effect.orElseSucceed(() => filepath))
+            if (!roots.some((root) => FSUtil.contains(root, resolved))) yield* watch(resolved, "file")
+          }
           const content = yield* fs.readFileStringSafe(filepath).pipe(Effect.orElseSucceed(() => undefined))
           if (!content) continue
           const parsed = SkillFile.parse(directory, filepath, content)
@@ -159,13 +169,28 @@ export const Plugin = define({
       return skills
     })
 
+    const loadGlobalExternalSkills = Effect.fn("ConfigSkillPlugin.loadGlobalExternalSkills")(function* () {
+      if (cachedGlobalExternalSkills) return cachedGlobalExternalSkills
+      const list: Skill.Info[] = []
+      for (const source of globalExternalSources()) {
+        for (const skill of yield* load(source, false)) {
+          list.push(skill)
+        }
+      }
+      cachedGlobalExternalSkills = list
+      return list
+    })
+
     const refresh = Effect.fn("ConfigSkillPlugin.refresh")(
       function* (file?: string) {
         yield* FiberMap.clear(watches)
         const skills = new Map<Skill.ID, Skill.Info>()
         const current = sources()
         for (const source of current) {
-          for (const skill of yield* load(source)) skills.set(skill.id, skill)
+          for (const skill of yield* load(source, true)) skills.set(skill.id, skill)
+        }
+        for (const skill of yield* loadGlobalExternalSkills()) {
+          skills.set(skill.id, skill)
         }
         loaded.skills = Array.from(skills.values())
         if (file) {

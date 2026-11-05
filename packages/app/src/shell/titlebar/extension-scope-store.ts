@@ -143,7 +143,19 @@ export function useIdeGlobalExtensions() {
     const ctx = localCtx()
 
     if (!ctx || ctx.sdk.connection.status() !== "connected") return
-    void Promise.all([ctx.data.location.mcp.server.sync(), ctx.data.location.skill.sync()]).catch(() => undefined)
+    const tasks: Promise<unknown>[] = []
+
+    if (ctx.data.location.mcp.server.list() === undefined) {
+      tasks.push(ctx.data.location.mcp.server.sync())
+    }
+
+    if (ctx.data.location.skill.list() === undefined) {
+      tasks.push(ctx.data.location.skill.sync())
+    }
+
+    if (tasks.length > 0) {
+      void Promise.all(tasks).catch(() => undefined)
+    }
   })
 
   const skills = createMemo<ScopedSkillInfo[]>(() => {
