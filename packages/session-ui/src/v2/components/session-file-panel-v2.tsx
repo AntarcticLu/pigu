@@ -20,7 +20,6 @@ export function SessionFilePanelV2(props: {
     >
       <div data-slot="session-review-v2-sidebar-toggle">{props.sidebarToggle}</div>
       <div data-slot="session-review-v2-body">
-        {props.sidebar}
         <div data-slot="session-review-v2-preview">
           <Show when={props.toolbar}>
             <div data-slot="session-review-v2-toolbar">
@@ -38,6 +37,7 @@ export function SessionFilePanelV2(props: {
           </Show>
           {props.children}
         </div>
+        {props.sidebar}
       </div>
     </div>
   )

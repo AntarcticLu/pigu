@@ -14,11 +14,13 @@ export function SessionRouteFrame(props: ParentProps<{ padded?: boolean }>) {
   )
 }
 
-export function SessionPanelFrame(props: ParentProps<{ raised?: boolean }>) {
+export function SessionPanelFrame(props: ParentProps<{ raised?: boolean; connectedEnd?: boolean }>) {
   return (
     <div
-      class="relative flex min-h-0 flex-1 flex-col overflow-hidden rounded-[10px] bg-v2-background-bg-base"
+      class="relative flex min-h-0 flex-1 flex-col overflow-hidden bg-v2-background-bg-base"
       classList={{
+        "rounded-[10px]": !props.connectedEnd,
+        "rounded-s-[10px] rounded-e-none border-e border-v2-border-border-base": props.connectedEnd,
         "shadow-[var(--v2-elevation-raised)]": props.raised,
       }}
     >

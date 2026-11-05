@@ -139,6 +139,7 @@ export function SessionReviewV2Sidebar(props: SessionReviewV2SidebarProps) {
         <div data-slot="session-review-v2-sidebar-resize" onPointerDown={() => setResizing(true)}>
           <ResizeHandle
             direction="horizontal"
+            edge="start"
             size={width()}
             min={minWidth()}
             max={maxWidth()}
