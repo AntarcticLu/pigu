@@ -2,7 +2,6 @@ import { Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { useQueryClient } from "@tanstack/solid-query"
 import type { SessionInfo } from "@opencode/client/promise"
-import { ActivityRing } from "@opencode/ui/activity-ring"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
@@ -215,16 +214,6 @@ export function ProjectSessionRow(props: {
           }
         }}
       >
-        <Show when={props.openTab}>
-          <span
-            role="img"
-            aria-label={language.t("sidebar.organize.openTab")}
-            title={language.t("sidebar.organize.openTab")}
-            class="absolute start-2 top-1/2 flex size-4 -translate-y-1/2 items-center justify-center"
-          >
-            <span class="size-1 rounded-full bg-v2-icon-icon-faint" />
-          </span>
-        </Show>
         <span class="min-w-0 flex-1 truncate" dir="auto">
           {sessionLabel(props.session)}
         </span>
@@ -233,25 +222,11 @@ export function ProjectSessionRow(props: {
         >
           {resolveSessionSource(props.session).label}
         </span>
-        <span class="flex size-3.5 shrink-0 items-center justify-center">
-          <Show
-            when={isSessionUiLoading(props.session.id)}
-            fallback={
-              <Show
-                when={status.loading()}
-                fallback={
-                  <Show when={status.unread() && !props.active}>
-                    <span class="size-1.5 rounded-full bg-v2-text-text-base" />
-                  </Show>
-                }
-              >
-                <ActivityRing width={14} height={14} />
-              </Show>
-            }
-          >
+        <Show when={isSessionUiLoading(props.session.id) || status.loading()}>
+          <span class="flex size-3.5 shrink-0 items-center justify-center">
             <Loader width={14} height={14} class="text-v2-text-text-base" />
-          </Show>
-        </span>
+          </span>
+        </Show>
       </Menu.Context.Trigger>
       <Menu.Context.Portal>
         <Menu.Context.Content

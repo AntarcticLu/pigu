@@ -471,11 +471,7 @@ function SessionScreenContent(props: {
                 <Show when={isDesktop()}>
                   <SessionIdentityHeader sessionID={session.identity.params.id ?? ""} session={session.data.info()} />
                 </Show>
-                <SessionLoadingIndicator
-                  label="正在加载会话内容..."
-                  subtitle="正在同步历史消息与上下文，内容较多时请稍候..."
-                  initialProgress={32}
-                />
+                <SessionLoadingIndicator />
               </div>
             </Show>
             <Show when={messagesReady() && timelineArmed() && session.identity.params.id}>{timelineView()}</Show>

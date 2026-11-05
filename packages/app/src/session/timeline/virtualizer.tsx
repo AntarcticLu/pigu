@@ -1154,11 +1154,7 @@ export function createTimelineVirtualizer(input: Input) {
             class="pointer-events-none absolute inset-x-0 bottom-0 z-20 flex flex-col bg-v2-surface-surface-primary/95"
             style={{ top: input.showHeader() ? "var(--session-header-height, 48px)" : "0px" }}
           >
-            <SessionLoadingIndicator
-              label="正在排版会话内容..."
-              subtitle="正在渲染长对话与代码块，马上就好..."
-              initialProgress={68}
-            />
+            <SessionLoadingIndicator />
           </div>
         </Show>
         <div

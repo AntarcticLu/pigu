@@ -203,11 +203,7 @@ function PendingSessionState(props: { sessionID: string }) {
     <SessionStatePanel>
       <div class="flex min-h-0 flex-1 flex-col">
         <SessionIdentityHeader sessionID={props.sessionID} />
-        <SessionLoadingIndicator
-          label="正在连接并加载会话..."
-          subtitle="正在读取会话信息与上下文，请稍候..."
-          initialProgress={18}
-        />
+        <SessionLoadingIndicator />
       </div>
     </SessionStatePanel>
   )
