@@ -795,11 +795,6 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                             <div class="flex w-full shrink-0 flex-col gap-[3px]">
                               <Show when={!homeInSidebarHeader()}>{homeButton(true)}</Show>
                               {searchButton(true)}
-                              <RecentlyClosedTabsMenu
-                                vertical
-                                onNewTab={openNewTab}
-                                keybind={command.keybindParts("tab.new")}
-                              />
                             </div>
                             <div class="h-4 w-full shrink-0" aria-hidden="true" />
                             <div class="flex min-h-0 flex-1 flex-col gap-1">

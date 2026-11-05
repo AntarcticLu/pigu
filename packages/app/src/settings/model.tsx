@@ -395,7 +395,7 @@ export const { use: useSettings, provider: SettingsProvider } = createSimpleCont
         setShowCustomAgents(value: boolean) {
           setStore("general", "showCustomAgents", value)
         },
-        showTurnDiffs: withFallback(() => store.general?.showTurnDiffs, defaultSettings.general.showTurnDiffs),
+        showTurnDiffs: (): boolean => false,
         setShowTurnDiffs(value: boolean) {
           setStore("general", "showTurnDiffs", value)
         },

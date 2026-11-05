@@ -1,10 +1,8 @@
 import { Component, Show, createMemo } from "solid-js"
 import { Select } from "@opencode/ui/select"
-import { Switch } from "@opencode/ui/switch"
 import { TextInput } from "@opencode/ui/text-input"
 import { useLanguage } from "@/runtime/i18n/language"
 import { PluginSettingsSections } from "@/runtime/plugin/settings-page-view"
-import { useSettings } from "@/settings/model"
 import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
 import { createShellOptions } from "./behavior"
@@ -137,7 +135,6 @@ const FontSetting: Component<{
 
 export const SettingsGeneral: Component = () => {
   const language = useLanguage()
-  const settings = useSettings()
   const appearance = createAppearanceSettingsController()
 
   const GeneralSection = () => (
@@ -145,24 +142,6 @@ export const SettingsGeneral: Component = () => {
       <h3 class="settings-section-title">{language.t("settings.general.section.general")}</h3>
       <SettingsList>
         <LanguageSetting />
-
-        <SettingsRow title="变更文件">
-          <div data-action="settings-show-turn-diffs">
-            <Switch
-              checked={settings.general.showTurnDiffs()}
-              onChange={(checked) => settings.general.setShowTurnDiffs(checked)}
-            />
-          </div>
-        </SettingsRow>
-
-        <SettingsRow title="通知">
-          <div data-action="settings-notifications-agent">
-            <Switch
-              checked={settings.notifications.agent()}
-              onChange={(checked) => settings.notifications.setAgent(checked)}
-            />
-          </div>
-        </SettingsRow>
       </SettingsList>
     </div>
   )

@@ -1,5 +1,5 @@
 import type { SessionMessageAssistant, SessionMessageAssistantTool, SessionMessageUser } from "@opencode/client/promise"
-import { Match, Switch, type ComponentProps } from "solid-js"
+import { Match, Switch, type ComponentProps, type JSX } from "solid-js"
 import type { SessionUserActions, SessionUserAttachmentReference, SessionUserComment } from "../actions"
 import { AssistantReasoningContent, AssistantTextContent, CurrentUserMessageDisplay } from "./message-content"
 import {
@@ -64,6 +64,9 @@ export function SessionAssistantContent(props: {
   turnTokensPerSecond?: number
   sources?: TurnSources
   onOpenSources?: () => void
+  changedFilesOpen?: boolean
+  onToggleChangedFiles?: () => void
+  changedFilesContent?: JSX.Element
   defaultOpen?: boolean
   reasoningDefaultOpen?: boolean
   toolOpen?: boolean
@@ -83,6 +86,9 @@ export function SessionAssistantContent(props: {
             turnTokensPerSecond={props.turnTokensPerSecond}
             sources={props.sources}
             onOpenSources={props.onOpenSources}
+            changedFilesOpen={props.changedFilesOpen}
+            onToggleChangedFiles={props.onToggleChangedFiles}
+            changedFilesContent={props.changedFilesContent}
           />
         )}
       </Match>

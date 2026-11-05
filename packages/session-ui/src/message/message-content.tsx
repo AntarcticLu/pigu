@@ -131,7 +131,7 @@ function MetaItems(props: { items: MetaItem[]; slot: "user-message" | "text-part
 
 function MessageActionButton(
   props: Pick<ComponentProps<"button">, "disabled" | "onMouseDown" | "onClick" | "aria-label"> & {
-    icon: "check" | "copy" | "reset" | "fork" | "arrow-down-to-line" | "outline-trash"
+    icon: "check" | "copy" | "reset" | "fork" | "arrow-down-to-line" | "outline-trash" | "file-document"
     label: JSX.Element
     size?: "small" | "normal"
   },
@@ -1153,6 +1153,9 @@ export function AssistantTextContent(props: {
   /** The finished turn's web searches and fetches, shown as a chip in its footer. */
   sources?: TurnSources
   onOpenSources?: () => void
+  changedFilesOpen?: boolean
+  onToggleChangedFiles?: () => void
+  changedFilesContent?: JSX.Element
 }) {
   const data = useData()
   const i18n = useI18n()
@@ -1248,29 +1251,40 @@ export function AssistantTextContent(props: {
 
   function copyFooter() {
     return (
-      <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
-        <MessageActionButton
-          icon={copied() ? "check" : "copy"}
-          size="small"
-          label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
-          onMouseDown={(event) => event.preventDefault()}
-          onClick={copy}
-          aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
-        />
-        <Show when={meta().length > 0}>
-          <span data-slot="text-part-meta">
-            <MetaItems items={meta()} slot="text-part" />
-            <Show when={speed()}>
-              {(label) => (
-                <span data-slot="text-part-meta-speed">
-                  <span aria-hidden="true">{"\u00B7"}</span>
-                  <span dir="auto">{label()}</span>
-                </span>
-              )}
-            </Show>
-          </span>
-        </Show>
-      </div>
+      <>
+        <div data-slot="text-part-copy-wrapper" data-interrupted={interrupted() ? "" : undefined}>
+          <MessageActionButton
+            icon={copied() ? "check" : "copy"}
+            size="small"
+            label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={copy}
+            aria-label={copied() ? i18n.t("ui.message.copied") : i18n.t("ui.message.copyResponse")}
+          />
+          <MessageActionButton
+            icon="file-document"
+            size="small"
+            label={props.changedFilesOpen ? "收起变更文件" : "变更文件"}
+            onMouseDown={(event) => event.preventDefault()}
+            onClick={() => props.onToggleChangedFiles?.()}
+            aria-label={props.changedFilesOpen ? "收起变更文件" : "变更文件"}
+          />
+          <Show when={meta().length > 0}>
+            <span data-slot="text-part-meta">
+              <MetaItems items={meta()} slot="text-part" />
+              <Show when={speed()}>
+                {(label) => (
+                  <span data-slot="text-part-meta-speed">
+                    <span aria-hidden="true">{"\u00B7"}</span>
+                    <span dir="auto">{label()}</span>
+                  </span>
+                )}
+              </Show>
+            </span>
+          </Show>
+        </div>
+        <Show when={props.changedFilesOpen}>{props.changedFilesContent}</Show>
+      </>
     )
   }
 }

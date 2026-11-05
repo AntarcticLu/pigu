@@ -477,6 +477,38 @@ export function createSessionTimelineRowRenderer(input: {
 
     const disclosureKey = () => (content()?.type === "reasoning" ? ref()!.partID : row().group.key)
 
+    const changedFilesDisclosureKey = () => `turn-changed-files:${row().userMessageID}`
+    const changedFilesOpen = () => input.disclosure.value(changedFilesDisclosureKey()) === true
+
+    const turnChangedFiles = createMemo(() => {
+      const current = ref()
+
+      if (!current || copyContentID(row().userMessageID) !== current.partID) return []
+
+      const messages = input.projection.assistantMessagesByParent().get(row().userMessageID) ?? emptyAssistantMessages
+
+      const files = new Set<string>(
+        messages.flatMap((msg) => [
+          ...(msg.snapshot?.files ?? []),
+          ...msg.content.flatMap((part) => {
+            if (part.type !== "tool" || !["edit", "write", "patch"].includes(part.name) || !("metadata" in part.state))
+              return []
+            const metaFiles = part.state.metadata?.files
+
+            if (!Array.isArray(metaFiles)) return []
+
+            return metaFiles.flatMap((item) => {
+              const decoded = Option.getOrUndefined(decodeMetadataFile(item))
+
+              return decoded?.file ? [decoded.file] : []
+            })
+          }),
+        ]),
+      )
+
+      return [...files].sort()
+    })
+
     return (
       <Show when={message()}>
         {(message) => (
@@ -491,6 +523,23 @@ export function createSessionTimelineRowRenderer(input: {
                 turnTokensPerSecond={turnTokensPerSecond()}
                 sources={turnSourcesValue()}
                 onOpenSources={() => sourcesHost?.open(row().userMessageID)}
+                changedFilesOpen={changedFilesOpen()}
+                onToggleChangedFiles={() => {
+                  input.disclosure.set(changedFilesDisclosureKey(), !changedFilesOpen())
+                  onSizeChange?.()
+                }}
+                changedFilesContent={
+                  <TurnDiff
+                    row={{
+                      userMessageID: row().userMessageID,
+                      messageID: message().id,
+                      from: row().userMessageID,
+                      files: turnChangedFiles(),
+                    }}
+                    showEmpty
+                    onSizeChange={onSizeChange}
+                  />
+                }
                 defaultOpen={defaultOpen()}
                 toolOpen={input.disclosure.value(disclosureKey()) ?? defaultOpen()}
                 onToolOpenChange={(open) => input.disclosure.set(disclosureKey(), open)}
@@ -863,12 +912,16 @@ export function createSessionTimelineRowRenderer(input: {
     )
   }
 
-  function TurnDiff(props: { row: TimelineRow.TurnDiff; onSizeChange?: () => void }) {
+  function TurnDiff(props: {
+    row: Pick<TimelineRow.TurnDiff, "userMessageID" | "messageID" | "from" | "files">
+    showEmpty?: boolean
+    onSizeChange?: () => void
+  }) {
     const render = ToolRegistry.render("patch") ?? GenericTool
     // Until the diff loads, list the paths the turn's steps recorded, without change counts.
     const turn = () => ({ sessionID: input.sessionID(), from: props.row.from })
     const diffs = () => data.turnDiff?.get(turn())
-    const paths = () => diffs()?.map((diff) => diff.file) ?? props.row.files
+    const paths = () => (diffs()?.length ? diffs()!.map((diff) => diff.file) : props.row.files)
     const showAllKey = () => `turn-diff:${props.row.messageID}`
     const showAll = () => input.disclosure.value(showAllKey()) === true
     const limit = <T,>(items: readonly T[]) => (showAll() ? items : items.slice(0, turnDiffFileLimit))
@@ -878,7 +931,14 @@ export function createSessionTimelineRowRenderer(input: {
     createEffect(() => data.turnDiff?.load(turn()))
 
     return (
-      <Show when={data.turnDiff && paths().length > 0}>
+      <Show
+        when={paths().length > 0}
+        fallback={
+          <Show when={props.showEmpty}>
+            <div class="pt-2 text-[12px] text-v2-text-text-faint">本轮无变更文件</div>
+          </Show>
+        }
+      >
         <div data-slot="session-turn-diffs" class="flex flex-col gap-2 pt-4">
           <div class="flex h-6 min-w-0 items-center gap-2">
             <span class="text-14-medium text-v2-text-text-base tabular-nums">
@@ -900,7 +960,7 @@ export function createSessionTimelineRowRenderer(input: {
             tool="patch"
             input={{}}
             metadata={{ files: limit(diffs() ?? []) }}
-            pendingFiles={diffs() ? undefined : limit(props.row.files)}
+            pendingFiles={diffs()?.length ? undefined : limit(props.row.files)}
             status="completed"
             fileOpen={(path: string) => input.disclosure.value(fileKey(path))}
             onFileOpenChange={(path: string, open: boolean) => input.disclosure.set(fileKey(path), open)}
