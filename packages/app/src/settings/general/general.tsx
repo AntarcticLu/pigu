@@ -1,14 +1,11 @@
 import { Component, Show, createMemo } from "solid-js"
 import { Select } from "@opencode/ui/select"
-import { TextInput } from "@opencode/ui/text-input"
 import { useLanguage } from "@/runtime/i18n/language"
-import { PluginSettingsSections } from "@/runtime/plugin/settings-page-view"
 import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
 import { createShellOptions } from "./behavior"
 import {
   createAppearanceSettingsController,
-  type AppearanceSettingsController,
   type ShellSettingsController,
 } from "./controllers"
 import "@/settings/settings.css"
@@ -80,59 +77,6 @@ const LanguageSetting = () => {
 
 const schemeOptions: ("system" | "light" | "dark")[] = ["system", "light", "dark"]
 
-const fontSettings = {
-  ui: {
-    action: "settings-ui-font",
-    title: "settings.general.row.uiFont.title",
-    description: "settings.general.row.uiFont.description",
-    font: "ui",
-    input: "setUI",
-  },
-  code: {
-    action: "settings-code-font",
-    title: "settings.general.row.font.title",
-    description: "settings.general.row.font.description",
-    font: "code",
-    input: "setCode",
-  },
-  terminal: {
-    action: "settings-terminal-font",
-    title: "settings.general.row.terminalFont.title",
-    description: "settings.general.row.terminalFont.description",
-    font: "terminal",
-    input: "setTerminal",
-  },
-} as const
-
-const FontSetting: Component<{
-  kind: "ui" | "code" | "terminal"
-  fonts: AppearanceSettingsController["fonts"]
-}> = (props) => {
-  const language = useLanguage()
-  const config = () => fontSettings[props.kind]
-
-  return (
-    <SettingsRow title={language.t(config().title)} description={language.t(config().description)}>
-      <div class="w-full sm:w-[220px]">
-        <TextInput
-          data-action={config().action}
-          type="text"
-          appearance="base"
-          value={props.fonts[config().font]().value}
-          onInput={(event) => props.fonts[config().input](event.currentTarget.value)}
-          placeholder={props.fonts[config().font]().placeholder}
-          spellcheck={false}
-          autocorrect="off"
-          autocomplete="off"
-          autocapitalize="off"
-          aria-label={language.t(config().title)}
-          style={{ "font-family": props.fonts[config().font]().family }}
-        />
-      </div>
-    </SettingsRow>
-  )
-}
-
 export const SettingsGeneral: Component = () => {
   const language = useLanguage()
   const appearance = createAppearanceSettingsController()
@@ -150,10 +94,7 @@ export const SettingsGeneral: Component = () => {
     <div class="settings-section">
       <h3 class="settings-section-title">{language.t("settings.general.section.appearance")}</h3>
       <SettingsList>
-        <SettingsRow
-          title={language.t("settings.general.row.colorScheme.title")}
-          description={language.t("settings.general.row.colorScheme.description")}
-        >
+        <SettingsRow title={language.t("settings.general.row.colorScheme.title")}>
           <Select
             data-action="settings-color-scheme"
             options={schemeOptions}
@@ -171,10 +112,7 @@ export const SettingsGeneral: Component = () => {
           />
         </SettingsRow>
 
-        <SettingsRow
-          title={language.t("settings.general.row.theme.title")}
-          description={language.t("settings.general.row.theme.description")}
-        >
+        <SettingsRow title={language.t("settings.general.row.theme.title")}>
           <Select
             data-action="settings-theme"
             options={appearance.theme.options()}
@@ -187,15 +125,8 @@ export const SettingsGeneral: Component = () => {
           />
         </SettingsRow>
 
-        <FontSetting kind="code" fonts={appearance.fonts} />
-        <FontSetting kind="terminal" fonts={appearance.fonts} />
-        <FontSetting kind="ui" fonts={appearance.fonts} />
-
         <Show when={appearance.zoom.available()}>
-          <SettingsRow
-            title={language.t("settings.appearance.row.zoom.title")}
-            description={language.t("settings.appearance.row.zoom.description")}
-          >
+          <SettingsRow title={language.t("settings.appearance.row.zoom.title")}>
             <Select
               data-action="settings-zoom"
               options={appearance.zoom.options}
@@ -212,6 +143,19 @@ export const SettingsGeneral: Component = () => {
     </div>
   )
 
+  const VersionSection = () => (
+    <div class="settings-section">
+      <h3 class="settings-section-title">版本</h3>
+      <SettingsList>
+        <SettingsRow title="当前版本">
+          <span data-action="settings-current-version" class="text-13-regular text-v2-text-text-muted">
+            v1.0.0（初版）
+          </span>
+        </SettingsRow>
+      </SettingsList>
+    </div>
+  )
+
   return (
     <>
       <div class="settings-tab-header">
@@ -224,7 +168,7 @@ export const SettingsGeneral: Component = () => {
       <div class="settings-tab-body settings-tab-body--sectioned">
         <GeneralSection />
         <AppearanceSection />
-        <PluginSettingsSections page="general" />
+        <VersionSection />
       </div>
     </>
   )

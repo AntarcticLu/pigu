@@ -106,6 +106,23 @@ const names = new Map(
 // v2/resolve.test.ts resolves the same file as a DesktopTheme.
 const oc2Theme = oc2ThemeJson as DesktopTheme
 
+const whiteTheme: DesktopTheme = {
+  ...oc2Theme,
+  id: "white",
+  name: "白色",
+  dark: oc2Theme.light,
+}
+
+function resolveEffectiveMode(themeId: string, mode: "light" | "dark", scheme: ColorScheme): "light" | "dark" {
+  if (themeId === "white") return "light"
+
+  if (scheme === "system" && (themeId === "oc-2" || themeId === "zenburn" || themeId === "everforest")) {
+    return "dark"
+  }
+
+  return mode
+}
+
 // Storage access throws where localStorage is missing or blocked; every caller treats that as no stored value.
 function read(key: string) {
   try {
@@ -187,12 +204,12 @@ function cacheThemeVariants(theme: DesktopTheme, themeId: string) {
   if (themeId === "oc-2") return
 
   for (const mode of ["light", "dark"] as const) {
-    const isDark = mode === "dark"
+    const isDark = themeId === "white" ? false : mode === "dark"
     const variant = isDark ? theme.dark : theme.light
     const tokens = resolveThemeVariant(variant, isDark)
     const css = themeToCss(tokens)
     const v2 = themeV2ToCss(resolveThemeVariantV2(variant, isDark))
-    write(isDark ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT, `${css}\n  ${v2}`)
+    write(mode === "dark" ? STORAGE_KEYS.THEME_CSS_DARK : STORAGE_KEYS.THEME_CSS_LIGHT, `${css}\n  ${v2}`)
   }
 }
 
@@ -211,6 +228,7 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     const [store, setStore] = createStore<ThemeState>({
       themes: {
         "oc-2": oc2Theme,
+        white: whiteTheme,
       },
       themeId,
       colorScheme,
@@ -260,8 +278,9 @@ export const { use: useTheme, provider: ThemeProvider } = createSimpleContext({
     }
 
     const applyTheme = (theme: DesktopTheme, themeId: string, mode: "light" | "dark", scheme: ColorScheme) => {
-      applyThemeCss(theme, themeId, mode)
-      props.onThemeApplied?.(mode, scheme)
+      const effectiveMode = resolveEffectiveMode(themeId, mode, scheme)
+      applyThemeCss(theme, themeId, effectiveMode)
+      props.onThemeApplied?.(effectiveMode, scheme)
     }
 
     const name = (id: string) => store.themes[id]?.name ?? names.get(id) ?? id

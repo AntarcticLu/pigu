@@ -442,6 +442,8 @@ export const dict = {
   "settings.general.row.showCustomAgents.description": "在输入框中切换智能体。隐藏时默认使用 Build 智能体。",
   "settings.general.row.pinchZoom.title": "双指缩放",
   "settings.general.row.pinchZoom.description": "允许使用触控板双指捏合和 Ctrl+滚轮手势缩放",
+  "settings.appearance.row.zoom.title": "界面缩放",
+  "settings.appearance.row.zoom.description": "调整整个应用中的文字与控件大小",
 
   "sound.option.none": "无",
   "sound.option.alert01": "警报 01",
