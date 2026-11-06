@@ -31,7 +31,7 @@ export const SettingsModels: Component<{
   const models = useModels()
 
   const list = useFilteredList<ModelItem>({
-    items: (_filter) => models.list().filter((item) => item.provider.id !== "local" && item.provider.id !== "native-cli"),
+    items: (_filter) => models.list().filter((item) => item.provider.id !== "native-cli"),
     key: (x) => `${x.provider.id}:${x.id}`,
     filterKeys: ["provider.name", "name", "id"],
     sortBy: (a, b) => a.name.localeCompare(b.name),
@@ -68,7 +68,9 @@ export const SettingsModels: Component<{
               return (
                 <SettingsRow title={item.name} description="">
                   <div class="flex items-center gap-2.5">
-                    <ModelProtocolSelect providerID={item.provider.id} modelID={item.id} />
+                    <Show when={item.provider.id !== "local"}>
+                      <ModelProtocolSelect providerID={item.provider.id} modelID={item.id} />
+                    </Show>
                     <Switch
                       checked={models.visible(key)}
                       onChange={(checked) => models.setVisibility(key, checked)}

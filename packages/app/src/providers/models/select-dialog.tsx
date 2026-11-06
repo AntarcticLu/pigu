@@ -637,6 +637,7 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
     position: { left: 0, top: 0 },
   })
 
+  const [collapsed, setCollapsed] = createStore<Record<string, boolean>>({})
   const [staged, setStaged] = createStore<Record<string, string | null>>({})
 
   let list: SearchListHandle<ModelRow> | undefined
@@ -807,16 +808,22 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
     const hidden = header && row ? header.offsetHeight + 4 - (row.getBoundingClientRect().top - origin) : 0
 
     labels.forEach((item) => item.label?.style.setProperty("opacity", String(round(item.opacity))))
-    headers.forEach((item, index) => item.toggleAttribute("data-stuck", index === stuck))
+    headers.forEach((item, index) => {
+      item.toggleAttribute("data-stuck", index === stuck)
+      item.style.setProperty("pointer-events", (labels[index]?.opacity ?? 1) <= 0.05 ? "none" : "")
+    })
     header?.style.setProperty("--model-dialog-header-fade", String(round(clamp(hidden / 16))))
   }
 
   // Results that change without a scroll, such as a narrower search, move the headers too.
   createEffect(
-    on(rows, () => {
-      const frame = requestAnimationFrame(fadeHeaders)
-      onCleanup(() => cancelAnimationFrame(frame))
-    }),
+    on(
+      () => [rows(), Object.entries(collapsed)],
+      () => {
+        const frame = requestAnimationFrame(fadeHeaders)
+        onCleanup(() => cancelAnimationFrame(frame))
+      },
+    ),
   )
 
   createEffect(() => {
@@ -1017,12 +1024,26 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
             items={rows()}
             key={(row) => row.id}
             section={(row) => row.group.category}
+            collapsed={(section) => Boolean(collapsed[section])}
+            onToggleSection={(section) => {
+              setCollapsed(section, !collapsed[section])
+              setStore("flyout", "")
+            }}
             header={(row) => (
-              <span data-slot="model-dialog-header-label" class="flex min-w-0 items-center gap-1.5">
+              <span data-slot="model-dialog-header-label" class="flex min-w-0 flex-1 items-center gap-1.5">
+                <span class="flex size-4 shrink-0 items-center justify-center">
+                  <Icon
+                    name="chevron-down"
+                    size="small"
+                    class="text-v2-icon-icon-muted transition-transform"
+                    classList={{ "-rotate-90": Boolean(collapsed[row.group.category]) }}
+                  />
+                </span>
                 <span class="min-w-0 truncate">{row.group.title ?? labels.name(row.item.provider)}</span>
                 <Show when={!row.group.title && labels.workspace(row.item.provider)}>
                   {(workspace) => <Badge class="shrink-0">{workspace()}</Badge>}
                 </Show>
+                <span class="shrink-0 text-11-regular text-v2-text-text-faint">({row.group.items.length})</span>
               </span>
             )}
             empty={language.t("dialog.model.empty")}

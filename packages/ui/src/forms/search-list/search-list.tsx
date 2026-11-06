@@ -75,6 +75,10 @@ export function SearchList<T>(props: {
   same?: (a: T, b: T) => boolean
   /** A section's header, from its first row. */
   header?: (item: T) => JSX.Element
+  /** Whether a section's rows are collapsed under its header. */
+  collapsed?: (section: string) => boolean
+  /** Toggles or handles a click on a section header. */
+  onToggleSection?: (section: string) => void
   /** Shown in place of the rows when there are none. */
   empty: JSX.Element
   /** A note beneath the rows, such as a hint that more results are hidden. */
@@ -112,8 +116,14 @@ export function SearchList<T>(props: {
     return all
   })
 
-  const rows = createMemo(() => [...groups().values()].flat())
-  const byKey = createMemo(() => new Map(rows().map((item) => [props.key(item), item] as const)))
+  const isCollapsed = (section: string) => Boolean(props.collapsed?.(section))
+  const allRows = createMemo(() => [...groups().values()].flat())
+
+  const rows = createMemo(() =>
+    [...groups().entries()].flatMap(([section, list]) => (isCollapsed(section) ? [] : list)),
+  )
+
+  const byKey = createMemo(() => new Map(allRows().map((item) => [props.key(item), item] as const)))
   const sectionKeys = createMemo<string[]>((previous) => stable(previous, [...groups().keys()]))
 
   const typeahead = createTypeahead<T>({
@@ -322,7 +332,7 @@ export function SearchList<T>(props: {
               id={typeahead.listID}
               data-slot="search-list-results"
               role="listbox"
-              hidden={rows().length === 0}
+              hidden={sectionKeys().length === 0}
               aria-label={props.label ?? props.placeholder}
             >
               <For each={sectionKeys()}>
@@ -343,25 +353,36 @@ export function SearchList<T>(props: {
                     <div data-slot="search-list-section" role="group" aria-labelledby={header() ? id : undefined}>
                       <Show when={header()}>
                         {(content) => (
-                          <div id={id} data-slot="search-list-header">
+                          <div
+                            id={id}
+                            data-slot="search-list-header"
+                            data-collapsed={isCollapsed(section) ? "" : undefined}
+                            classList={{ "cursor-pointer select-none": Boolean(props.onToggleSection) }}
+                            onMouseDown={(event) => {
+                              if (props.onToggleSection) event.preventDefault()
+                            }}
+                            onClick={() => props.onToggleSection?.(section)}
+                          >
                             {content()}
                           </div>
                         )}
                       </Show>
-                      <For each={keys()}>
-                        {(key) => {
-                          // A row that is leaving keeps its last item until it is removed.
-                          const item = createMemo<T>((previous) => byKey().get(key) ?? previous, byKey().get(key)!)
+                      <Show when={!isCollapsed(section)}>
+                        <For each={keys()}>
+                          {(key) => {
+                            // A row that is leaving keeps its last item until it is removed.
+                            const item = createMemo<T>((previous) => byKey().get(key) ?? previous, byKey().get(key)!)
 
-                          return props.children(item, row(key, item))
-                        }}
-                      </For>
+                            return props.children(item, row(key, item))
+                          }}
+                        </For>
+                      </Show>
                     </div>
                   )
                 }}
               </For>
             </div>
-            <Show when={rows().length === 0}>
+            <Show when={sectionKeys().length === 0}>
               <div data-slot="search-list-empty">{props.empty}</div>
             </Show>
           </MenuScroll>

@@ -390,13 +390,11 @@ export const manageCustomProvider = Effect.fn("PiguProvider.manageCustomProvider
   const existingModels =
     existingEntry && isRecord(existingEntry.models) ? existingEntry.models : {}
 
+  const baseRequest = HttpClientRequest.get(`${baseURL}/models`).pipe(HttpClientRequest.acceptJson)
+  const request = effectiveApiKey ? HttpClientRequest.bearerToken(baseRequest, effectiveApiKey) : baseRequest
+
   const discovered = yield* http
-    .execute(
-      HttpClientRequest.get(`${baseURL}/models`).pipe(
-        ...(effectiveApiKey ? [HttpClientRequest.bearerToken(effectiveApiKey)] : []),
-        HttpClientRequest.acceptJson,
-      ),
-    )
+    .execute(request)
     .pipe(
       Effect.flatMap((response) => response.text),
       Effect.map(parseModels),

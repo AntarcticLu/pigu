@@ -407,14 +407,17 @@ export const SettingsProviders: Component<{
     return connected
       .filter(
         (provider) =>
-          provider.id !== "local" &&
           provider.id !== "native-cli" &&
           (provider.id !== "opencode" ||
             managedConsole !== undefined ||
             consoleConnected ||
             Object.values(provider.models).some((model) => model.cost.input > 0)),
       )
-      .toSorted((a, b) => Number(b.id === "opencode-go") - Number(a.id === "opencode-go"))
+      .toSorted(
+        (a, b) =>
+          Number(b.id === "local") - Number(a.id === "local") ||
+          Number(b.id === "opencode-go") - Number(a.id === "opencode-go"),
+      )
   })
 
   // Tells the machine which providers the server catalog lists, so a confirmed removal stops hiding a
@@ -501,6 +504,8 @@ export const SettingsProviders: Component<{
   }
 
   const type = (item: ProviderItem) => {
+    if (item.id === "local") return "本地"
+
     const current = source(item)
 
     if (current === "env") return language.t("settings.providers.tag.environment")
@@ -742,32 +747,34 @@ export const SettingsProviders: Component<{
                                 </Show>
                               </div>
                             </button>
-                            <div class="flex items-center gap-1.5">
-                              <Button
-                                size="small"
-                                variant="ghost-muted"
-                                data-action={`provider-edit-${item.id}`}
-                                onClick={() =>
-                                  openManageProvider({
-                                    providerID: item.id,
-                                    name: cfg()?.name ?? item.name,
-                                    baseURL: cfg()?.baseURL ?? "",
-                                    apiKey: cfg()?.apiKey ?? "",
-                                  })
-                                }
-                              >
-                                编辑
-                              </Button>
-                              <Button
-                                size="small"
-                                variant="ghost-muted"
-                                data-action={`provider-delete-${item.id}`}
-                                class="text-v2-text-text-muted hover:text-[var(--v2-state-fg-danger)]"
-                                onClick={() => void deleteCustomProvider(item)}
-                              >
-                                删除
-                              </Button>
-                            </div>
+                            <Show when={item.id !== "local"}>
+                              <div class="flex items-center gap-1.5">
+                                <Button
+                                  size="small"
+                                  variant="ghost-muted"
+                                  data-action={`provider-edit-${item.id}`}
+                                  onClick={() =>
+                                    openManageProvider({
+                                      providerID: item.id,
+                                      name: cfg()?.name ?? item.name,
+                                      baseURL: cfg()?.baseURL ?? "",
+                                      apiKey: cfg()?.apiKey ?? "",
+                                    })
+                                  }
+                                >
+                                  编辑
+                                </Button>
+                                <Button
+                                  size="small"
+                                  variant="ghost-muted"
+                                  data-action={`provider-delete-${item.id}`}
+                                  class="text-v2-text-text-muted hover:text-[var(--v2-state-fg-danger)]"
+                                  onClick={() => void deleteCustomProvider(item)}
+                                >
+                                  删除
+                                </Button>
+                              </div>
+                            </Show>
                           </div>
                           <Show when={!state.collapsed[item.id]}>
                             {props.renderModels?.(item.id)}

@@ -125,7 +125,7 @@
   [data-component="search-list"] [data-slot="search-list-header"] {
     height: auto;
     padding-block: 16px 2px;
-    padding-inline: 34px 6px;
+    padding-inline: 12px 12px;
     background: var(--v2-background-bg-base);
     color: var(--v2-text-text-faint);
     font-size: 12px;
