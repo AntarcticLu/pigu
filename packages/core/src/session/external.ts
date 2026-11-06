@@ -157,6 +157,42 @@ function extractParts(content: string | ReadonlyArray<typeof ContentPartSchema.T
   return { text, thinking: thinking || undefined }
 }
 
+const MAX_FULL_READ_BYTES = 512 * 1024
+const CHUNK_READ_BYTES = 256 * 1024
+const MAX_LINE_LENGTH = 65_536
+const MAX_IMPORTED_MESSAGES = 60
+
+const readBoundedJsonlLines = (fullPath: string) =>
+  Effect.tryPromise(async () => {
+    const file = Bun.file(fullPath)
+    const size = file.size
+
+    if (size <= 0) return []
+
+    if (size <= MAX_FULL_READ_BYTES) {
+      const text = await file.text()
+
+      return text.split(/\r?\n/).filter((line) => line.trim().length > 0 && line.length <= MAX_LINE_LENGTH)
+    }
+
+    const headText = await file.slice(0, CHUNK_READ_BYTES).text()
+    const tailText = await file.slice(size - CHUNK_READ_BYTES, size).text()
+    const headLines = headText.split(/\r?\n/).slice(0, -1)
+    const tailLines = tailText.split(/\r?\n/).slice(1)
+
+    return [...headLines, ...tailLines].filter((line) => line.trim().length > 0 && line.length <= MAX_LINE_LENGTH)
+  }).pipe(Effect.orElseSucceed((): string[] => []))
+
+function capMessages(messages: ReadonlyArray<ExternalMessage>): ReadonlyArray<ExternalMessage> {
+  if (messages.length <= MAX_IMPORTED_MESSAGES) return messages
+  const firstUser = messages.find((msg) => msg.role === "user")
+  const tail = messages.slice(-(MAX_IMPORTED_MESSAGES - 1))
+
+  if (!firstUser || tail.includes(firstUser)) return messages.slice(-MAX_IMPORTED_MESSAGES)
+
+  return [firstUser, ...tail]
+}
+
 const resolveExistingDir = Effect.fnUntraced(function* (fs: FSUtil.Interface, candidate: string, fallback: string) {
   let current = candidate ? path.resolve(candidate) : fallback
 
@@ -199,7 +235,7 @@ const scanCodex = Effect.fn("SessionExternal.scanCodex")(function* (
     .scan("**/*.jsonl", { cwd: sessionsDir })
     .pipe(Effect.orElseSucceed((): string[] => []))
 
-  const recentFiles = relativeFiles.toSorted((a, b) => b.localeCompare(a)).slice(0, 60)
+  const recentFiles = relativeFiles.toSorted((a, b) => b.localeCompare(a)).slice(0, 30)
 
   const results = yield* Effect.forEach(
     recentFiles,
@@ -212,11 +248,9 @@ const scanCodex = Effect.fn("SessionExternal.scanCodex")(function* (
       if (existing.has(sessionID)) return undefined
       existing.add(sessionID)
 
-      const content = yield* fs.readFileStringSafe(fullPath).pipe(Effect.orElseSucceed(() => undefined))
+      const lines = yield* readBoundedJsonlLines(fullPath)
 
-      if (!content) return undefined
-
-      const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0)
+      if (lines.length === 0) return undefined
       let cwd = ""
       let createdAt = Date.now()
       let updatedAt = createdAt
@@ -275,12 +309,12 @@ const scanCodex = Effect.fn("SessionExternal.scanCodex")(function* (
         title: titles.get(externalID) ?? cleanTitle(firstUser.text),
         createdAt,
         updatedAt: Math.max(createdAt, updatedAt),
-        messages,
+        messages: capMessages(messages),
       }
 
       return discovered
     }),
-    { concurrency: 8 },
+    { concurrency: 4 },
   )
 
   return results.filter((item): item is DiscoveredSession => item !== undefined)
@@ -300,7 +334,7 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
     .pipe(Effect.orElseSucceed((): string[] => []))
 
   const results = yield* Effect.forEach(
-    relativeFiles,
+    relativeFiles.slice(0, 30),
     Effect.fnUntraced(function* (rel) {
       const externalID = path.basename(rel, ".jsonl")
       const sessionID = makeSessionID("claude", externalID)
@@ -308,13 +342,9 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
       if (existing.has(sessionID)) return undefined
       existing.add(sessionID)
 
-      const content = yield* fs
-        .readFileStringSafe(path.join(claudeRoot, rel))
-        .pipe(Effect.orElseSucceed(() => undefined))
+      const lines = yield* readBoundedJsonlLines(path.join(claudeRoot, rel))
 
-      if (!content) return undefined
-
-      const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0)
+      if (lines.length === 0) return undefined
       let cwd = ""
       let createdAt = 0
       let updatedAt = 0
@@ -376,12 +406,12 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
         title: cleanTitle(firstUser.text),
         createdAt: createdAt || fallbackTime,
         updatedAt: Math.max(createdAt || fallbackTime, updatedAt || fallbackTime),
-        messages,
+        messages: capMessages(messages),
       }
 
       return discovered
     }),
-    { concurrency: 8 },
+    { concurrency: 4 },
   )
 
   return results.filter((item): item is DiscoveredSession => item !== undefined)
@@ -399,7 +429,7 @@ const scanAgy = Effect.fn("SessionExternal.scanAgy")(function* (
   const dirs = yield* fs.readDirectory(agyRoot).pipe(Effect.orElseSucceed((): string[] => []))
 
   const results = yield* Effect.forEach(
-    dirs,
+    dirs.slice(0, 20),
     Effect.fnUntraced(function* (convID) {
       const sessionID = makeSessionID("agy", convID)
 
@@ -407,16 +437,16 @@ const scanAgy = Effect.fn("SessionExternal.scanAgy")(function* (
       existing.add(sessionID)
 
       const transcriptPath = path.join(agyRoot, convID, ".system_generated", "logs", "transcript.jsonl")
-      const content = yield* fs.readFileStringSafe(transcriptPath).pipe(Effect.orElseSucceed(() => undefined))
+      const lines = yield* readBoundedJsonlLines(transcriptPath)
 
-      if (!content) return undefined
+      if (lines.length === 0) return undefined
 
+      const sampleHead = lines.slice(0, 25).join("\n")
       const pathMatches = [
-        ...content.matchAll(/\/Volumes\/[^"'\s)\]`]+\/[^"'\s/)\]`]+|\/Users\/[^/"'\s]+\/[^."'\s/)\]`]+/g),
+        ...sampleHead.matchAll(/\/Volumes\/[^"'\s)\]`]+\/[^"'\s/)\]`]+|\/Users\/[^/"'\s]+\/[^."'\s/)\]`]+/g),
       ].map((match) => match[0])
 
       const inferredCwd = pathMatches.find((candidate) => !candidate.includes(".gemini")) ?? home
-      const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0)
       let createdAt = 0
       let updatedAt = 0
       const messages: ExternalMessage[] = []
@@ -466,12 +496,12 @@ const scanAgy = Effect.fn("SessionExternal.scanAgy")(function* (
         title: cleanTitle(firstUser.text),
         createdAt: createdAt || fallbackTime,
         updatedAt: Math.max(createdAt || fallbackTime, updatedAt || fallbackTime),
-        messages,
+        messages: capMessages(messages),
       }
 
       return discovered
     }),
-    { concurrency: 6 },
+    { concurrency: 3 },
   )
 
   return results.filter((item): item is DiscoveredSession => item !== undefined)
@@ -491,18 +521,16 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
     .pipe(Effect.orElseSucceed((): string[] => []))
 
   const results = yield* Effect.forEach(
-    relativeFiles,
+    relativeFiles.slice(0, 20),
     Effect.fnUntraced(function* (rel) {
       const sessionID = makeSessionID("pi", rel)
 
       if (existing.has(sessionID)) return undefined
       existing.add(sessionID)
 
-      const content = yield* fs.readFileStringSafe(path.join(piRoot, rel)).pipe(Effect.orElseSucceed(() => undefined))
+      const lines = yield* readBoundedJsonlLines(path.join(piRoot, rel))
 
-      if (!content) return undefined
-
-      const lines = content.split(/\r?\n/).filter((line) => line.trim().length > 0)
+      if (lines.length === 0) return undefined
       let cwd = ""
       let createdAt = 0
       let updatedAt = 0
@@ -564,7 +592,9 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
 
 const SYNC_COOLDOWN_MS = 300_000
 let lastSyncAt = 0
+let firstSyncDelayed = false
 const checkedExternalIDs = new Set<string>()
+const decodeStringArray = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Schema.String)))
 
 export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   readonly db: Database.Interface["db"]
@@ -577,7 +607,23 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   if (now - lastSyncAt < SYNC_COOLDOWN_MS) return
   lastSyncAt = now
 
+  if (!firstSyncDelayed) {
+    firstSyncDelayed = true
+    yield* Effect.sleep("2 seconds")
+  }
+
   const home = os.homedir()
+  const cacheDir = path.join(home, ".cache", "pigu")
+  const cacheFile = path.join(cacheDir, "external-scan-cache-v1.json")
+
+  if (checkedExternalIDs.size === 0) {
+    const cachedRaw = yield* input.fs.readFileStringSafe(cacheFile).pipe(Effect.orElseSucceed(() => undefined))
+    const decoded = cachedRaw ? Option.getOrUndefined(decodeStringArray(cachedRaw)) : undefined
+
+    if (decoded) {
+      decoded.forEach((id) => checkedExternalIDs.add(id))
+    }
+  }
   const claudeLocalModel = {
     providerID: Provider.ID.make("local"),
     id: Model.ID.make("claude"),
@@ -645,6 +691,10 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
     scanAgy(input.fs, home, checkedExternalIDs),
     scanPi(input.fs, home, checkedExternalIDs),
   ])
+
+  yield* Effect.tryPromise(async () => {
+    await Bun.write(cacheFile, JSON.stringify([...checkedExternalIDs]))
+  }).pipe(Effect.ignoreCause)
 
   const all = [...codex, ...claude, ...agy, ...pi]
 

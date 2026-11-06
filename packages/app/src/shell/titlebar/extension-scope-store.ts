@@ -1,6 +1,6 @@
 import type { PermissionRule } from "@opencode/client/promise"
 import { Schema } from "effect"
-import { batch, createEffect, createMemo } from "solid-js"
+import { batch, createEffect, createMemo, createRoot, getOwner } from "solid-js"
 import { Persistence } from "@/runtime/persistence/schema"
 import { Persist, persisted } from "@/runtime/persistence/storage"
 import { ServerConnection, useServers } from "@/runtime/server/registry"
@@ -291,7 +291,7 @@ export function useIdeGlobalExtensions() {
   }
 }
 
-export function useExtensionScopeStore() {
+function createExtensionScopeStore() {
   const [store, setStore] = persisted(
     { ...Persist.global("pigu.extension.scope.v1"), sync: true },
     ExtensionScopeState,
@@ -715,4 +715,14 @@ export function useExtensionScopeStore() {
     migrateProjectScope,
     buildSessionPermissions,
   }
+}
+
+let sharedExtensionScopeStore: ReturnType<typeof createExtensionScopeStore> | undefined
+
+export function useExtensionScopeStore() {
+  if (!sharedExtensionScopeStore) {
+    sharedExtensionScopeStore = createRoot(() => createExtensionScopeStore(), getOwner() ?? undefined)
+  }
+
+  return sharedExtensionScopeStore
 }
