@@ -24,12 +24,14 @@ export function requireVersion(version: string) {
 }
 
 export function discoverScript(options: { fromPath?: boolean; cache?: { directory: string; prefix: string } } = {}) {
-  return `cli=${options.fromPath ? "$(command -v opencode || true)" : '""'}
+  return `cli=${options.fromPath ? "$(command -v pigu || command -v opencode || true)" : '""'}
+if [ -z "$cli" ] && [ -x "$HOME/.pigu/bin/pigu" ]; then cli="$HOME/.pigu/bin/pigu"; fi
+if [ -z "$cli" ] && [ -x "$HOME/.local/bin/pigu" ]; then cli="$HOME/.local/bin/pigu"; fi
 if [ -z "$cli" ] && [ -x "$HOME/.opencode/bin/opencode" ]; then cli="$HOME/.opencode/bin/opencode"; fi
 ${
   options.cache
     ? `if [ -z "$cli" ]; then
-  for binary in "$HOME"/${quote(options.cache.directory)}/${quote(options.cache.prefix)}*/opencode; do
+  for binary in "$HOME"/${quote(options.cache.directory)}/${quote(options.cache.prefix)}*/pigu "$HOME"/${quote(options.cache.directory)}/${quote(options.cache.prefix)}*/opencode; do
     if [ -x "$binary" ]; then cli="$binary"; fi
   done
 fi

@@ -1,6 +1,5 @@
 import { Effect, Option, Schema } from "effect"
-import { HttpClient } from "effect/http"
-import { parseTarget, quote, runSsh, sshArgs, SshFailure } from "./command"
+import { parseTarget, runSsh, sshArgs, SshFailure } from "./command"
 import { RemoteCli } from "./remote-cli"
 
 // Use commands supported by released V2 CLIs. The registration is the service's
@@ -8,7 +7,7 @@ import { RemoteCli } from "./remote-cli"
 const registrationScript = `status=$("$cli" service status) || exit 0
 if [ "$status" = stopped ]; then exit 0; fi
 printf 'OPENCODE_SSH_STATUS=%s\\n' "$status"
-for file in "\${XDG_STATE_HOME:-$HOME/.local/state}"/opencode/service*.json; do
+for file in "\${XDG_STATE_HOME:-$HOME/.local/state}"/pigu/service*.json "\${XDG_STATE_HOME:-$HOME/.local/state}"/opencode/service*.json; do
   if [ ! -f "$file" ]; then continue; fi
   printf 'OPENCODE_SSH_REGISTRATION_BEGIN\\n'
   cat "$file"
@@ -18,12 +17,25 @@ done
 
 export const discoverScript = `set -eu
 ${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
-if [ -z "$cli" ]; then exit 0; fi
+if [ -z "$cli" ]; then
+  printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
+  exit 0
+fi
+status=$("$cli" service status 2>/dev/null || printf 'stopped\\n')
+if [ "$status" = stopped ]; then
+  "$cli" service start
+fi
 ${registrationScript}`
 
 export function startScript(version: string, replace = false) {
+  void RemoteCli.requireVersion(version)
+
   return `set -eu
-cli="${binaryPath(version)}"
+${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
+if [ -z "$cli" ]; then
+  printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
+  exit 0
+fi
 "$cli" service ${replace ? "restart" : "start"}
 ${registrationScript}`
 }
@@ -57,7 +69,7 @@ export function parseRegistration(output: string) {
 }
 
 export function binaryPath(version: string) {
-  return `$HOME/.opencode/desktop-ssh/${RemoteCli.requireVersion(version)}/opencode`
+  return `$HOME/.pigu/desktop-ssh/${RemoteCli.requireVersion(version)}/pigu`
 }
 
 function connectionAddress(address: string, password: string) {
@@ -87,74 +99,20 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
       stdin: script,
     })
 
-  const registered = parseRegistration(yield* run(discoverScript))
+  const output = yield* run(input.replace ? startScript(input.version, true) : discoverScript)
 
-  if (registered && (input.development || registered.version === input.version))
-    return yield* Effect.try({
-      try: () => connectionAddress(registered.url, registered.password),
-      catch: SshFailure.from,
-    })
-
-  if (registered && !input.replace) return yield* Effect.fail(new SshFailure("version", registered.version))
-  const destination = yield* Effect.try({ try: () => binaryPath(input.version), catch: SshFailure.from })
-  const existing = yield* run(RemoteCli.versionScript(`"${destination}"`))
-  const staged = RemoteCli.parseVersion(existing) === input.version
-
-  // Source worktree versions are unpublished. Use the installer's beta channel
-  // while retaining support for explicitly staged, matching development builds.
-  const version =
-    input.development && !staged ? yield* RemoteCli.latestBeta().pipe(Effect.mapError(SshFailure.from)) : input.version
-
-  const setup = { version, directory: `.opencode/desktop-ssh/${version}` }
-
-  if (!staged) {
-    const output = yield* run(RemoteCli.probeScript).pipe(Effect.mapError(() => new SshFailure("platform")))
-
-    const target = output
-      .split(/\r?\n/)
-      .findLast((line) => line.startsWith("OPENCODE_REMOTE_TARGET="))
-      ?.split("=")[1]
-
-    const url = yield* Effect.try({ try: () => RemoteCli.archiveUrl(target ?? "", version), catch: SshFailure.from })
-    yield* run(RemoteCli.installScript({ ...setup, source: { type: "download", url } })).pipe(
-      Effect.catch(
-        Effect.fnUntraced(function* (error) {
-          const http = yield* HttpClient.HttpClient
-          const response = yield* http.get(url).pipe(Effect.mapError(SshFailure.from))
-
-          if (response.status < 200 || response.status >= 300)
-            return yield* Effect.fail(
-              new SshFailure(
-                response.status === 404 ? "unpublished" : "install",
-                JSON.stringify({ version, target, url, status: response.status }),
-              ),
-            )
-          const archive = new Uint8Array(yield* response.arrayBuffer.pipe(Effect.mapError(SshFailure.from)))
-
-          // The upload uses stdin; the script itself must be the remote command.
-          return yield* runSsh({
-            args: [
-              ...sshArgs(input.target),
-              input.target.host,
-              `sh -c ${quote(RemoteCli.installScript({ ...setup, source: { type: "archive" } }))}`,
-            ],
-            env: input.env,
-            stdin: archive,
-          }).pipe(Effect.mapError(() => new SshFailure("install", error.message)))
-        }),
-      ),
-    )
+  if (output.includes("OPENCODE_SSH_CLI_MISSING=1")) {
+    return yield* Effect.fail(new SshFailure("install"))
   }
 
-  const registration = parseRegistration(yield* run(startScript(version, input.replace)))
+  const registered = parseRegistration(output)
 
-  if (!registration) return yield* Effect.fail(new SshFailure("service"))
-
-  if (!input.development && registration.version !== input.version)
-    return yield* Effect.fail(new SshFailure("version", registration.version))
+  if (!registered) {
+    return yield* Effect.fail(new SshFailure("service"))
+  }
 
   return yield* Effect.try({
-    try: () => connectionAddress(registration.url, registration.password),
+    try: () => connectionAddress(registered.url, registered.password),
     catch: SshFailure.from,
   })
 })

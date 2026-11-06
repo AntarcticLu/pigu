@@ -21,11 +21,10 @@ export default {
   "error.connection": "Could not establish the SSH connection. Check your network and SSH configuration.",
   "error.platform":
     "This remote platform is not supported. Automatic setup currently requires Linux or macOS on x64 or arm64.",
-  "error.version": "The remote service must match this Desktop version before connecting.",
-  "error.install": "Could not install the remote server. Check connectivity, disk space, and that tar is installed.",
-  "error.unpublished":
-    "This Desktop version has no published remote server. For development builds, install and start V2 on the host, then retry.",
-  "error.service": "SSH connected, but the OpenCode server did not become ready.",
+  "error.version": "The remote Pigu CLI version must match this Desktop version before connecting.",
+  "error.install": "Pigu CLI was not found on the remote server. Please install Pigu CLI on the remote server before connecting.",
+  "error.unpublished": "Pigu CLI was not found on the remote server. Please install Pigu CLI on the remote server before connecting.",
+  "error.service": "SSH connected, but the remote Pigu server did not become ready. Please make sure Pigu CLI is installed on the remote server.",
   "error.host-key":
     "The host’s identity could not be verified. Verify its fingerprint before updating your SSH known hosts.",
   "error.ssh-missing": "OpenSSH was not found. Install an OpenSSH client and ensure ssh is available on PATH.",
