@@ -407,10 +407,12 @@ export const SettingsProviders: Component<{
     return connected
       .filter(
         (provider) =>
-          provider.id !== "opencode" ||
-          managedConsole !== undefined ||
-          consoleConnected ||
-          Object.values(provider.models).some((model) => model.cost.input > 0),
+          provider.id !== "local" &&
+          provider.id !== "native-cli" &&
+          (provider.id !== "opencode" ||
+            managedConsole !== undefined ||
+            consoleConnected ||
+            Object.values(provider.models).some((model) => model.cost.input > 0)),
       )
       .toSorted((a, b) => Number(b.id === "opencode-go") - Number(a.id === "opencode-go"))
   })

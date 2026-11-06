@@ -1,5 +1,5 @@
 export const popularProviders = [
-  "native-cli",
+  "local",
   "pigu",
   "opencode-go",
   "opencode",

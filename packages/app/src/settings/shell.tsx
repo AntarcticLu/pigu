@@ -37,7 +37,7 @@ const rootClientTabs = [
 ] as const
 
 const serverTabs = [
-  { value: "models", icon: pageIcons.models, label: "API" },
+  { value: "models", icon: pageIcons.models, label: "模型" },
   { value: "extensions", icon: pageIcons.extensions, label: "拓展" },
 ] as const
 

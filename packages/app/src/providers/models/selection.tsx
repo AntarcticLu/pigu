@@ -277,13 +277,23 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
     const resolveSessionModel = (session: ReturnType<typeof durable>): ModelKey | undefined => {
       if (!session?.model) return undefined
 
+      if (session.model.providerID === "native-cli") {
+        const mappedId = session.model.id.replace(/-native$/, "")
+
+        return { providerID: "local", modelID: mappedId }
+      }
+
       if (session.model.providerID === "pigu" && session.model.id === "default") {
         if (session.metadata?.source === "claude") {
-          return { providerID: "native-cli", modelID: "claude-native" }
+          return { providerID: "local", modelID: "claude" }
         }
 
         if (session.metadata?.source === "codex") {
-          return { providerID: "native-cli", modelID: "codex-native" }
+          return { providerID: "local", modelID: "codex" }
+        }
+
+        if (session.metadata?.source === "agy") {
+          return { providerID: "local", modelID: "agy" }
         }
 
         return undefined

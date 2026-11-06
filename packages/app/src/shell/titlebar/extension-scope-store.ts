@@ -32,6 +32,52 @@ export type CustomPluginRecord = {
   enabled: boolean
 }
 
+export type BuiltinLocalAgentPlugin = {
+  id: string
+  modelID: string
+  name: string
+  target: string
+  description: string
+}
+
+export const BUILTIN_LOCAL_AGENT_PLUGINS: ReadonlyArray<BuiltinLocalAgentPlugin> = [
+  {
+    id: "local:claude",
+    modelID: "claude",
+    name: "claude (CLI)",
+    target: "claude",
+    description: "本地 Claude 订阅桥接（调用本机 claude 原生 CLI 工具与会话）",
+  },
+  {
+    id: "local:codex",
+    modelID: "codex",
+    name: "codex (CLI)",
+    target: "codex",
+    description: "本地 Codex 订阅桥接（调用本机 codex 原生 CLI 工具与会话）",
+  },
+  {
+    id: "local:agy",
+    modelID: "agy",
+    name: "agy (桌面端)",
+    target: "/Applications/Antigravity.app",
+    description: "本地 Antigravity (AGY) 桌面端与 CLI 原生桥接",
+  },
+  {
+    id: "local:deepseek-harness",
+    modelID: "deepseek-harness",
+    name: "deepseek harness (桌面端)",
+    target: "/Applications/DeepSeek Harness.app",
+    description: "本地 DeepSeek Harness 桌面端原生运行环境桥接",
+  },
+  {
+    id: "local:workbuddy",
+    modelID: "workbuddy",
+    name: "workbuddy (CLI)",
+    target: "workbuddy",
+    description: "本地 WorkBuddy 原生智能体工具桥接",
+  },
+]
+
 export type CustomSkillRecord = {
   id: string
   name: string
@@ -322,6 +368,26 @@ export function useExtensionScopeStore() {
       setStore("customPlugins", nextCustom)
       setStore("removedPlugins", { ...(store.removedPlugins ?? {}), [id]: true })
     })
+  }
+
+  const isLocalAgentEnabled = (modelID: string) => {
+    const pluginID = `local:${modelID}`
+
+    if (store.removedPlugins?.[pluginID]) return false
+    const custom = store.customPlugins?.[pluginID]
+
+    if (custom !== undefined) return custom.enabled
+
+    return true
+  }
+
+  const localAgentLabel = (modelID: string, fallbackName: string) => {
+    const pluginID = `local:${modelID}`
+    const custom = store.customPlugins?.[pluginID]
+
+    if (custom?.name?.trim()) return custom.name.trim()
+
+    return fallbackName
   }
 
   const customSkills = () => Object.values(store.customSkills ?? {})
@@ -625,6 +691,8 @@ export function useExtensionScopeStore() {
     isPluginRemoved,
     saveCustomPlugin,
     removePlugin,
+    isLocalAgentEnabled,
+    localAgentLabel,
     customSkills,
     isSkillRemoved,
     saveCustomSkill,

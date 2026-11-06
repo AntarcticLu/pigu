@@ -2,6 +2,7 @@ import { type Accessor, createMemo } from "solid-js"
 import { createSimpleContext } from "@opencode/ui/context"
 import { useProviders } from "@/providers/catalog/providers"
 import { useGlobal } from "@/runtime/server/runtime"
+import { useExtensionScopeStore } from "@/shell/titlebar/extension-scope-store"
 
 type ModelKey = { providerID: string; modelID: string }
 
@@ -49,16 +50,20 @@ export function uniqueModels(models: ModelKey[]) {
 const createModelsController = (directory: Accessor<string | undefined>) => {
   const providers = useProviders(() => directory())
   const models = useGlobal().models
+  const scopeStore = useExtensionScopeStore()
   const store = models.store
   const setStore = models.set
 
   const available = createMemo(() =>
-    providers.connected().flatMap((p) =>
-      Object.values(p.models).map((m) => ({
-        ...m,
-        provider: p,
-      })),
-    ),
+    providers
+      .connected()
+      .flatMap((p) =>
+        Object.values(p.models).map((m) => ({
+          ...m,
+          provider: p,
+        })),
+      )
+      .filter((m) => (m.provider.id === "local" ? scopeStore.isLocalAgentEnabled(m.id) : true)),
   )
 
   // Release dates as epoch ms; an unparseable date is NaN and never counts as recent.
@@ -106,7 +111,10 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
   const list = createMemo(() =>
     available().map((m) => ({
       ...m,
-      name: m.name.replace("(latest)", "").trim(),
+      name:
+        m.provider.id === "local"
+          ? scopeStore.localAgentLabel(m.id, m.name)
+          : m.name.replace("(latest)", "").trim(),
       latest: m.name.includes("(latest)"),
     })),
   )
@@ -126,6 +134,7 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
   }
 
   const visible = (model: ModelKey) => {
+    if (model.providerID === "local" && !scopeStore.isLocalAgentEnabled(model.modelID)) return false
     const key = modelKey(model)
     const state = visibility().get(key)
 

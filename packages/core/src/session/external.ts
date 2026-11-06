@@ -578,13 +578,17 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   lastSyncAt = now
 
   const home = os.homedir()
-  const claudeNativeModel = {
-    providerID: Provider.ID.make("native-cli"),
-    id: Model.ID.make("claude-native"),
+  const claudeLocalModel = {
+    providerID: Provider.ID.make("local"),
+    id: Model.ID.make("claude"),
   }
-  const codexNativeModel = {
-    providerID: Provider.ID.make("native-cli"),
-    id: Model.ID.make("codex-native"),
+  const codexLocalModel = {
+    providerID: Provider.ID.make("local"),
+    id: Model.ID.make("codex"),
+  }
+  const agyLocalModel = {
+    providerID: Provider.ID.make("local"),
+    id: Model.ID.make("agy"),
   }
   const defaultModel = {
     providerID: Provider.ID.make("pigu"),
@@ -601,11 +605,15 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   for (const row of existingRows) {
     checkedExternalIDs.add(row.id)
 
-    if (row.model?.providerID === "pigu" && row.model?.id === "default") {
+    const shouldUpgrade =
+      (row.model?.providerID === "pigu" && row.model?.id === "default") ||
+      row.model?.providerID === "native-cli"
+
+    if (shouldUpgrade) {
       if (row.id.startsWith("ses_ext_claude_")) {
         yield* input.db
           .update(SessionTable)
-          .set({ model: claudeNativeModel })
+          .set({ model: claudeLocalModel })
           .where(eq(SessionTable.id, row.id))
           .run()
           .pipe(Effect.ignoreCause)
@@ -614,7 +622,16 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
       if (row.id.startsWith("ses_ext_codex_")) {
         yield* input.db
           .update(SessionTable)
-          .set({ model: codexNativeModel })
+          .set({ model: codexLocalModel })
+          .where(eq(SessionTable.id, row.id))
+          .run()
+          .pipe(Effect.ignoreCause)
+      }
+
+      if (row.id.startsWith("ses_ext_agy_")) {
+        yield* input.db
+          .update(SessionTable)
+          .set({ model: agyLocalModel })
           .where(eq(SessionTable.id, row.id))
           .run()
           .pipe(Effect.ignoreCause)
@@ -639,10 +656,12 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   for (const session of all) {
     const sessionModel =
       session.source === "claude"
-        ? claudeNativeModel
+        ? claudeLocalModel
         : session.source === "codex"
-          ? codexNativeModel
-          : defaultModel
+          ? codexLocalModel
+          : session.source === "agy"
+            ? agyLocalModel
+            : defaultModel
     const validDir = yield* resolveExistingDir(input.fs, session.cwd, home)
     const cachedProject = resolvedDirs.get(validDir)
     const project = cachedProject ?? (yield* input.projects.resolve(AbsolutePath.make(validDir)))

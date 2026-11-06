@@ -509,6 +509,7 @@ function createModelSelectorController(input: {
 }
 
 function createProviderLabels(all: () => ModelItem[]) {
+  const language = useLanguage()
   const managed = createMemo(() => consoleModelGroup(all()))
   const managedIDs = createMemo(() => new Set(managed()?.providers.map((provider) => provider.id)))
   const canonical = (provider: ModelItem["provider"]) => provider.canonical ?? provider.id.replace(/^console-/, "")
@@ -524,6 +525,10 @@ function createProviderLabels(all: () => ModelItem[]) {
 
   return {
     name: (provider: ModelItem["provider"]) => {
+      if (provider.id === "local") {
+        return language.locale().toLowerCase().startsWith("en") ? "Local" : "本地"
+      }
+
       const group = managed()
 
       return group && managedIDs().has(provider.id) ? consoleProviderName(group, provider.name) : provider.name

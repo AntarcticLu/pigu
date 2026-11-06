@@ -22,6 +22,7 @@ import { SettingsList } from "@/settings/list"
 import type { SettingsView } from "@/settings/surface"
 import { showToast } from "@/shell/notifications/toast"
 import {
+  BUILTIN_LOCAL_AGENT_PLUGINS,
   localizeSkillDescription,
   resolveSkillOrigin,
   skillScopeKey,
@@ -286,6 +287,19 @@ export const SettingsExtensions: Component<{
   const plugins = createMemo<PluginDisplayRow[]>(() => {
     const byID = new Map<string, PluginDisplayRow>()
     const builtinSet = new Set(builtins.map((item) => item.id))
+    const localOrder = new Map(BUILTIN_LOCAL_AGENT_PLUGINS.map((item, idx) => [item.id, idx]))
+
+    for (const localItem of BUILTIN_LOCAL_AGENT_PLUGINS) {
+      if (scopeStore.isPluginRemoved(localItem.id)) continue
+      byID.set(localItem.id, {
+        id: localItem.id,
+        name: localItem.name,
+        target: localItem.target,
+        description: localItem.description,
+        enabled: true,
+        custom: true,
+      })
+    }
 
     for (const item of pluginList.latest ?? []) {
       if (item.source.type === "builtin") continue
@@ -321,17 +335,29 @@ export const SettingsExtensions: Component<{
 
     for (const custom of scopeStore.customPlugins()) {
       if (scopeStore.isPluginRemoved(custom.id)) continue
+      const builtinLocal = BUILTIN_LOCAL_AGENT_PLUGINS.find((item) => item.id === custom.id)
       byID.set(custom.id, {
         id: custom.id,
         name: custom.name,
         target: custom.target,
-        description: custom.description || custom.target,
+        description: custom.description || builtinLocal?.description || custom.target,
         enabled: custom.enabled,
         custom: true,
       })
     }
 
-    return Array.from(byID.values()).toSorted((a, b) => a.name.localeCompare(b.name))
+    return Array.from(byID.values()).toSorted((a, b) => {
+      const aRank = localOrder.get(a.id)
+      const bRank = localOrder.get(b.id)
+
+      if (aRank !== undefined && bRank !== undefined) return aRank - bRank
+
+      if (aRank !== undefined) return -1
+
+      if (bRank !== undefined) return 1
+
+      return a.name.localeCompare(b.name)
+    })
   })
 
   const filteredPlugins = createMemo(() => {

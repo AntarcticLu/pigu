@@ -31,7 +31,7 @@ export const SettingsModels: Component<{
   const models = useModels()
 
   const list = useFilteredList<ModelItem>({
-    items: (_filter) => models.list(),
+    items: (_filter) => models.list().filter((item) => item.provider.id !== "local" && item.provider.id !== "native-cli"),
     key: (x) => `${x.provider.id}:${x.id}`,
     filterKeys: ["provider.name", "name", "id"],
     sortBy: (a, b) => a.name.localeCompare(b.name),
@@ -91,7 +91,7 @@ export const SettingsModels: Component<{
       <div class="settings-tab-header settings-tab-header--stacked">
         <div class="settings-tab-header-row">
           <div class="flex min-w-0 items-center">
-            <h2 class="settings-tab-title">API</h2>
+            <h2 class="settings-tab-title">模型</h2>
           </div>
           <div class="settings-tab-header-actions">{props.headerAction}</div>
         </div>

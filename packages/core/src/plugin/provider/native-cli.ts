@@ -19,23 +19,38 @@ import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
 import type { PluginInternal } from "../internal.js"
 
-export const NATIVE_CLI_PROVIDER_ID = Provider.ID.make("native-cli")
-export const NATIVE_CLI_PACKAGE = "@opencode/native-cli"
-export const CLAUDE_NATIVE_MODEL_ID = Model.ID.make("claude-native")
-export const CODEX_NATIVE_MODEL_ID = Model.ID.make("codex-native")
+export const LOCAL_PROVIDER_ID = Provider.ID.make("local")
+export const NATIVE_CLI_PROVIDER_ID = LOCAL_PROVIDER_ID
+export const LOCAL_PACKAGE = "@opencode/local"
+
+export const CLAUDE_LOCAL_MODEL_ID = Model.ID.make("claude")
+export const CODEX_LOCAL_MODEL_ID = Model.ID.make("codex")
+export const AGY_LOCAL_MODEL_ID = Model.ID.make("agy")
+export const DEEPSEEK_HARNESS_LOCAL_MODEL_ID = Model.ID.make("deepseek-harness")
+export const WORKBUDDY_LOCAL_MODEL_ID = Model.ID.make("workbuddy")
+
+export type LocalEngine = "claude" | "codex" | "agy" | "deepseek-harness" | "workbuddy"
 
 const HEADER_REQUEST_KIND = "x-opencode-request-kind"
 const HEADER_SESSION_ID = "x-opencode-session-id"
 const HEADER_SESSION_CWD = "x-pigu-session-cwd"
 const HEADER_SESSION_METADATA = "x-pigu-session-metadata"
 
+const EngineRecordSchema = Schema.Struct({
+  sessionId: Schema.optional(Schema.String),
+  filePath: Schema.optional(Schema.String),
+})
+
 const SessionCliStateSchema = Schema.Struct({
-  lastEngine: Schema.optional(Schema.Literals(["claude", "codex"])),
+  lastEngine: Schema.optional(
+    Schema.Literals(["claude", "codex", "agy", "deepseek-harness", "workbuddy"]),
+  ),
   lastPromptCount: Schema.optional(Schema.Number),
   claudeSessionId: Schema.optional(Schema.String),
   claudeFilePath: Schema.optional(Schema.String),
   codexSessionId: Schema.optional(Schema.String),
   codexFilePath: Schema.optional(Schema.String),
+  engines: Schema.optional(Schema.Record(Schema.String, EngineRecordSchema)),
 })
 type SessionCliState = typeof SessionCliStateSchema.Type
 const decodeSessionCliState = Schema.decodeUnknownOption(SessionCliStateSchema)
@@ -60,6 +75,10 @@ function extraBinDirs() {
     path.join(home, ".local", "bin"),
     path.join(home, ".claude", "local"),
     path.join(home, ".bun", "bin"),
+    "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin",
+    "/Applications/Antigravity.app/Contents/Resources/app/bin",
+    "/Applications/WorkBuddy.app/Contents/Resources/app/bin",
+    "/Applications/CodeBuddy.app/Contents/Resources/app/bin",
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
@@ -69,16 +88,113 @@ function extraBinDirs() {
 
 function buildAugmentedPath() {
   const existing = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
-  const combined = [... new Set([...extraBinDirs(), ...existing])]
+  const combined = [...new Set([...extraBinDirs(), ...existing])]
 
   return combined.join(path.delimiter)
 }
 
-function resolveBinary(name: "claude" | "codex") {
+function resolveExecutableInPath(names: ReadonlyArray<string>) {
   const dirs = buildAugmentedPath().split(path.delimiter).filter(Boolean)
-  const found = dirs.map((dir) => path.join(dir, name)).find((candidate) => fs.existsSync(candidate))
+  const candidates = names.flatMap((name) => dirs.map((dir) => path.join(dir, name)))
 
-  return found
+  return candidates.find((candidate) => fs.existsSync(candidate))
+}
+
+function resolveEngineBinary(engine: LocalEngine) {
+  if (engine === "claude") {
+    return (
+      resolveExecutableInPath(["claude"]) ??
+      (["/Applications/Claude.app/Contents/MacOS/Claude"].find((p) => fs.existsSync(p)))
+    )
+  }
+
+  if (engine === "codex") {
+    return (
+      resolveExecutableInPath(["codex"]) ??
+      (["/Applications/Codex.app/Contents/MacOS/Codex"].find((p) => fs.existsSync(p)))
+    )
+  }
+
+  if (engine === "agy") {
+    return (
+      resolveExecutableInPath(["agy", "antigravity"]) ??
+      ([
+        "/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity",
+        "/Applications/Antigravity.app/Contents/MacOS/Electron",
+      ].find((p) => fs.existsSync(p)))
+    )
+  }
+
+  if (engine === "deepseek-harness") {
+    return (
+      resolveExecutableInPath(["dsh", "deepseek-harness"]) ??
+      ([
+        "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh",
+        "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness",
+      ].find((p) => fs.existsSync(p)))
+    )
+  }
+
+  return (
+    resolveExecutableInPath(["workbuddy", "codebuddy"]) ??
+    ([
+      "/Applications/WorkBuddy.app/Contents/Resources/app/bin/workbuddy",
+      "/Applications/WorkBuddy.app/Contents/MacOS/WorkBuddy",
+      "/Applications/CodeBuddy.app/Contents/Resources/app/bin/codebuddy",
+      "/Applications/CodeBuddy.app/Contents/MacOS/CodeBuddy",
+    ].find((p) => fs.existsSync(p)))
+  )
+}
+
+function detectLocalDisplayLabel(engine: LocalEngine) {
+  if (engine === "claude") {
+    const hasCli = Boolean(resolveExecutableInPath(["claude"]))
+    const hasApp = fs.existsSync("/Applications/Claude.app")
+    const kind = !hasCli && hasApp ? "桌面端" : "CLI"
+
+    return `claude (${kind})`
+  }
+
+  if (engine === "codex") {
+    const hasCli = Boolean(resolveExecutableInPath(["codex"]))
+    const hasApp = fs.existsSync("/Applications/Codex.app")
+    const kind = !hasCli && hasApp ? "桌面端" : "CLI"
+
+    return `codex (${kind})`
+  }
+
+  if (engine === "agy") {
+    const hasApp = fs.existsSync("/Applications/Antigravity.app")
+    const kind = hasApp ? "桌面端" : "CLI"
+
+    return `agy (${kind})`
+  }
+
+  if (engine === "deepseek-harness") {
+    const hasApp = fs.existsSync("/Applications/DeepSeek Harness.app")
+    const kind = hasApp ? "桌面端" : "CLI"
+
+    return `deepseek harness (${kind})`
+  }
+
+  const hasBuddyApp =
+    fs.existsSync("/Applications/WorkBuddy.app") || fs.existsSync("/Applications/CodeBuddy.app")
+  const hasBuddyCli = Boolean(resolveExecutableInPath(["workbuddy", "codebuddy"]))
+  const buddyKind = hasBuddyApp && !hasBuddyCli ? "桌面端" : "CLI"
+
+  return `workbuddy (${buddyKind})`
+}
+
+function normalizeEngine(modelId: string): LocalEngine {
+  if (modelId === "codex" || modelId === "codex-native") return "codex"
+
+  if (modelId === "agy" || modelId === "agy-native") return "agy"
+
+  if (modelId === "deepseek-harness" || modelId === "dsh") return "deepseek-harness"
+
+  if (modelId === "workbuddy" || modelId === "codebuddy") return "workbuddy"
+
+  return "claude"
 }
 
 function findClaudeSessionFile(home: string, sessionId: string) {
@@ -86,39 +202,85 @@ function findClaudeSessionFile(home: string, sessionId: string) {
 
   if (!fs.existsSync(projectsRoot)) return undefined
   const projectDirs = fs.readdirSync(projectsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+  const candidates = projectDirs.map((dir) => path.join(projectsRoot, dir.name, `${sessionId}.jsonl`))
 
-  for (const dir of projectDirs) {
-    const candidate = path.join(projectsRoot, dir.name, `${sessionId}.jsonl`)
-
-    if (fs.existsSync(candidate)) return candidate
-  }
-
-  return undefined
+  return candidates.find((candidate) => fs.existsSync(candidate))
 }
 
 function findCodexSessionFile(home: string, sessionId: string) {
   const sessionsRoot = path.join(home, ".codex", "sessions")
 
   if (!fs.existsSync(sessionsRoot)) return undefined
-  const years = fs.readdirSync(sessionsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+  const years = fs
+    .readdirSync(sessionsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .toSorted((a, b) => b.name.localeCompare(a.name))
 
-  for (const year of years.toSorted((a, b) => b.name.localeCompare(a.name))) {
+  const dayDirs = years.flatMap((year) => {
     const yearDir = path.join(sessionsRoot, year.name)
-    const months = fs.readdirSync(yearDir, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+    const months = fs
+      .readdirSync(yearDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .toSorted((a, b) => b.name.localeCompare(a.name))
 
-    for (const month of months.toSorted((a, b) => b.name.localeCompare(a.name))) {
+    return months.flatMap((month) => {
       const monthDir = path.join(yearDir, month.name)
-      const days = fs.readdirSync(monthDir, { withFileTypes: true }).filter((entry) => entry.isDirectory())
 
-      for (const day of days.toSorted((a, b) => b.name.localeCompare(a.name))) {
-        const dayDir = path.join(monthDir, day.name)
-        const files = fs.readdirSync(dayDir)
-        const match = files.find((file) => file.endsWith(".jsonl") && file.includes(sessionId))
+      return fs
+        .readdirSync(monthDir, { withFileTypes: true })
+        .filter((entry) => entry.isDirectory())
+        .toSorted((a, b) => b.name.localeCompare(a.name))
+        .map((day) => path.join(monthDir, day.name))
+    })
+  })
 
-        if (match) return path.join(dayDir, match)
-      }
-    }
-  }
+  return dayDirs
+    .flatMap((dayDir) =>
+      fs
+        .readdirSync(dayDir)
+        .filter((file) => file.endsWith(".jsonl") && file.includes(sessionId))
+        .map((file) => path.join(dayDir, file)),
+    )
+    .at(0)
+}
+
+function findAgySessionFile(home: string, sessionId: string) {
+  const transcript = path.join(
+    home,
+    ".gemini",
+    "antigravity",
+    "brain",
+    sessionId,
+    ".system_generated",
+    "logs",
+    "transcript.jsonl",
+  )
+
+  return fs.existsSync(transcript) ? transcript : undefined
+}
+
+function findDshSessionFile(home: string, sessionId: string) {
+  const sessionsDir = path.join(home, ".dsh", "sessions")
+
+  if (!fs.existsSync(sessionsDir)) return undefined
+  const direct = path.join(sessionsDir, `${sessionId}.jsonl`)
+
+  if (fs.existsSync(direct)) return direct
+  const directJson = path.join(sessionsDir, `${sessionId}.json`)
+
+  return fs.existsSync(directJson) ? directJson : undefined
+}
+
+function findEngineSessionFile(home: string, engine: LocalEngine, sessionId: string | undefined) {
+  if (!sessionId) return undefined
+
+  if (engine === "claude") return findClaudeSessionFile(home, sessionId)
+
+  if (engine === "codex") return findCodexSessionFile(home, sessionId)
+
+  if (engine === "agy") return findAgySessionFile(home, sessionId)
+
+  if (engine === "deepseek-harness") return findDshSessionFile(home, sessionId)
 
   return undefined
 }
@@ -150,7 +312,11 @@ function extractPromptTurns(prompt: LanguageModelV3Prompt) {
   }
 }
 
-function writeFallbackContextJsonl(home: string, sessionID: string, priorTurns: ReadonlyArray<{ role: string; text: string }>) {
+function writeFallbackContextJsonl(
+  home: string,
+  sessionID: string,
+  priorTurns: ReadonlyArray<{ role: string; text: string }>,
+) {
   const dir = path.join(home, ".cache", "pigu", "session-context")
   fs.mkdirSync(dir, { recursive: true })
   const filePath = path.join(dir, `${sessionID}.jsonl`)
@@ -261,7 +427,9 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
   }
 }
 
-async function runClaudeProcess(input: {
+async function runStreamJsonProcess(input: {
+  engineLabel: string
+  mode: "claude" | "agy"
   binary: string
   cwd: string
   prompt: string
@@ -271,7 +439,15 @@ async function runClaudeProcess(input: {
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
   const targetSessionId = input.sessionId ?? crypto.randomUUID()
-  const sessionFlag = input.resume ? ["--resume", targetSessionId] : ["--session-id", targetSessionId]
+  const sessionFlag =
+    input.mode === "agy"
+      ? input.resume && input.sessionId
+        ? ["--conversation", input.sessionId]
+        : []
+      : input.resume
+        ? ["--resume", targetSessionId]
+        : ["--session-id", targetSessionId]
+
   const args = [
     "-p",
     "--output-format",
@@ -296,7 +472,7 @@ async function runClaudeProcess(input: {
     })
 
     const state = {
-      detectedSessionId: input.sessionId ?? targetSessionId,
+      detectedSessionId: input.sessionId ?? (input.mode === "claude" ? targetSessionId : undefined),
       streamedMessageIds: new Set<string>(),
       currentMessageId: "",
       stderrText: "",
@@ -319,6 +495,10 @@ async function runClaudeProcess(input: {
 
       if (typeof row.session_id === "string" && row.session_id) {
         state.detectedSessionId = row.session_id
+      }
+
+      if (typeof row.conversation_id === "string" && row.conversation_id) {
+        state.detectedSessionId = row.conversation_id
       }
 
       if (row.type === "stream_event" && row.parent_tool_use_id === null && isRecord(row.event)) {
@@ -366,7 +546,7 @@ async function runClaudeProcess(input: {
           if (!isRecord(part)) return
 
           if (part.type === "tool_use" && typeof part.name === "string") {
-            input.emitter.pushReasoning(`\n[Claude 原生工具: ${part.name}]\n`)
+            input.emitter.pushReasoning(`\n[${input.engineLabel} 原生工具: ${part.name}]\n`)
 
             return
           }
@@ -419,8 +599,8 @@ async function runClaudeProcess(input: {
       if (state.buffer.trim()) handleLine(state.buffer)
 
       if (!input.emitter.state.hasText && code !== 0 && !input.signal.aborted) {
-        const detail = state.stderrText.trim() || `claude 进程退出码 ${code ?? "unknown"}`
-        input.emitter.pushText(`Claude 原生 CLI 执行出错：${detail}`)
+        const detail = state.stderrText.trim() || `${input.engineLabel} 进程退出码 ${code ?? "unknown"}`
+        input.emitter.pushText(`${input.engineLabel} 执行出错：${detail}`)
       }
 
       resolve({ sessionId: state.detectedSessionId })
@@ -512,7 +692,7 @@ async function runCodexProcess(input: {
         const item = row.item
 
         if (item.type === "command_execution" && typeof item.command === "string") {
-          input.emitter.pushReasoning(`\n[Codex 原生命令: ${item.command}]\n`)
+          input.emitter.pushReasoning(`\n[codex 原生命令: ${item.command}]\n`)
         }
 
         return
@@ -528,7 +708,7 @@ async function runCodexProcess(input: {
         }
 
         if (item.type === "file_change") {
-          input.emitter.pushReasoning("\n[Codex 原生文件变更]\n")
+          input.emitter.pushReasoning("\n[codex 原生文件变更]\n")
 
           return
         }
@@ -605,7 +785,7 @@ async function runCodexProcess(input: {
 
       if (!input.emitter.state.hasText && code !== 0 && !input.signal.aborted) {
         const detail = state.stderrText.trim() || `codex 进程退出码 ${code ?? "unknown"}`
-        input.emitter.pushText(`Codex 原生 CLI 执行出错：${detail}`)
+        input.emitter.pushText(`codex 执行出错：${detail}`)
       }
 
       resolve({ sessionId: state.detectedSessionId })
@@ -613,9 +793,95 @@ async function runCodexProcess(input: {
   })
 }
 
-class NativeCliLanguageModel implements LanguageModelV3 {
+async function runPlainCliProcess(input: {
+  engineLabel: string
+  binary: string
+  args: ReadonlyArray<string>
+  cwd: string
+  sessionId?: string
+  signal: AbortSignal
+  emitter: ReturnType<typeof createStreamEmitter>
+}): Promise<{ sessionId?: string }> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    PATH: buildAugmentedPath(),
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = childProcess.spawn(input.binary, [...input.args], {
+      cwd: input.cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+
+    const state = {
+      stderrText: "",
+    }
+
+    const onAbort = () => {
+      child.kill("SIGTERM")
+    }
+    input.signal.addEventListener("abort", onAbort, { once: true })
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      const text = chunk.toString("utf8")
+
+      if (text) input.emitter.pushText(text)
+    })
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      state.stderrText += chunk.toString("utf8")
+    })
+
+    child.on("error", (err) => {
+      input.signal.removeEventListener("abort", onAbort)
+      reject(err)
+    })
+
+    child.on("close", (code) => {
+      input.signal.removeEventListener("abort", onAbort)
+
+      if (!input.emitter.state.hasText && code !== 0 && !input.signal.aborted) {
+        const detail = state.stderrText.trim() || `${input.engineLabel} 进程退出码 ${code ?? "unknown"}`
+        input.emitter.pushText(`${input.engineLabel} 执行出错：${detail}`)
+      }
+
+      resolve({ sessionId: input.sessionId })
+    })
+  })
+}
+
+function getEngineRecord(
+  saved: SessionCliState,
+  engine: LocalEngine,
+  initialSource: LocalEngine | undefined,
+  parsedMetadata: typeof SessionMetadataSchema.Type | undefined,
+  home: string,
+) {
+  const fromMap = saved.engines?.[engine]
+  const legacySessionId =
+    engine === "claude" ? saved.claudeSessionId : engine === "codex" ? saved.codexSessionId : undefined
+  const legacyFilePath =
+    engine === "claude" ? saved.claudeFilePath : engine === "codex" ? saved.codexFilePath : undefined
+
+  const sessionId =
+    fromMap?.sessionId ??
+    legacySessionId ??
+    (initialSource === engine ? parsedMetadata?.externalID : undefined)
+
+  const filePath =
+    fromMap?.filePath ??
+    legacyFilePath ??
+    (initialSource === engine
+      ? parsedMetadata?.filePath ?? findEngineSessionFile(home, engine, sessionId)
+      : findEngineSessionFile(home, engine, sessionId))
+
+  return { sessionId, filePath }
+}
+
+class LocalLanguageModel implements LanguageModelV3 {
   readonly specificationVersion = "v3"
-  readonly provider = NATIVE_CLI_PROVIDER_ID
+  readonly provider = LOCAL_PROVIDER_ID
   readonly supportedUrls = {}
 
   constructor(
@@ -626,7 +892,7 @@ class NativeCliLanguageModel implements LanguageModelV3 {
   ) {}
 
   async doGenerate(_options: LanguageModelV3CallOptions): Promise<never> {
-    throw new Error("Native CLI models only support streaming")
+    throw new Error("Local models only support streaming")
   }
 
   async doStream(options: LanguageModelV3CallOptions): Promise<LanguageModelV3StreamResult> {
@@ -668,15 +934,13 @@ class NativeCliLanguageModel implements LanguageModelV3 {
             return
           }
 
-          const currentEngine: "claude" | "codex" = this.modelId === CODEX_NATIVE_MODEL_ID ? "codex" : "claude"
-          const binary = resolveBinary(currentEngine)
+          const currentEngine = normalizeEngine(this.modelId)
+          const binary = resolveEngineBinary(currentEngine)
 
           if (!binary) {
-            const installHint =
-              currentEngine === "claude"
-                ? "未在本机检测到 `claude` CLI。请先安装 Claude Code 并在终端执行 `claude auth login` 登录您的订阅账号。"
-                : "未在本机检测到 `codex` CLI。请先安装 Codex CLI 并在终端完成订阅登录。"
-            emitter.pushText(installHint)
+            emitter.pushText(
+              `未在本机检测到 \`${currentEngine}\` 本地客户端或 CLI。请先安装对应工具或在「设置 -> 拓展 -> 插件」中检查配置。`,
+            )
             emitter.finish()
             controller.close()
 
@@ -685,36 +949,16 @@ class NativeCliLanguageModel implements LanguageModelV3 {
 
           const home = os.homedir()
           const saved = sessionID ? await this.getSessionState(sessionID) : {}
-          const initialExternalSource =
+          const initialExternalSource: LocalEngine | undefined =
             saved.lastEngine === undefined &&
-            (parsedMetadata?.source === "claude" || parsedMetadata?.source === "codex")
+            (parsedMetadata?.source === "claude" ||
+              parsedMetadata?.source === "codex" ||
+              parsedMetadata?.source === "agy")
               ? parsedMetadata.source
               : undefined
 
-          const claudeSessionId =
-            saved.claudeSessionId ??
-            (initialExternalSource === "claude" ? parsedMetadata?.externalID : undefined)
-          const codexSessionId =
-            saved.codexSessionId ??
-            (initialExternalSource === "codex" ? parsedMetadata?.externalID : undefined)
-
-          const claudeFilePath =
-            saved.claudeFilePath ??
-            (initialExternalSource === "claude"
-              ? parsedMetadata?.filePath ?? (claudeSessionId ? findClaudeSessionFile(home, claudeSessionId) : undefined)
-              : claudeSessionId
-                ? findClaudeSessionFile(home, claudeSessionId)
-                : undefined)
-
-          const codexFilePath =
-            saved.codexFilePath ??
-            (initialExternalSource === "codex"
-              ? parsedMetadata?.filePath ?? (codexSessionId ? findCodexSessionFile(home, codexSessionId) : undefined)
-              : codexSessionId
-                ? findCodexSessionFile(home, codexSessionId)
-                : undefined)
-
           const effectiveLastEngine = saved.lastEngine ?? initialExternalSource
+          const currentRecord = getEngineRecord(saved, currentEngine, initialExternalSource, parsedMetadata, home)
 
           const isSameEngineWithoutGap =
             priorTurns.length === 0 ||
@@ -726,12 +970,12 @@ class NativeCliLanguageModel implements LanguageModelV3 {
           const contextFileToRead = (() => {
             if (isSameEngineWithoutGap) return undefined
 
-            if (effectiveLastEngine === "codex" && codexFilePath && fs.existsSync(codexFilePath)) {
-              return codexFilePath
-            }
+            if (effectiveLastEngine) {
+              const prevRecord = getEngineRecord(saved, effectiveLastEngine, initialExternalSource, parsedMetadata, home)
 
-            if (effectiveLastEngine === "claude" && claudeFilePath && fs.existsSync(claudeFilePath)) {
-              return claudeFilePath
+              if (prevRecord.filePath && fs.existsSync(prevRecord.filePath)) {
+                return prevRecord.filePath
+              }
             }
 
             if (
@@ -749,58 +993,88 @@ class NativeCliLanguageModel implements LanguageModelV3 {
             ? `请先使用文件读取工具读取会话记录文件 ${contextFileToRead} 以了解此前的对话上下文，然后继续处理以下请求：\n\n${userText}`
             : userText
 
-          if (currentEngine === "claude") {
-            const canResume = Boolean(claudeSessionId && claudeFilePath && fs.existsSync(claudeFilePath))
-            const result = await runClaudeProcess({
-              binary,
-              cwd,
-              prompt: finalPrompt,
-              sessionId: claudeSessionId,
-              resume: canResume,
-              signal,
-              emitter,
-            })
-            const nextClaudeId = result.sessionId ?? claudeSessionId
-            const nextClaudeFile = nextClaudeId ? findClaudeSessionFile(home, nextClaudeId) ?? claudeFilePath : claudeFilePath
+          const canResume = Boolean(
+            currentRecord.sessionId && currentRecord.filePath && fs.existsSync(currentRecord.filePath),
+          )
 
-            if (sessionID) {
-              await this.setSessionState(sessionID, {
-                lastEngine: "claude",
-                lastPromptCount: priorTurns.length + 2,
-                claudeSessionId: nextClaudeId,
-                claudeFilePath: nextClaudeFile,
-                codexSessionId,
-                codexFilePath,
+          const runResult = await (async () => {
+            if (currentEngine === "claude" || currentEngine === "agy") {
+              return runStreamJsonProcess({
+                engineLabel: currentEngine,
+                mode: currentEngine,
+                binary,
+                cwd,
+                prompt: finalPrompt,
+                sessionId: currentRecord.sessionId,
+                resume: canResume,
+                signal,
+                emitter,
               })
             }
 
-            emitter.finish()
-            controller.close()
+            if (currentEngine === "codex") {
+              return runCodexProcess({
+                binary,
+                cwd,
+                prompt: finalPrompt,
+                sessionId: currentRecord.sessionId,
+                resume: canResume,
+                signal,
+                emitter,
+              })
+            }
 
-            return
-          }
+            if (currentEngine === "deepseek-harness") {
+              const dshArgs = [
+                "--profile",
+                "headless",
+                ...(canResume && currentRecord.sessionId ? ["--session-id", currentRecord.sessionId] : []),
+                finalPrompt,
+              ]
 
-          const canResumeCodex = Boolean(codexSessionId && codexFilePath && fs.existsSync(codexFilePath))
-          const result = await runCodexProcess({
-            binary,
-            cwd,
-            prompt: finalPrompt,
-            sessionId: codexSessionId,
-            resume: canResumeCodex,
-            signal,
-            emitter,
-          })
-          const nextCodexId = result.sessionId ?? codexSessionId
-          const nextCodexFile = nextCodexId ? findCodexSessionFile(home, nextCodexId) ?? codexFilePath : codexFilePath
+              return runPlainCliProcess({
+                engineLabel: "deepseek harness",
+                binary,
+                args: dshArgs,
+                cwd,
+                sessionId: currentRecord.sessionId,
+                signal,
+                emitter,
+              })
+            }
+
+            return runPlainCliProcess({
+              engineLabel: "workbuddy",
+              binary,
+              args: ["-p", finalPrompt],
+              cwd,
+              sessionId: currentRecord.sessionId,
+              signal,
+              emitter,
+            })
+          })()
+
+          const nextSessionId = runResult.sessionId ?? currentRecord.sessionId
+          const nextFilePath =
+            findEngineSessionFile(home, currentEngine, nextSessionId) ?? currentRecord.filePath
 
           if (sessionID) {
+            const nextEngines = {
+              ...(saved.engines ?? {}),
+              [currentEngine]: {
+                sessionId: nextSessionId,
+                filePath: nextFilePath,
+              },
+            }
+
             await this.setSessionState(sessionID, {
-              lastEngine: "codex",
+              lastEngine: currentEngine,
               lastPromptCount: priorTurns.length + 2,
-              claudeSessionId,
-              claudeFilePath,
-              codexSessionId: nextCodexId,
-              codexFilePath: nextCodexFile,
+              claudeSessionId: currentEngine === "claude" ? nextSessionId : saved.claudeSessionId,
+              claudeFilePath: currentEngine === "claude" ? nextFilePath : saved.claudeFilePath,
+              codexSessionId: currentEngine === "codex" ? nextSessionId : saved.codexSessionId,
+              codexFilePath: currentEngine === "codex" ? nextFilePath : saved.codexFilePath,
+              engines: nextEngines,
             })
           }
 
@@ -821,13 +1095,13 @@ class NativeCliLanguageModel implements LanguageModelV3 {
   }
 }
 
-function buildNativeModel(id: Model.ID, name: string): Model.Info {
-  const defaults = Model.Info.default(NATIVE_CLI_PROVIDER_ID, id)
+function buildLocalModel(id: Model.ID, name: string): Model.Info {
+  const defaults = Model.Info.default(LOCAL_PROVIDER_ID, id)
 
   return {
     ...defaults,
     name,
-    package: Provider.aisdk(NATIVE_CLI_PACKAGE),
+    package: Provider.aisdk(LOCAL_PACKAGE),
     capabilities: {
       tools: true,
       input: ["text", "image", "pdf"],
@@ -842,7 +1116,7 @@ function buildNativeModel(id: Model.ID, name: string): Model.Info {
 }
 
 export const NativeCliProviderPlugin = define({
-  id: "pigu.provider.native-cli",
+  id: "pigu.provider.local",
   effect: Effect.fn("NativeCliProvider.Plugin")(function* (ctx: Context) {
     const context = yield* Effect.context<never>()
     const runPromise = Effect.runPromiseWith(context)
@@ -860,14 +1134,17 @@ export const NativeCliProviderPlugin = define({
     yield* ctx.provider.transform((editor) => {
       editor.add({
         info: {
-          id: NATIVE_CLI_PROVIDER_ID,
-          name: "本机订阅 (原生 CLI)",
+          id: LOCAL_PROVIDER_ID,
+          name: "本地",
           activation: "enabled",
-          package: Provider.aisdk(NATIVE_CLI_PACKAGE),
+          package: Provider.aisdk(LOCAL_PACKAGE),
         },
         models: [
-          buildNativeModel(CLAUDE_NATIVE_MODEL_ID, "Claude 订阅 (原生 CLI)"),
-          buildNativeModel(CODEX_NATIVE_MODEL_ID, "Codex 订阅 (原生 CLI)"),
+          buildLocalModel(CLAUDE_LOCAL_MODEL_ID, detectLocalDisplayLabel("claude")),
+          buildLocalModel(CODEX_LOCAL_MODEL_ID, detectLocalDisplayLabel("codex")),
+          buildLocalModel(AGY_LOCAL_MODEL_ID, detectLocalDisplayLabel("agy")),
+          buildLocalModel(DEEPSEEK_HARNESS_LOCAL_MODEL_ID, detectLocalDisplayLabel("deepseek-harness")),
+          buildLocalModel(WORKBUDDY_LOCAL_MODEL_ID, detectLocalDisplayLabel("workbuddy")),
         ],
       })
     })
@@ -876,13 +1153,13 @@ export const NativeCliProviderPlugin = define({
       "sdk",
       (evt) =>
         Effect.sync(() => {
-          if (evt.package !== NATIVE_CLI_PACKAGE) return
+          if (evt.package !== LOCAL_PACKAGE) return
           evt.sdk = {
             languageModel: (modelID: string) =>
-              new NativeCliLanguageModel(modelID, getSessionState, setSessionState, ctx.location.directory),
+              new LocalLanguageModel(modelID, getSessionState, setSessionState, ctx.location.directory),
           }
         }),
-      { providerID: NATIVE_CLI_PROVIDER_ID },
+      { providerID: LOCAL_PROVIDER_ID },
     )
 
     yield* ctx.session.hook(
@@ -898,17 +1175,17 @@ export const NativeCliProviderPlugin = define({
             event.headers[HEADER_SESSION_METADATA] = JSON.stringify(session.value.metadata ?? {})
           }
         }),
-      { providerID: NATIVE_CLI_PROVIDER_ID },
+      { providerID: LOCAL_PROVIDER_ID },
     )
 
     yield* ctx.session.hook(
       "context",
       (event) =>
         Effect.sync(() => {
-          // Native CLI tools run inside the native CLI process itself, not via Pigu's tool loop.
+          // Local tools run inside the native local agent process itself, not via Pigu's API tool loop.
           event.tools = {}
         }),
-      { providerID: NATIVE_CLI_PROVIDER_ID },
+      { providerID: LOCAL_PROVIDER_ID },
     )
 
     yield* ctx.session.hook(
@@ -917,7 +1194,7 @@ export const NativeCliProviderPlugin = define({
         Effect.sync(() => {
           event.decision = { retry: false }
         }),
-      { providerID: NATIVE_CLI_PROVIDER_ID },
+      { providerID: LOCAL_PROVIDER_ID },
     )
   }),
 } satisfies PluginInternal.InternalPlugin)
