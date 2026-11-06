@@ -274,6 +274,24 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       },
     }
 
+    const resolveSessionModel = (session: ReturnType<typeof durable>): ModelKey | undefined => {
+      if (!session?.model) return undefined
+
+      if (session.model.providerID === "pigu" && session.model.id === "default") {
+        if (session.metadata?.source === "claude") {
+          return { providerID: "native-cli", modelID: "claude-native" }
+        }
+
+        if (session.metadata?.source === "codex") {
+          return { providerID: "native-cli", modelID: "codex-native" }
+        }
+
+        return undefined
+      }
+
+      return { providerID: session.model.providerID, modelID: session.model.id }
+    }
+
     // The chosen model, kept even when the catalog no longer offers it.
     const key = createMemo<ModelKey | undefined>(() => {
       if (!configuredModel.ready()) return
@@ -283,8 +301,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       // Catalog availability must not replace a user's choice with a default on the next submission.
       return (
         scope()?.model ??
-        (session?.model && (!session.agent || session.agent === agent.current()?.name)
-          ? { providerID: session.model.providerID, modelID: session.model.id }
+        (session && (!session.agent || session.agent === agent.current()?.name)
+          ? resolveSessionModel(session)
           : undefined) ??
         firstModel(() => agent.current()?.model, fallback)
       )
@@ -306,11 +324,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
       if (draft?.model) return { model: draft.model, selected: draft.variant }
       const session = durable()
+      const resolved = resolveSessionModel(session)
 
-      if (!session?.model || (draft?.agent && draft.agent !== session.agent)) return
+      if (!session?.model || !resolved || (draft?.agent && draft.agent !== session.agent)) return
 
       return {
-        model: { providerID: session.model.providerID, modelID: session.model.id },
+        model: resolved,
         selected: session.model.variant ?? null,
       }
     }

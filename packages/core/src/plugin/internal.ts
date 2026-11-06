@@ -104,6 +104,7 @@ import { PlanPlugin } from "./plan.js"
 import { GoalPlugin } from "./goal.js"
 import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
 import { DynamicProviderPlugin } from "./provider/dynamic.js"
+import { NativeCliProviderPlugin } from "./provider/native-cli.js"
 import { OpencodePlugin } from "./provider/opencode.js"
 import { PiguProviderPlugin } from "./provider/pigu.js"
 import { SkillPlugin } from "./skill.js"
@@ -249,6 +250,7 @@ const pre = [
   SkillPlugin.Plugin,
   VcsHgPlugin.Plugin,
   PiguProviderPlugin,
+  NativeCliProviderPlugin,
   PatchTool.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.
   ...OptimizePlugin.Plugins,

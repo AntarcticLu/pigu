@@ -34,6 +34,7 @@ interface DiscoveredSession {
   readonly source: SourceApp
   readonly sourceLabel: string
   readonly externalID: string
+  readonly filePath: string
   readonly cwd: string
   readonly title: string
   readonly createdAt: number
@@ -269,6 +270,7 @@ const scanCodex = Effect.fn("SessionExternal.scanCodex")(function* (
         source: "codex",
         sourceLabel: "Codex",
         externalID,
+        filePath: fullPath,
         cwd,
         title: titles.get(externalID) ?? cleanTitle(firstUser.text),
         createdAt,
@@ -369,6 +371,7 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
         source: "claude",
         sourceLabel: "Claude",
         externalID,
+        filePath: path.join(claudeRoot, rel),
         cwd,
         title: cleanTitle(firstUser.text),
         createdAt: createdAt || fallbackTime,
@@ -458,6 +461,7 @@ const scanAgy = Effect.fn("SessionExternal.scanAgy")(function* (
         source: "agy",
         sourceLabel: "AGY",
         externalID: convID,
+        filePath: transcriptPath,
         cwd: inferredCwd,
         title: cleanTitle(firstUser.text),
         createdAt: createdAt || fallbackTime,
@@ -543,13 +547,13 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
         source: "pi",
         sourceLabel: "Pi",
         externalID: rel,
+        filePath: path.join(piRoot, rel),
         cwd,
         title: cleanTitle(firstUser.text),
         createdAt: createdAt || fallbackTime,
         updatedAt: Math.max(createdAt || fallbackTime, updatedAt || fallbackTime),
         messages,
       }
-
       return discovered
     }),
     { concurrency: 6 },
@@ -574,8 +578,21 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   lastSyncAt = now
 
   const home = os.homedir()
+  const claudeNativeModel = {
+    providerID: Provider.ID.make("native-cli"),
+    id: Model.ID.make("claude-native"),
+  }
+  const codexNativeModel = {
+    providerID: Provider.ID.make("native-cli"),
+    id: Model.ID.make("codex-native"),
+  }
+  const defaultModel = {
+    providerID: Provider.ID.make("pigu"),
+    id: Model.ID.make("default"),
+  }
+
   const existingRows = yield* input.db
-    .select({ id: SessionTable.id })
+    .select({ id: SessionTable.id, model: SessionTable.model })
     .from(SessionTable)
     .where(like(SessionTable.id, "ses_ext_%"))
     .all()
@@ -583,6 +600,26 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
 
   for (const row of existingRows) {
     checkedExternalIDs.add(row.id)
+
+    if (row.model?.providerID === "pigu" && row.model?.id === "default") {
+      if (row.id.startsWith("ses_ext_claude_")) {
+        yield* input.db
+          .update(SessionTable)
+          .set({ model: claudeNativeModel })
+          .where(eq(SessionTable.id, row.id))
+          .run()
+          .pipe(Effect.ignoreCause)
+      }
+
+      if (row.id.startsWith("ses_ext_codex_")) {
+        yield* input.db
+          .update(SessionTable)
+          .set({ model: codexNativeModel })
+          .where(eq(SessionTable.id, row.id))
+          .run()
+          .pipe(Effect.ignoreCause)
+      }
+    }
   }
 
   const [codex, claude, agy, pi] = yield* Effect.all([
@@ -598,12 +635,14 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
 
   const resolvedDirs = new Map<string, Project.Resolved>()
   const defaultAgent = Agent.ID.make("build")
-  const defaultModel = {
-    providerID: Provider.ID.make("pigu"),
-    id: Model.ID.make("default"),
-  }
 
   for (const session of all) {
+    const sessionModel =
+      session.source === "claude"
+        ? claudeNativeModel
+        : session.source === "codex"
+          ? codexNativeModel
+          : defaultModel
     const validDir = yield* resolveExistingDir(input.fs, session.cwd, home)
     const cachedProject = resolvedDirs.get(validDir)
     const project = cachedProject ?? (yield* input.projects.resolve(AbsolutePath.make(validDir)))
@@ -629,9 +668,10 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
           source: session.source,
           sourceLabel: session.sourceLabel,
           externalID: session.externalID,
+          filePath: session.filePath,
         },
         agent: defaultAgent,
-        model: defaultModel,
+        model: sessionModel,
         cost: 0,
         tokens_input: 0,
         tokens_output: 0,
@@ -695,7 +735,7 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
         time_updated: msg.time,
         data: {
           agent: defaultAgent,
-          model: defaultModel,
+          model: sessionModel,
           content,
           finish: "stop" as const,
           time: {
