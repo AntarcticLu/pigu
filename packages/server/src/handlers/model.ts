@@ -1,4 +1,5 @@
 import { Model } from "@opencode/core/model"
+import { Provider } from "@opencode/core/provider"
 import { Effect } from "effect"
 import { HttpApiBuilder } from "effect/http-api"
 import { Api } from "../api"
@@ -11,6 +12,8 @@ export const ModelHandler = HttpApiBuilder.group(Api, "server.model", (handlers)
         "model.list",
         Effect.fn(function* (ctx) {
           yield* awaitPlugins
+          const providers = yield* Provider.Service
+          yield* providers.reload()
           const models = yield* Model.Service
           return yield* response(models.available(ctx.query.types))
         }),

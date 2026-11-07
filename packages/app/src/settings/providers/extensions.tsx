@@ -105,6 +105,7 @@ export const SettingsExtensions: Component<{
     target: "",
     description: "",
     query: "",
+    scanning: false,
   })
 
   const [skillForm, setSkillForm] = createStore({
@@ -118,9 +119,12 @@ export const SettingsExtensions: Component<{
 
   createEffect(() => {
     if (serverSdk.connection.status() !== "connected") return
+    const ref = location()
     void data.location.mcp.server.sync(data.location.default()).catch(() => undefined)
+    void data.location.provider.sync(ref).catch(() => undefined)
+    void data.location.model.sync(ref).catch(() => undefined)
 
-    if (props.directory) void data.location.mcp.server.sync(location()).catch(() => undefined)
+    if (props.directory) void data.location.mcp.server.sync(ref).catch(() => undefined)
   })
 
   // Ensure custom MCP servers saved in the store are registered with the live backend.
@@ -348,8 +352,10 @@ export const SettingsExtensions: Component<{
       if (scopeStore.isPluginRemoved(custom.id)) continue
       const builtinLocal = BUILTIN_LOCAL_AGENT_PLUGINS.find((item) => item.id === custom.id)
       const cleanedName = builtinLocal ? stripLegacyLocalPluginSuffix(custom.name) : custom.name
+
       const isOldDefaultDesc =
         custom.description?.includes("桥接") || custom.description?.includes("调用 agy 模型")
+
       byID.set(custom.id, {
         id: custom.id,
         name: cleanedName,
@@ -373,7 +379,11 @@ export const SettingsExtensions: Component<{
         const aRank = localOrder.get(a.id)
         const bRank = localOrder.get(b.id)
 
-        if (aRank !== undefined && bRank !== undefined) return aRank - bRank
+        if (aRank !== undefined && bRank !== undefined) {
+          if (Boolean(a.detected) !== Boolean(b.detected)) return a.detected ? -1 : 1
+
+          return aRank - bRank
+        }
 
         if (aRank !== undefined) return -1
 
@@ -395,6 +405,22 @@ export const SettingsExtensions: Component<{
         item.description.toLowerCase().includes(q),
     )
   })
+
+  const rescanLocalPlugins = async () => {
+    setPluginForm("scanning", true)
+    const ref = location()
+    await Promise.all([
+      data.location.provider.sync(ref).catch(() => undefined),
+      data.location.model.sync(ref).catch(() => undefined),
+      Promise.resolve(refetchPlugins()).catch(() => undefined),
+    ])
+    setPluginForm("scanning", false)
+    const detectedCount = plugins().filter((item) => item.id.startsWith("local:") && item.detected).length
+    showToast({
+      variant: "success",
+      title: `已重新扫描本机环境，当前已识别 ${detectedCount} 个插件`,
+    })
+  }
 
   const resetPluginForm = () => {
     setPluginForm({
@@ -762,27 +788,37 @@ export const SettingsExtensions: Component<{
                     onClearClick={() => setPluginForm("query", "")}
                   />
                 </div>
-                <Button
-                  size="small"
-                  variant={pluginForm.open ? "ghost" : "outline"}
-                  onClick={() => {
-                    if (pluginForm.open) {
-                      resetPluginForm()
+                <div class="flex items-center gap-1.5">
+                  <Button
+                    size="small"
+                    variant="ghost"
+                    disabled={pluginForm.scanning}
+                    onClick={() => void rescanLocalPlugins()}
+                  >
+                    {pluginForm.scanning ? "检测中..." : "重新检测"}
+                  </Button>
+                  <Button
+                    size="small"
+                    variant={pluginForm.open ? "ghost" : "outline"}
+                    onClick={() => {
+                      if (pluginForm.open) {
+                        resetPluginForm()
 
-                      return
-                    }
+                        return
+                      }
 
-                    setPluginForm({
-                      open: true,
-                      editingID: "",
-                      name: "",
-                      target: "",
-                      description: "",
-                    })
-                  }}
-                >
-                  {pluginForm.open ? "收起" : "+ 新增插件"}
-                </Button>
+                      setPluginForm({
+                        open: true,
+                        editingID: "",
+                        name: "",
+                        target: "",
+                        description: "",
+                      })
+                    }}
+                  >
+                    {pluginForm.open ? "收起" : "+ 新增插件"}
+                  </Button>
+                </div>
               </div>
 
               <Show when={pluginForm.open}>
