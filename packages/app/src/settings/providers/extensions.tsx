@@ -26,6 +26,7 @@ import {
   localizeSkillDescription,
   resolveSkillOrigin,
   skillScopeKey,
+  stripLegacyLocalPluginSuffix,
   useExtensionScopeStore,
   type ScopedSkillInfo,
 } from "@/shell/titlebar/extension-scope-store"
@@ -336,28 +337,38 @@ export const SettingsExtensions: Component<{
     for (const custom of scopeStore.customPlugins()) {
       if (scopeStore.isPluginRemoved(custom.id)) continue
       const builtinLocal = BUILTIN_LOCAL_AGENT_PLUGINS.find((item) => item.id === custom.id)
+      const cleanedName = builtinLocal ? stripLegacyLocalPluginSuffix(custom.name) : custom.name
+      const isOldDefaultDesc = custom.description?.includes("桥接")
       byID.set(custom.id, {
         id: custom.id,
-        name: custom.name,
+        name: cleanedName,
         target: custom.target,
-        description: custom.description || builtinLocal?.description || custom.target,
+        description:
+          (!isOldDefaultDesc && custom.description) || builtinLocal?.description || custom.target,
         enabled: custom.enabled,
         custom: true,
       })
     }
 
-    return Array.from(byID.values()).toSorted((a, b) => {
-      const aRank = localOrder.get(a.id)
-      const bRank = localOrder.get(b.id)
+    return Array.from(byID.values())
+      .map((item) => ({
+        ...item,
+        enabled: props.directory
+          ? scopeStore.isProjectPluginEnabled(props.directory, item.id, item.enabled)
+          : item.enabled,
+      }))
+      .toSorted((a, b) => {
+        const aRank = localOrder.get(a.id)
+        const bRank = localOrder.get(b.id)
 
-      if (aRank !== undefined && bRank !== undefined) return aRank - bRank
+        if (aRank !== undefined && bRank !== undefined) return aRank - bRank
 
-      if (aRank !== undefined) return -1
+        if (aRank !== undefined) return -1
 
-      if (bRank !== undefined) return 1
+        if (bRank !== undefined) return 1
 
-      return a.name.localeCompare(b.name)
-    })
+        return a.name.localeCompare(b.name)
+      })
   })
 
   const filteredPlugins = createMemo(() => {
@@ -414,6 +425,12 @@ export const SettingsExtensions: Component<{
   }
 
   const togglePlugin = (item: PluginDisplayRow, enabled: boolean) => {
+    if (props.directory) {
+      scopeStore.setProjectPluginEnabled(props.directory, item.id, enabled)
+
+      return
+    }
+
     if (item.custom) {
       scopeStore.saveCustomPlugin({
         id: item.id,
@@ -794,7 +811,14 @@ export const SettingsExtensions: Component<{
                       <div class="settings-extension-lead min-w-0 flex-1">
                         <Icon name="cube" class="text-v2-icon-icon-muted shrink-0" />
                         <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <span class="settings-extension-name truncate">{item.name}</span>
+                          <div class="flex items-center gap-1.5">
+                            <span class="settings-extension-name truncate">{item.name}</span>
+                            <Show when={item.id.startsWith("local:")}>
+                              <span class="shrink-0 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] leading-none font-medium text-indigo-600 dark:text-indigo-400">
+                                本地模型 + 会话识别
+                              </span>
+                            </Show>
+                          </div>
                           <Show when={item.description}>
                             <span class="truncate text-11-regular text-v2-text-text-faint">{item.description}</span>
                           </Show>

@@ -186,42 +186,15 @@ function resolveEngineBinary(engine: LocalEngine) {
 }
 
 function detectLocalDisplayLabel(engine: LocalEngine) {
-  if (engine === "claude") {
-    const hasGlobalCli = Boolean(resolveGlobalExecutable(["claude"]))
-    const hasApp = fs.existsSync("/Applications/Claude.app") || Boolean(resolveAppBundledCli("claude"))
-    const kind = !hasGlobalCli && hasApp ? "桌面端" : "CLI"
+  if (engine === "claude") return "claude"
 
-    return `claude (${kind})`
-  }
+  if (engine === "codex") return "codex"
 
-  if (engine === "codex") {
-    const hasGlobalCli = Boolean(resolveGlobalExecutable(["codex"]))
-    const hasApp = fs.existsSync("/Applications/Codex.app") || Boolean(resolveAppBundledCli("codex"))
-    const kind = !hasGlobalCli && hasApp ? "桌面端" : "CLI"
+  if (engine === "agy") return "agy"
 
-    return `codex (${kind})`
-  }
+  if (engine === "deepseek-harness") return "deepseek harness"
 
-  if (engine === "agy") {
-    const hasApp = fs.existsSync("/Applications/Antigravity.app")
-    const kind = hasApp ? "桌面端" : "CLI"
-
-    return `agy (${kind})`
-  }
-
-  if (engine === "deepseek-harness") {
-    const hasApp = fs.existsSync("/Applications/DeepSeek Harness.app")
-    const kind = hasApp ? "桌面端" : "CLI"
-
-    return `deepseek harness (${kind})`
-  }
-
-  const hasBuddyApp =
-    fs.existsSync("/Applications/WorkBuddy.app") || fs.existsSync("/Applications/CodeBuddy.app")
-  const hasBuddyCli = Boolean(resolveGlobalExecutable(["workbuddy", "codebuddy"]))
-  const buddyKind = hasBuddyApp && !hasBuddyCli ? "桌面端" : "CLI"
-
-  return `workbuddy (${buddyKind})`
+  return "workbuddy"
 }
 
 function normalizeEngine(modelId: string): LocalEngine {

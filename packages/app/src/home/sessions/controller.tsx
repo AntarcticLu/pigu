@@ -23,6 +23,7 @@ import { archiveHomeSession } from "./archive"
 import { homeSessionsQuery } from "./queries"
 import type { HomeController } from "../model"
 import { buildHomeSessionRecords, homeProjectForSession, homeSessionLocation, type HomeSessionRecord } from "./records"
+import { useExtensionScopeStore } from "@/shell/titlebar/extension-scope-store"
 
 export type { HomeSessionRecord } from "./records"
 
@@ -41,6 +42,7 @@ export function createHomeSessionsController(home: HomeController) {
   const language = useLanguage()
   const platform = usePlatform()
   const queryClient = useQueryClient()
+  const scopeStore = useExtensionScopeStore()
 
   const projectDirectories = createMemo(() => {
     const selected = home.selection.value().directory
@@ -68,9 +70,13 @@ export function createHomeSessionsController(home: HomeController) {
     if (!ctx || !conn) return []
 
     return retainHomeSessions(
-      ctx.data.session.apply(
-        mergeHomeSessionIndex(sessionLoad.isPending ? [] : (sessionLoad.data?.() ?? []), ctx.data.session.list()),
-      ),
+      ctx.data.session
+        .apply(
+          mergeHomeSessionIndex(sessionLoad.isPending ? [] : (sessionLoad.data?.() ?? []), ctx.data.session.list()),
+        )
+        .filter((session) =>
+          scopeStore.isSessionSourceEnabled(String(session.metadata?.source ?? ""), session.location.directory),
+        ),
       HOME_SESSION_LIMIT,
       Date.now(),
     )

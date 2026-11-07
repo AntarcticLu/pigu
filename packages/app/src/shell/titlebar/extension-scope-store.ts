@@ -44,39 +44,43 @@ export const BUILTIN_LOCAL_AGENT_PLUGINS: ReadonlyArray<BuiltinLocalAgentPlugin>
   {
     id: "local:claude",
     modelID: "claude",
-    name: "claude (CLI)",
+    name: "claude",
     target: "claude",
-    description: "本地 Claude 订阅桥接（调用本机 claude 原生 CLI 工具与会话）",
+    description: "支持本地调用 claude 模型，并自动识别与加载项目下的 Claude 会话 JSON",
   },
   {
     id: "local:codex",
     modelID: "codex",
-    name: "codex (CLI)",
+    name: "codex",
     target: "codex",
-    description: "本地 Codex 订阅桥接（调用本机 codex 原生 CLI 工具与会话）",
+    description: "支持本地调用 codex 模型，并自动识别与加载项目下的 Codex 会话 JSON",
   },
   {
     id: "local:agy",
     modelID: "agy",
-    name: "agy (桌面端)",
-    target: "/Applications/Antigravity.app",
-    description: "本地 Antigravity (AGY) 桌面端与 CLI 原生桥接",
+    name: "agy",
+    target: "agy",
+    description: "支持本地调用 agy 模型，并自动识别与加载项目下的 Antigravity 会话 JSON",
   },
   {
     id: "local:deepseek-harness",
     modelID: "deepseek-harness",
-    name: "deepseek harness (桌面端)",
-    target: "/Applications/DeepSeek Harness.app",
-    description: "本地 DeepSeek Harness 桌面端原生运行环境桥接",
+    name: "deepseek harness",
+    target: "dsh",
+    description: "支持本地调用 deepseek harness 模型，并自动识别与加载项目下的 DSH 会话 JSON",
   },
   {
     id: "local:workbuddy",
     modelID: "workbuddy",
-    name: "workbuddy (CLI)",
+    name: "workbuddy",
     target: "workbuddy",
-    description: "本地 WorkBuddy 原生智能体工具桥接",
+    description: "支持本地调用 workbuddy 模型，并自动识别与加载项目下的 WorkBuddy 会话 JSON",
   },
 ]
+
+export function stripLegacyLocalPluginSuffix(name: string) {
+  return name.replace(/\s*\((?:CLI|桌面端)\)\s*$/i, "").trim()
+}
 
 export type CustomSkillRecord = {
   id: string
@@ -114,6 +118,7 @@ const ExtensionScopeState = Persistence.struct({
   globalSkills: Persistence.record(Schema.Boolean),
   projectSkills: Persistence.record(Persistence.record(Schema.Boolean)),
   projectMcps: Persistence.record(Persistence.record(Schema.Boolean)),
+  projectPlugins: Schema.optional(Persistence.record(Persistence.record(Schema.Boolean))),
   sessionSkills: Persistence.record(Persistence.record(Schema.Boolean)),
   sessionMcps: Persistence.record(Persistence.record(Schema.Boolean)),
   customMcps: Schema.optional(Persistence.record(CustomMcpSchema)),
@@ -370,13 +375,56 @@ export function useExtensionScopeStore() {
     })
   }
 
-  const isLocalAgentEnabled = (modelID: string) => {
+  const isProjectPluginEnabled = (worktree: string, pluginID: string, globalEnabled: boolean) => {
+    const pKey = pathKey(worktree)
+    const explicit = store.projectPlugins?.[pKey]?.[pluginID]
+
+    if (explicit !== undefined) return explicit
+
+    return globalEnabled
+  }
+
+  const setProjectPluginEnabled = (worktree: string, pluginID: string, enabled: boolean) => {
+    const pKey = pathKey(worktree)
+
+    if (!store.projectPlugins?.[pKey]) {
+      setStore("projectPlugins", { ...(store.projectPlugins ?? {}), [pKey]: { [pluginID]: enabled } })
+
+      return
+    }
+
+    setStore("projectPlugins", {
+      ...(store.projectPlugins ?? {}),
+      [pKey]: { ...(store.projectPlugins?.[pKey] ?? {}), [pluginID]: enabled },
+    })
+  }
+
+  const isLocalAgentEnabled = (modelID: string, worktree?: string) => {
     const pluginID = `local:${modelID}`
 
     if (store.removedPlugins?.[pluginID]) return false
     const custom = store.customPlugins?.[pluginID]
+    const globalEnabled = custom !== undefined ? custom.enabled : true
 
-    if (custom !== undefined) return custom.enabled
+    if (!globalEnabled) return false
+
+    if (worktree) return isProjectPluginEnabled(worktree, pluginID, globalEnabled)
+
+    return true
+  }
+
+  const isSessionSourceEnabled = (source: string | undefined, worktree?: string) => {
+    const raw = (source ?? "").trim().toLowerCase()
+
+    if (!raw || raw === "pigu" || raw === "opencode") return true
+
+    if (raw === "claude" || raw === "codex" || raw === "agy" || raw === "workbuddy") {
+      return isLocalAgentEnabled(raw, worktree)
+    }
+
+    if (raw === "deepseek-harness" || raw === "dsh") {
+      return isLocalAgentEnabled("deepseek-harness", worktree)
+    }
 
     return true
   }
@@ -385,9 +433,9 @@ export function useExtensionScopeStore() {
     const pluginID = `local:${modelID}`
     const custom = store.customPlugins?.[pluginID]
 
-    if (custom?.name?.trim()) return custom.name.trim()
+    if (custom?.name?.trim()) return stripLegacyLocalPluginSuffix(custom.name)
 
-    return fallbackName
+    return stripLegacyLocalPluginSuffix(fallbackName)
   }
 
   const customSkills = () => Object.values(store.customSkills ?? {})
@@ -691,7 +739,10 @@ export function useExtensionScopeStore() {
     isPluginRemoved,
     saveCustomPlugin,
     removePlugin,
+    isProjectPluginEnabled,
+    setProjectPluginEnabled,
     isLocalAgentEnabled,
+    isSessionSourceEnabled,
     localAgentLabel,
     customSkills,
     isSkillRemoved,

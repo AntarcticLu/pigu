@@ -109,14 +109,16 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
   })
 
   const list = createMemo(() =>
-    available().map((m) => ({
-      ...m,
-      name:
-        m.provider.id === "local"
-          ? scopeStore.localAgentLabel(m.id, m.name)
-          : m.name.replace("(latest)", "").trim(),
-      latest: m.name.includes("(latest)"),
-    })),
+    available()
+      .filter((m) => m.provider.id !== "local" || scopeStore.isLocalAgentEnabled(m.id, directory()))
+      .map((m) => ({
+        ...m,
+        name:
+          m.provider.id === "local"
+            ? scopeStore.localAgentLabel(m.id, m.name)
+            : m.name.replace("(latest)", "").trim(),
+        latest: m.name.includes("(latest)"),
+      })),
   )
 
   const find = (key: ModelKey) => list().find((m) => m.id === key.modelID && m.provider.id === key.providerID)
@@ -134,7 +136,7 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
   }
 
   const visible = (model: ModelKey) => {
-    if (model.providerID === "local" && !scopeStore.isLocalAgentEnabled(model.modelID)) return false
+    if (model.providerID === "local" && !scopeStore.isLocalAgentEnabled(model.modelID, directory())) return false
     const key = modelKey(model)
     const state = visibility().get(key)
 

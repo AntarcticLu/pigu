@@ -36,6 +36,7 @@ import "./tab-nav.css"
 import { ProjectSessionRow } from "./project-session-row"
 import { createSidebarSessionActivity, mergeSidebarSessions } from "./sidebar-sessions"
 import { useArchiveState } from "./archive-store"
+import { useExtensionScopeStore } from "./extension-scope-store"
 
 const SidebarState = Persistence.struct({
   projectsCollapsed: Schema.Boolean,
@@ -229,6 +230,8 @@ function ProjectList(props: {
 
   const archive = useArchiveState()
 
+  const scopeStore = useExtensionScopeStore()
+
   const [local, setLocal] = createStore<{
     showAll: boolean
     showArchivedProjects: boolean
@@ -282,12 +285,16 @@ function ProjectList(props: {
 
     return buildHomeSessionRecords({
       sessions: () =>
-        current.data.session.apply(
-          mergeSidebarSessions(sessions.isPending ? [] : (sessions.data?.() ?? []), current.data.session.list(), (id) =>
-            props.lastActivity(ServerConnection.key(current.sdk.server), id),
+        current.data.session
+          .apply(
+            mergeSidebarSessions(sessions.isPending ? [] : (sessions.data?.() ?? []), current.data.session.list(), (id) =>
+              props.lastActivity(ServerConnection.key(current.sdk.server), id),
+            ),
+            { activity: false },
+          )
+          .filter((session) =>
+            scopeStore.isSessionSourceEnabled(String(session.metadata?.source ?? ""), session.location.directory),
           ),
-          { activity: false },
-        ),
       projects: allProjects,
       projectDirectories: () => undefined,
       resolveProject: current.projects.forSession,
