@@ -12,7 +12,7 @@ import { modelPreferenceKey } from "../model-preference"
 import { useLocation } from "../context/location"
 import { useNewDesigns } from "../config"
 import { FavoriteMarker, ModelDetail, isFreeModel, prioritizeFavorites, sortModelOptions } from "./model-options"
-import { DialogUsage, useUsageLimits } from "./usage"
+import { useUsageLimits } from "./usage"
 import { formatDollars, usageLevel } from "../util/usage-limits"
 
 export function DialogModel(props: { providerID?: string }) {
@@ -66,7 +66,6 @@ function DialogConnectedModels(props: {
   const newDesigns = useNewDesigns()
   const data = useData()
   const location = useLocation()
-  const dialog = useDialog()
   const limits = useUsageLimits()
   // Spend moves with every request, so the picker shows fresh limits.
   onMount(() => limits.load(true))
@@ -230,13 +229,6 @@ function DialogConnectedModels(props: {
               : "View all integrations",
           selection: "none",
           onTrigger: props.onConnect,
-        },
-        {
-          command: "model.dialog.usage",
-          title: newDesigns() ? "usage" : "Usage",
-          selection: "none",
-          hidden: !limits.info(),
-          onTrigger: () => dialog.replace(() => <DialogUsage />),
         },
         {
           command: "model.dialog.favorite",

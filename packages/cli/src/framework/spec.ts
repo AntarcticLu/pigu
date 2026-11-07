@@ -6,6 +6,7 @@ type Options<Config extends Command.Command.Config, Commands extends ReadonlyArr
   readonly params?: Config
   readonly globalFlags?: ReadonlyArray<GlobalFlag.GlobalFlag<any>>
   readonly commands?: Commands
+  readonly hidden?: boolean
 }
 
 export interface Node<
@@ -17,6 +18,7 @@ export interface Node<
   readonly spec: Spec
   readonly commands: Commands
   readonly aliases: ReadonlyArray<Any>
+  readonly hidden?: boolean
 }
 
 export type Any = Node<string, Command.Command<any, any, any, any, any>, Children>
@@ -55,6 +57,7 @@ export function make<
     spec,
     commands,
     aliases: extra,
+    hidden: options.hidden,
   }
 }
 

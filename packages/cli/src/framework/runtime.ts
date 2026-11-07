@@ -102,8 +102,8 @@ function provide(node: Spec.Any, handlers: ReadonlyArray<LazyHandler>): Provided
         ),
       )
     : node.spec
-  if (!Object.keys(node.commands).length) return spec as ProvidedCommand
-  const children = Object.values(node.commands)
+  const children = Object.values(node.commands).filter((child) => !child.hidden)
+  if (!children.length) return spec as ProvidedCommand
   return spec.pipe(
     Command.withSubcommands([
       ...children.map((child) => provide(child, handlers)),

@@ -149,7 +149,7 @@ export const SettingsGeneral: Component = () => {
       <SettingsList>
         <SettingsRow title="当前版本">
           <span data-action="settings-current-version" class="text-13-regular text-v2-text-text-muted">
-            v1.0.0（初版）
+            v0.0.1
           </span>
         </SettingsRow>
       </SettingsList>

@@ -256,9 +256,15 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       function durableSelection(sessionID: string): ModelSelection | undefined {
         const model = data.session.get(sessionID)?.model
         if (!model) return
+        const resolvedID =
+          model.providerID === "local" &&
+          !models()?.some((item) => item.providerID === "local" && item.id === model.id)
+            ? (models()?.find((item) => item.providerID === "local" && item.id.startsWith(`${model.id}/`))?.id ??
+              model.id)
+            : model.id
         return {
           providerID: model.providerID,
-          modelID: model.id,
+          modelID: resolvedID,
           variant: normalizeModelVariant(model.variant),
         }
       }

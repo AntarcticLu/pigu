@@ -385,6 +385,9 @@ export function settingID(setting: Setting) {
   return setting.path.join(".")
 }
 
+const hiddenSettings = new Set(["debug.devtools", "highlights", "session.tps", "leader.timeout"])
+export const visibleSettings = settings.filter((setting) => !hiddenSettings.has(settingID(setting)))
+
 export function DialogConfig(props: { current?: string }) {
   const config = useConfig()
   const newDesigns = useNewDesigns()
@@ -393,7 +396,7 @@ export function DialogConfig(props: { current?: string }) {
   const themes = useThemes()
   const current = Math.max(
     0,
-    settings.findIndex((setting) => settingID(setting) === props.current),
+    visibleSettings.findIndex((setting) => settingID(setting) === props.current),
   )
   const [selected, setSelected] = createSignal(current)
   const [saving, setSaving] = createSignal(false)
@@ -417,7 +420,7 @@ export function DialogConfig(props: { current?: string }) {
     return index === undefined || index < 0 ? String(current) : (setting.labels?.[index] ?? String(current))
   }
   const options = createMemo(() =>
-    settings.map((setting, index) => ({
+    visibleSettings.map((setting, index) => ({
       title: setting.title,
       category: setting.category,
       searchText: setting.keywords?.join(" "),
@@ -434,7 +437,7 @@ export function DialogConfig(props: { current?: string }) {
 
   async function change(direction: number, index = selected()) {
     if (saving()) return
-    const setting = settings[index]
+    const setting = visibleSettings[index]
     const current = value(setting)
     const choices = values(setting)
     const next = choices
@@ -468,7 +471,7 @@ export function DialogConfig(props: { current?: string }) {
       filterThreshold={0.7}
       onMove={(option) => setSelected(option.value)}
       onSelect={(option) => {
-        const open = settings[option.value].open
+        const open = visibleSettings[option.value].open
         if (newDesigns() && open) return open(dialog)
         void change(1, option.value)
       }}

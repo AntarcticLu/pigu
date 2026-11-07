@@ -2,7 +2,7 @@ import { createMemo } from "solid-js"
 import { DialogSelect, type DialogSelectRef } from "../ui/dialog-select"
 import { type DialogContext } from "../ui/dialog"
 import { COMMAND_PALETTE_COMMAND, Keymap, type KeymapCommand } from "../context/keymap"
-import { DialogConfig, settingID, settings } from "./dialog-config"
+import { DialogConfig, settingID, visibleSettings } from "./dialog-config"
 
 function isSuggestedPaletteCommand(command: KeymapCommand) {
   const suggested = command.suggested
@@ -34,7 +34,7 @@ export function CommandPaletteDialog() {
       }
     }),
   )
-  const settingOptions = settings.map((setting) => ({
+  const settingOptions = visibleSettings.map((setting) => ({
     title: setting.title,
     category: setting.category,
     searchText: setting.keywords?.join(" "),

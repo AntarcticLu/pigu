@@ -92,7 +92,6 @@ function SidebarFooter(props: { context: Plugin.Context; sessionID: string }) {
   })
   return (
     <box gap={1}>
-      <SidebarOnboarding context={props.context} sessionID={props.sessionID} />
       <Show when={directory()}>
         {(value) => (
           <box

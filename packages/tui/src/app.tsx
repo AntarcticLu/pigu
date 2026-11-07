@@ -1,5 +1,3 @@
-import { existsSync } from "fs"
-import path from "path"
 import { render, useRenderer, useTerminalDimensions } from "@opentui/solid"
 import "./component/spinner-renderable"
 import { Effect, Latch } from "effect"
@@ -40,8 +38,6 @@ import {
   TuiPathsProvider,
   TuiStartupProvider,
   TuiTerminalEnvironmentProvider,
-  useTuiApp,
-  useTuiPaths,
   useTuiStartup,
   useTuiTerminalEnvironment,
   type TuiApp,
@@ -65,13 +61,7 @@ import { PermissionProvider } from "./context/permission"
 import { DialogModel } from "./component/dialog-model"
 import { useConnected } from "./component/use-connected"
 import { DialogMcp } from "./component/dialog-mcp"
-import { DialogUsage } from "./component/usage"
-import { DialogStatus } from "./component/dialog-status"
 import { DialogConfig } from "./component/dialog-config"
-import { DialogDebug } from "./component/dialog-debug"
-import { DialogPair } from "./component/dialog-pair"
-import { DialogHighlights } from "./component/dialog-highlights"
-import { claim } from "./util/highlights"
 import { DialogThemeList } from "./component/dialog-theme-list"
 import { DialogHelp } from "./ui/dialog-help"
 import { DialogAgent } from "./component/dialog-agent"
@@ -96,7 +86,7 @@ import { openUrl } from "@opencode/util/open"
 import { PromptRefProvider, usePromptRef } from "./context/prompt"
 import { Config, ConfigProvider, useConfig } from "./config"
 import { newSessionLocation } from "./config/new-session-location"
-import { UpdateNotificationProvider, useUpdateNotification, type UpdateSource } from "./context/update-notification"
+import { UpdateNotificationProvider, type UpdateSource } from "./context/update-notification"
 import { PluginProvider, usePlugin, type PackageSource } from "./plugin/context"
 import { localPluginDirectories } from "./plugin/discovery"
 import { PluginRoute, Slot } from "./plugin/render"
@@ -156,27 +146,19 @@ const appBindingCommands = [
   "model.cycle_favorite_reverse",
   "agent.list",
   "mcp.list",
-  "usage.show",
   "agent.cycle",
   "agent.cycle.reverse",
   "variant.cycle",
   "variant.list",
   "provider.connect",
   "opencode.settings",
-  "opencode.status",
-  "opencode.update",
-  "server.pair",
   "service.restart",
   "location.reload",
-  "opencode.debug",
   "theme.switch",
   "theme.switch_mode",
   "theme.mode.lock",
   "help.show",
-  "docs.open",
   "diff.open",
-  "app.debug",
-  "app.console",
   "terminal.suspend",
   "terminal.title.toggle",
   "app.toggle.animations",
@@ -491,10 +473,9 @@ export const run = Effect.fn("Tui.run")(function* (input: TuiInput) {
 })
 
 function App() {
-  const app = useTuiApp()
   const startup = useTuiStartup()
   const config = useConfig()
-  const devtools = createMemo(() => config.data.debug?.devtools ?? app.channel === "local")
+  const devtools = createMemo(() => Boolean(config.data.debug?.devtools))
   const route = useRoute()
   const dimensions = useTerminalDimensions()
   const renderer = useRenderer()
@@ -506,7 +487,6 @@ function App() {
   const event = useEvent()
   const client = useClient()
   const toast = useToast()
-  const updater = useUpdateNotification()
   const theme = useTheme()
   const { mode, supports, setMode, locked, lock, unlock, afterPaint } = useThemes()
   const data = useData()
@@ -725,30 +705,6 @@ function App() {
       .catch(toast.error)
   })
 
-  // Opens the release highlights once after an update, but only into an idle home screen during startup.
-  const storage = useStorage()
-  const paths = useTuiPaths()
-  let highlighted = false
-  createEffect(() => {
-    if (highlighted || !plugins.ready() || client.connection.status() !== "connected") return
-    highlighted = true
-    const items = app.highlights ?? []
-    if (config.data.highlights === false) return
-    if (route.data.type !== "home" || dialog.stack.length > 0 || promptRef.current?.current.text) return
-    if (args.prompt || args.continue || args.sessionID || args.newSessionID) return
-    if (process.env.OPENCODE_DRIVE || process.env.OPENCODE_STORY || process.env.OPENCODE_ROUTE) return
-    void claim(storage, {
-      version: app.version,
-      count: items.length,
-      history: existsSync(path.join(paths.state, "prompt-history.jsonl")),
-    })
-      .then((show) => {
-        if (show && dialog.stack.length === 0)
-          dialog.replace(() => <DialogHighlights version={app.version} items={items} />)
-      })
-      .catch(toast.error)
-  })
-
   const connected = useConnected()
   const appCommands = createMemo(() =>
     [
@@ -956,15 +912,6 @@ function App() {
         },
       },
       {
-        name: "usage.show",
-        title: "View usage",
-        category: "Agent",
-        slash: { name: "usage" },
-        run: () => {
-          dialog.replace(() => <DialogUsage />)
-        },
-      },
-      {
         name: "mcp.list",
         title: "MCP servers",
         category: "Agent",
@@ -1030,17 +977,6 @@ function App() {
         },
         category: "Integration",
       },
-      ...(app.highlights?.length
-        ? [
-            {
-              name: "opencode.highlights",
-              title: "Show release highlights",
-              slash: { name: "highlights" },
-              run: () => dialog.replace(() => <DialogHighlights version={app.version} items={app.highlights ?? []} />),
-              category: "System",
-            },
-          ]
-        : []),
       {
         name: "opencode.settings",
         title: "Open settings",
@@ -1048,35 +984,6 @@ function App() {
         slash: { name: "settings" },
         run: () => {
           dialog.replace(() => <DialogConfig />)
-        },
-        category: "System",
-      },
-      {
-        name: "opencode.status",
-        title: "View status",
-        slash: { name: "status" },
-        run: () => {
-          dialog.replace(() => <DialogStatus />)
-        },
-        category: "System",
-      },
-      ...(updater.open
-        ? [
-            {
-              name: "opencode.update",
-              title: "Update OpenCode",
-              slash: { name: "update" },
-              run: () => updater.open?.("manual"),
-              category: "System",
-            },
-          ]
-        : []),
-      {
-        name: "server.pair",
-        title: "Pair device",
-        slash: { name: "pair", aliases: ["web"] },
-        run: () => {
-          dialog.replace(() => <DialogPair />)
         },
         category: "System",
       },
@@ -1114,15 +1021,6 @@ function App() {
               toast.show({ variant: "success", message: "Configuration reloaded" })
             })
             .catch(toast.error)
-        },
-        category: "System",
-      },
-      {
-        name: "opencode.debug",
-        title: "View debug info",
-        slash: { name: "debug" },
-        run: () => {
-          dialog.replace(() => <DialogDebug />)
         },
         category: "System",
       },
@@ -1167,39 +1065,11 @@ function App() {
         category: "System",
       },
       {
-        name: "docs.open",
-        title: "Open docs",
-        run: () => {
-          openUrl("https://opencode.ai/v2/docs").catch(() => {})
-          dialog.clear()
-        },
-        category: "System",
-      },
-      {
         name: "app.exit",
         title: "Exit the app",
         slash: { name: "exit", aliases: ["quit", "q"] },
         run: () => exit(),
         category: "System",
-      },
-      {
-        name: "app.debug",
-        title: "Toggle debug panel",
-        category: "System",
-        palette: undefined,
-        run: () => {
-          renderer.toggleDebugOverlay()
-          dialog.clear()
-        },
-      },
-      {
-        name: "app.console",
-        title: "Toggle console",
-        category: "System",
-        run: () => {
-          renderer.console.toggle()
-          dialog.clear()
-        },
       },
       {
         name: "terminal.suspend",
