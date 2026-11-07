@@ -47,6 +47,7 @@ import {
   ProviderModelSections,
 } from "@/providers/models/provider-group"
 import { consoleProviderName } from "@/providers/catalog/console"
+import { BUILTIN_LOCAL_AGENT_PLUGINS, localBaseEngineID } from "@/shell/titlebar/extension-scope-store"
 import "@/settings/settings.css"
 import "@/shell/commands/dialog.css"
 import "./select-dialog.css"
@@ -65,7 +66,29 @@ const favoriteKeybind = parseKeybind("mod+f")
 
 const modelKey = (model: ModelItem) => `${model.provider.id}:${model.id}`
 
+export const providerGroupKey = (model: ModelItem) =>
+  model.provider.id === "local" ? `local:${localBaseEngineID(model.id)}` : model.provider.id
+
+const localPluginOrder = BUILTIN_LOCAL_AGENT_PLUGINS.map((plugin) => plugin.id)
+
 const sortModelGroups = (a: { category: string; items: ModelItem[] }, b: { category: string; items: ModelItem[] }) => {
+  const isPigu = (cat: string) => cat === "pigutoken" || cat === "pigu"
+
+  if (isPigu(a.category) && !isPigu(b.category)) return -1
+
+  if (!isPigu(a.category) && isPigu(b.category)) return 1
+
+  const aLocalIndex = localPluginOrder.indexOf(a.category)
+  const bLocalIndex = localPluginOrder.indexOf(b.category)
+  const aIsLocal = aLocalIndex >= 0
+  const bIsLocal = bLocalIndex >= 0
+
+  if (aIsLocal && bIsLocal) return aLocalIndex - bLocalIndex
+
+  if (aIsLocal && !bIsLocal) return -1
+
+  if (!aIsLocal && bIsLocal) return 1
+
   const aIndex = popularProviders.indexOf(a.category)
   const bIndex = popularProviders.indexOf(b.category)
   const aPopular = aIndex >= 0
@@ -476,13 +499,27 @@ function createModelSelectorController(input: {
         ? allModels().filter((item) => matchesModelSearch(query, [item.name, item.id, item.provider.name]))
         : allModels()
 
-      return [...filtered].sort((a, b) => a.name.localeCompare(b.name))
+      return [...filtered].sort((a, b) => {
+        if (a.provider.id === "local" && b.provider.id === "local") {
+          const aIsDefault = !a.id.includes("/")
+          const bIsDefault = !b.id.includes("/")
+
+          if (aIsDefault && !bIsDefault) return -1
+
+          if (!aIsDefault && bIsDefault) return 1
+
+          return 0
+        }
+
+        return a.name.localeCompare(b.name)
+      })
     },
     groups: (models: ModelItem[]) => {
       const byProvider = new Map<string, ModelItem[]>()
 
       for (const item of models) {
-        byProvider.set(item.provider.id, [...(byProvider.get(item.provider.id) ?? []), item])
+        const key = providerGroupKey(item)
+        byProvider.set(key, [...(byProvider.get(key) ?? []), item])
       }
 
       return Array.from(byProvider, ([category, items]) => ({ category, items })).sort(sortModelGroups)
@@ -526,7 +563,7 @@ function createProviderLabels(all: () => ModelItem[]) {
   return {
     name: (provider: ModelItem["provider"]) => {
       if (provider.id === "local") {
-        return language.locale().toLowerCase().startsWith("en") ? "Local" : "本地"
+        return provider.name || (language.locale().toLowerCase().startsWith("en") ? "Local" : "本地")
       }
 
       const group = managed()
@@ -545,32 +582,6 @@ function createProviderLabels(all: () => ModelItem[]) {
 }
 
 type ModelGroup = { category: string; items: ModelItem[]; title?: string }
-
-// Favorites and recent models lead the list until a search narrows it. As in the TUI, they then leave their provider
-// group, so no model is listed twice.
-function withSections(input: {
-  groups: ModelGroup[]
-  favorites: ModelItem[]
-  recent: ModelItem[]
-  titles: { favorite: string; recent: string }
-}): ModelGroup[] {
-  const favorites = new Set(input.favorites.map(modelKey))
-
-  const recent = input.recent.filter((item) => !favorites.has(modelKey(item)))
-  const listed = new Set([...favorites, ...recent.map(modelKey)])
-
-  return [
-    ...(input.favorites.length > 0
-      ? [{ category: "favorite", title: input.titles.favorite, items: input.favorites }]
-      : []),
-    ...(recent.length > 0 ? [{ category: "recent", title: input.titles.recent, items: recent }] : []),
-    ...input.groups.flatMap((group) => {
-      const items = group.items.filter((item) => !listed.has(modelKey(item)))
-
-      return items.length > 0 ? [{ ...group, items }] : []
-    }),
-  ]
-}
 
 const clamp = (value: number) => Math.max(0, Math.min(1, value))
 
@@ -630,6 +641,7 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
 
   const [store, setStore] = createStore({
     search: "",
+    selectedGroup: "",
     flyout: "",
     keyboard: true,
     navigated: false,
@@ -637,7 +649,6 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
     position: { left: 0, top: 0 },
   })
 
-  const [collapsed, setCollapsed] = createStore<Record<string, boolean>>({})
   const [staged, setStaged] = createStore<Record<string, string | null>>({})
 
   let list: SearchListHandle<ModelRow> | undefined
@@ -645,22 +656,44 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
   let timer: ReturnType<typeof setTimeout> | undefined
   onCleanup(() => clearTimeout(timer))
 
-  const groups = createMemo((): ModelGroup[] => {
-    const providers = controller.groups(controller.models(store.search))
+  const groups = createMemo((): ModelGroup[] => controller.groups(controller.models(store.search)))
 
-    if (store.search.trim()) return providers
+  const currentGroupKey = createMemo(() => {
+    const cur = controller.current()
 
-    return withSections({
-      groups: providers,
-      favorites: controller.favorites(),
-      recent: controller.recent(),
-      titles: { favorite: language.t("dialog.model.favorites"), recent: language.t("dialog.model.recent") },
-    })
+    if (!cur) return ""
+    const item = controller.all().find((m) => modelKey(m) === cur)
+
+    return item ? providerGroupKey(item) : ""
   })
 
-  const rows = createMemo(() =>
-    groups().flatMap((group) => group.items.map((item): ModelRow => ({ id: modelKey(item), item, group }))),
-  )
+  const activeGroupKey = createMemo(() => {
+    const allGroups = groups()
+
+    if (allGroups.length === 0) return ""
+
+    if (store.selectedGroup && allGroups.some((g) => g.category === store.selectedGroup)) {
+      return store.selectedGroup
+    }
+
+    const curGroup = currentGroupKey()
+
+    if (curGroup && allGroups.some((g) => g.category === curGroup)) {
+      return curGroup
+    }
+
+    return allGroups[0].category
+  })
+
+  const activeGroup = createMemo(() => groups().find((g) => g.category === activeGroupKey()) ?? groups()[0])
+
+  const rows = createMemo(() => {
+    const group = activeGroup()
+
+    if (!group) return []
+
+    return group.items.map((item): ModelRow => ({ id: modelKey(item), item, group }))
+  })
 
   const rowItem = (id: string) => rows().find((row) => row.id === id)?.item
   const flyoutItem = () => (store.flyout ? rowItem(store.flyout) : undefined)
@@ -818,7 +851,7 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
   // Results that change without a scroll, such as a narrower search, move the headers too.
   createEffect(
     on(
-      () => [rows(), Object.entries(collapsed)],
+      () => rows(),
       () => {
         const frame = requestAnimationFrame(fadeHeaders)
         onCleanup(() => cancelAnimationFrame(frame))
@@ -957,7 +990,7 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
           </Show>
         </span>
         <Show when={usage(item())}>{(value) => <ModelUsageTag usage={value()} />}</Show>
-        <Show when={active() && variantsOf(item()).length > 0}>
+        <Show when={(active() || selected()) && variantsOf(item()).length > 0}>
           <span data-slot="model-dialog-variant">
             <span class="truncate">{formatProtocolVariantLabel(variant(item()) ?? "default", item().id)}</span>
             <Icon name="chevron-right" size="small" />
@@ -996,49 +1029,85 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
             query={store.search}
             onQuery={setSearch}
             placeholder={language.t("dialog.model.search.placeholder")}
-            trailing={
+            field={(searchField) => (
               <>
-                <Tooltip
-                  placement="top"
-                  gutter={4}
-                  value={language.t("command.provider.connect")}
-                  ignoreSafeArea={false}
-                >
-                  <IconButton
-                    variant="ghost-muted"
-                    icon={<Icon name="plus" size="small" />}
-                    aria-label={language.t("command.provider.connect")}
-                    onClick={connect}
+                <div data-slot="search-list-search">
+                  <TextInput
+                    {...searchField}
+                    value={store.search}
+                    autofocus
+                    autocomplete="off"
+                    autocorrect="off"
+                    autocapitalize="off"
+                    spellcheck={false}
+                    appearance="large"
+                    placeholder={language.t("dialog.model.search.placeholder")}
+                    aria-label={language.t("dialog.model.search.placeholder")}
+                    leadingIcon={<Icon name="magnifying-glass" />}
+                    trailing={
+                      <>
+                        <Tooltip
+                          placement="top"
+                          gutter={4}
+                          value={language.t("command.provider.connect")}
+                          ignoreSafeArea={false}
+                        >
+                          <IconButton
+                            variant="ghost-muted"
+                            icon={<Icon name="plus" size="small" />}
+                            aria-label={language.t("command.provider.connect")}
+                            onClick={connect}
+                          />
+                        </Tooltip>
+                        <Tooltip
+                          placement="top"
+                          gutter={4}
+                          value={language.t("dialog.model.manage")}
+                          ignoreSafeArea={false}
+                        >
+                          <IconButton
+                            variant="ghost-muted"
+                            icon={<Icon name="outline-sliders" size="small" />}
+                            aria-label={language.t("dialog.model.manage")}
+                            onClick={manage}
+                          />
+                        </Tooltip>
+                      </>
+                    }
                   />
-                </Tooltip>
-                <Tooltip placement="top" gutter={4} value={language.t("dialog.model.manage")} ignoreSafeArea={false}>
-                  <IconButton
-                    variant="ghost-muted"
-                    icon={<Icon name="outline-sliders" size="small" />}
-                    aria-label={language.t("dialog.model.manage")}
-                    onClick={manage}
-                  />
-                </Tooltip>
+                </div>
+                <div data-slot="model-dialog-providers">
+                  <div data-slot="model-dialog-column-title">
+                    {language.locale().toLowerCase().startsWith("en") ? "Providers" : "供应商"}
+                  </div>
+                  <div data-slot="model-dialog-providers-scroll">
+                    <For each={groups()}>
+                      {(group) => (
+                        <button
+                          type="button"
+                          data-slot="model-dialog-provider-item"
+                          data-active={activeGroupKey() === group.category ? "" : undefined}
+                          data-current={currentGroupKey() === group.category ? "" : undefined}
+                          onClick={() => {
+                            setStore({ selectedGroup: group.category, flyout: "", keyboard: true })
+                          }}
+                        >
+                          <ProviderModelIcon provider={group.items[0].provider} class="size-4 shrink-0" />
+                          <span class="min-w-0 flex-1 truncate">{labels.name(group.items[0].provider)}</span>
+                          <span data-slot="model-dialog-provider-count">{group.items.length}</span>
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </div>
               </>
-            }
+            )}
             items={rows()}
             key={(row) => row.id}
             section={(row) => row.group.category}
-            collapsed={(section) => Boolean(collapsed[section])}
-            onToggleSection={(section) => {
-              setCollapsed(section, !collapsed[section])
-              setStore("flyout", "")
-            }}
             header={(row) => (
               <span data-slot="model-dialog-header-label" class="flex min-w-0 flex-1 items-center gap-1.5">
-                <span class="flex size-4 shrink-0 items-center justify-center">
-                  <Icon
-                    name="chevron-down"
-                    size="small"
-                    class="text-v2-icon-icon-muted transition-transform"
-                    classList={{ "-rotate-90": Boolean(collapsed[row.group.category]) }}
-                  />
-                </span>
+                <ProviderModelIcon provider={row.item.provider} class="size-3.5 shrink-0" />
                 <span class="min-w-0 truncate">{row.group.title ?? labels.name(row.item.provider)}</span>
                 <Show when={!row.group.title && labels.workspace(row.item.provider)}>
                   {(workspace) => <Badge class="shrink-0">{workspace()}</Badge>}

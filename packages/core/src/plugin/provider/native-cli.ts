@@ -265,44 +265,34 @@ function resolveEngineBinary(engine: LocalEngine) {
   return resolveGlobalExecutable(["workbuddy", "codebuddy"]) ?? resolveAppBundledCli("workbuddy")
 }
 
-function detectLocalDisplayLabel(engine: LocalEngine) {
-  if (engine === "claude") return "claude"
-
-  if (engine === "codex") return "codex"
-
-  if (engine === "agy") return "agy"
-
-  if (engine === "pi") return "pi"
-
-  if (engine === "opencode") return "opencode"
-
-  if (engine === "cursor") return "cursor"
-
-  if (engine === "grok") return "grok"
-
-  if (engine === "deepseek-harness") return "deepseek harness"
-
-  return "workbuddy"
-}
-
 function normalizeEngine(modelId: string): LocalEngine {
-  if (modelId === "codex" || modelId === "codex-native") return "codex"
+  const slashIndex = modelId.indexOf("/")
+  const baseId = slashIndex >= 0 ? modelId.slice(0, slashIndex) : modelId
 
-  if (modelId === "agy" || modelId === "agy-native") return "agy"
+  if (baseId === "codex" || baseId === "codex-native") return "codex"
 
-  if (modelId === "pi" || modelId === "pi-native") return "pi"
+  if (baseId === "agy" || baseId === "agy-native") return "agy"
 
-  if (modelId === "opencode" || modelId === "opencode-native") return "opencode"
+  if (baseId === "pi" || baseId === "pi-native") return "pi"
 
-  if (modelId === "cursor" || modelId === "cursor-agent" || modelId === "cursor-native") return "cursor"
+  if (baseId === "opencode" || baseId === "opencode-native") return "opencode"
 
-  if (modelId === "grok" || modelId === "grok-cli" || modelId === "grok-native") return "grok"
+  if (baseId === "cursor" || baseId === "cursor-agent" || baseId === "cursor-native") return "cursor"
 
-  if (modelId === "deepseek-harness" || modelId === "dsh") return "deepseek-harness"
+  if (baseId === "grok" || baseId === "grok-cli" || baseId === "grok-native") return "grok"
 
-  if (modelId === "workbuddy" || modelId === "codebuddy") return "workbuddy"
+  if (baseId === "deepseek-harness" || baseId === "dsh") return "deepseek-harness"
+
+  if (baseId === "workbuddy" || baseId === "codebuddy") return "workbuddy"
 
   return "claude"
+}
+
+function extractSubModel(modelId: string): string | undefined {
+  const slashIndex = modelId.indexOf("/")
+  if (slashIndex === -1) return undefined
+  const sub = modelId.slice(slashIndex + 1).trim()
+  return sub.length > 0 ? sub : undefined
 }
 
 function findClaudeSessionFile(home: string, sessionId: string) {
@@ -588,6 +578,7 @@ async function runStreamJsonProcess(input: {
   prompt: string
   sessionId?: string
   resume: boolean
+  subModel?: string
   variant?: string
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
@@ -606,6 +597,8 @@ async function runStreamJsonProcess(input: {
           ? ["--resume", targetSessionId]
           : ["--session-id", targetSessionId]
 
+  const modelFlag = input.subModel ? ["--model", input.subModel] : []
+
   const effortFlag =
     input.mode === "claude" &&
     input.variant &&
@@ -623,6 +616,7 @@ async function runStreamJsonProcess(input: {
           "--output-format",
           "stream-json",
           "--dangerously-skip-permissions",
+          ...modelFlag,
           ...sessionFlag,
           "-p",
           input.prompt,
@@ -634,6 +628,7 @@ async function runStreamJsonProcess(input: {
             "--output-format",
             "stream-json",
             "--force",
+            ...modelFlag,
             ...sessionFlag,
             input.prompt,
           ]
@@ -644,6 +639,7 @@ async function runStreamJsonProcess(input: {
             "--verbose",
             "--include-partial-messages",
             "--dangerously-skip-permissions",
+            ...modelFlag,
             ...effortFlag,
             ...sessionFlag,
             input.prompt,
@@ -860,11 +856,13 @@ async function runCodexProcess(input: {
   prompt: string
   sessionId?: string
   resume: boolean
+  subModel?: string
   variant?: string
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
   const lastMsgFile = path.join(os.tmpdir(), `pigu-codex-last-${crypto.randomUUID()}.txt`)
+  const modelFlag = input.subModel ? ["-c", `model="${input.subModel}"`] : []
   const effortFlag =
     input.variant &&
     (input.variant === "low" ||
@@ -883,6 +881,7 @@ async function runCodexProcess(input: {
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           "--skip-git-repo-check",
+          ...modelFlag,
           ...effortFlag,
           "-o",
           lastMsgFile,
@@ -893,6 +892,7 @@ async function runCodexProcess(input: {
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           "--skip-git-repo-check",
+          ...modelFlag,
           ...effortFlag,
           "-C",
           input.cwd,
@@ -1193,6 +1193,7 @@ class LocalLanguageModel implements LanguageModelV3 {
           }
 
           const currentEngine = normalizeEngine(this.modelId)
+          const subModel = extractSubModel(this.modelId)
           const binary = resolveEngineBinary(currentEngine)
 
           if (!binary) {
@@ -1271,6 +1272,7 @@ class LocalLanguageModel implements LanguageModelV3 {
                 prompt: finalPrompt,
                 sessionId: currentRecord.sessionId,
                 resume: canResume,
+                subModel,
                 variant,
                 signal,
                 emitter,
@@ -1284,6 +1286,7 @@ class LocalLanguageModel implements LanguageModelV3 {
                 prompt: finalPrompt,
                 sessionId: currentRecord.sessionId,
                 resume: canResume,
+                subModel,
                 variant,
                 signal,
                 emitter,
@@ -1293,6 +1296,8 @@ class LocalLanguageModel implements LanguageModelV3 {
             if (currentEngine === "pi") {
               const piArgs = [
                 "-p",
+                ...(subModel ? ["--model", subModel] : []),
+                ...(variant ? ["--thinking", variant] : []),
                 ...(canResume && currentRecord.filePath ? ["--session", currentRecord.filePath] : []),
                 finalPrompt,
               ]
@@ -1312,6 +1317,8 @@ class LocalLanguageModel implements LanguageModelV3 {
               const opencodeArgs = [
                 "run",
                 "--auto",
+                ...(subModel ? ["-m", subModel] : []),
+                ...(variant ? ["--variant", variant] : []),
                 ...(canResume && currentRecord.sessionId ? ["--session", currentRecord.sessionId] : []),
                 finalPrompt,
               ]
@@ -1331,7 +1338,7 @@ class LocalLanguageModel implements LanguageModelV3 {
               return runPlainCliProcess({
                 engineLabel: "grok",
                 binary,
-                args: ["-p", finalPrompt],
+                args: [...(subModel ? ["-m", subModel] : []), "-p", finalPrompt],
                 cwd,
                 sessionId: currentRecord.sessionId,
                 signal,
@@ -1343,6 +1350,7 @@ class LocalLanguageModel implements LanguageModelV3 {
               const dshArgs = [
                 "--profile",
                 "headless",
+                ...(subModel ? ["--model", subModel] : []),
                 ...(canResume && currentRecord.sessionId ? ["--session-id", currentRecord.sessionId] : []),
                 finalPrompt,
               ]
@@ -1361,7 +1369,7 @@ class LocalLanguageModel implements LanguageModelV3 {
             return runPlainCliProcess({
               engineLabel: "workbuddy",
               binary,
-              args: ["-p", finalPrompt],
+              args: [...(subModel ? ["--model", subModel] : []), "-p", finalPrompt],
               cwd,
               sessionId: currentRecord.sessionId,
               signal,
@@ -1410,16 +1418,43 @@ class LocalLanguageModel implements LanguageModelV3 {
   }
 }
 
-function localModelEfforts(engine: LocalEngine): readonly string[] {
-  if (engine === "claude") return ["low", "medium", "high", "xhigh", "max"]
-  if (engine === "codex") return ["low", "medium", "high", "xhigh"]
+function localModelEfforts(engine: LocalEngine, subModel?: string): readonly string[] {
+  const short = (subModel ?? "").toLowerCase()
+
+  if (short && /-(none|minimal|low|medium|high|xhigh|max|tiered)$/i.test(short)) {
+    return []
+  }
+
+  if (engine === "claude") {
+    if (short && /(haiku-4|3-5|3-7)/i.test(short)) return []
+    if (short && /claude-(opus|sonnet)-4-[56]/i.test(short)) return ["low", "medium", "high", "max"]
+    return ["low", "medium", "high", "xhigh", "max"]
+  }
+
+  if (engine === "codex") {
+    return ["low", "medium", "high", "xhigh"]
+  }
+
+  if (engine === "pi" || engine === "opencode") {
+    if (!short) return []
+    if (/claude-(opus|sonnet|fable|haiku)-5/i.test(short)) return ["low", "medium", "high", "xhigh", "max"]
+    if (/claude-(opus|sonnet)-4-[56]/i.test(short)) return ["low", "medium", "high", "max"]
+    if (/gpt-[56]/i.test(short)) return ["low", "medium", "high", "xhigh"]
+    if (/gemini-(2\.5|[3456789])/i.test(short)) return ["low", "medium", "high"]
+    if (/deepseek-(r1|reasoner|v4)/i.test(short) || /glm-5/i.test(short) || /kimi-k3/i.test(short)) {
+      return ["low", "high", "max"]
+    }
+    return []
+  }
+
   return []
 }
 
 function buildLocalModel(id: Model.ID, name: string): Model.Info {
   const defaults = Model.Info.default(LOCAL_PROVIDER_ID, id)
   const engine = normalizeEngine(id)
-  const variants = localModelEfforts(engine).map((effort) => ({
+  const subModel = extractSubModel(id)
+  const variants = localModelEfforts(engine, subModel).map((effort) => ({
     id: Model.VariantID.make(effort),
     settings: { reasoningEffort: effort },
   }))
@@ -1442,6 +1477,184 @@ function buildLocalModel(id: Model.ID, name: string): Model.Info {
   }
 }
 
+function readJsonRecordSafe(filePath: string): Record<string, unknown> | undefined {
+  if (!fs.existsSync(filePath)) return undefined
+  const raw = fs.readFileSync(filePath, "utf8")
+  const decoded = Option.getOrUndefined(decodeJsonUnknown(raw))
+  return isRecord(decoded) ? decoded : undefined
+}
+
+function discoverCodexConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
+  const configPath = path.join(home, ".codex", "config.toml")
+  if (!fs.existsSync(configPath)) return { models: [] }
+  const text = fs.readFileSync(configPath, "utf8")
+  const lines = text.split(/\r?\n/)
+  const firstSectionIdx = lines.findIndex((line) => /^\s*\[/.test(line))
+  const topLines = firstSectionIdx >= 0 ? lines.slice(0, firstSectionIdx) : lines
+  const defaultMatch = topLines
+    .map((line) => /^\s*model\s*=\s*"([^"]+)"/.exec(line)?.[1]?.trim())
+    .find((val): val is string => Boolean(val))
+  const nuxMatches = lines
+    .map((line) => /^\s*"([a-zA-Z0-9._-]+)"\s*=\s*\d+/.exec(line)?.[1]?.trim())
+    .filter((val): val is string => Boolean(val && /^(gpt-|o[134])/i.test(val)))
+  return {
+    defaultModel: defaultMatch,
+    models: [...new Set([...(defaultMatch ? [defaultMatch] : []), ...nuxMatches])],
+  }
+}
+
+function discoverClaudeConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
+  const settings = readJsonRecordSafe(path.join(home, ".claude", "settings.json"))
+  const env = settings && isRecord(settings.env) ? settings.env : undefined
+  const defaultModel =
+    (typeof settings?.model === "string" ? settings.model.trim() : undefined) ||
+    (typeof env?.ANTHROPIC_MODEL === "string" ? env.ANTHROPIC_MODEL.trim() : undefined)
+  const envModels = [
+    env?.ANTHROPIC_MODEL,
+    env?.ANTHROPIC_DEFAULT_OPUS_MODEL,
+    env?.ANTHROPIC_DEFAULT_SONNET_MODEL,
+    env?.ANTHROPIC_DEFAULT_HAIKU_MODEL,
+  ].filter((val): val is string => typeof val === "string" && val.trim().length > 0)
+
+  const stats = readJsonRecordSafe(path.join(home, ".claude", "stats-cache.json"))
+  const usageModels =
+    stats && isRecord(stats.modelUsage)
+      ? Object.keys(stats.modelUsage).filter((key) => key.trim().length > 0 && !key.startsWith("<"))
+      : []
+
+  return {
+    defaultModel,
+    models: [...new Set([...(defaultModel ? [defaultModel] : []), ...envModels, ...usageModels])],
+  }
+}
+
+function discoverPiConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
+  const settings = readJsonRecordSafe(path.join(home, ".pi", "agent", "settings.json"))
+  const defaultModel = typeof settings?.defaultModel === "string" ? settings.defaultModel.trim() : undefined
+  const enabled = Array.isArray(settings?.enabledModels)
+    ? settings.enabledModels.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : []
+  return {
+    defaultModel,
+    models: [...new Set([...(defaultModel ? [defaultModel] : []), ...enabled])],
+  }
+}
+
+function discoverOpencodeConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
+  const cfg = readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json"))
+  if (!cfg) return { models: [] }
+  const defaultModel = typeof cfg.model === "string" ? cfg.model.trim() : undefined
+  const providers = isRecord(cfg.provider) ? cfg.provider : {}
+  const configuredModels = Object.entries(providers).flatMap(([providerKey, providerVal]) => {
+    if (!isRecord(providerVal) || !isRecord(providerVal.models)) return []
+    return Object.keys(providerVal.models).map((modelKey) => `${providerKey}/${modelKey}`)
+  })
+  return {
+    defaultModel,
+    models: [...new Set([...(defaultModel ? [defaultModel] : []), ...configuredModels])],
+  }
+}
+
+const BUILTIN_ENGINE_SUBMODELS: Readonly<Record<LocalEngine, readonly string[]>> = {
+  claude: [
+    "claude-opus-5-5",
+    "claude-sonnet-5-5",
+    "claude-fable-5-1",
+    "claude-haiku-5-5",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+    "claude-haiku-4-5",
+  ],
+  codex: [
+    "gpt-6.1-sol",
+    "gpt-6-astra",
+    "gpt-6-luna",
+    "gpt-6-sol",
+    "gpt-5.6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.6-luna",
+    "gpt-5.5",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex-spark",
+  ],
+  agy: [
+    "gemini-3.8-flash-high",
+    "gemini-3.8-flash-medium",
+    "gemini-3.8-flash-low",
+    "gemini-3.7-flash-high",
+    "gemini-3.7-flash-medium",
+    "gemini-3.7-flash-low",
+    "gemini-pro-agent",
+    "gemini-3.1-pro-low",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+  ],
+  pi: [
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "gpt-6.1-sol",
+    "gpt-5.6-sol",
+    "gemini-3.8-flash",
+    "deepseek-v4-pro-0813",
+  ],
+  opencode: [
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "gpt-6.1-sol",
+    "gpt-5.6-sol",
+    "gemini-3.8-flash",
+  ],
+  cursor: [
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-sonnet-5-5",
+    "gpt-6.1-sol",
+    "gpt-5.6-sol",
+    "gemini-3.8-flash",
+    "grok-4.7",
+    "deepseek-v4-pro-0813",
+  ],
+  grok: ["grok-4.7", "grok-4", "grok-code-fast-1", "grok-3", "grok-3-mini"],
+  "deepseek-harness": [
+    "deepseek-v4-pro-0813",
+    "deepseek-v4.1-flash",
+    "deepseek-v4-flash-0731",
+    "deepseek-reasoner",
+    "deepseek-chat",
+  ],
+  workbuddy: ["claude-sonnet-4-6", "gpt-5.6-sol", "deepseek-v4-pro-0813", "glm-5.3", "kimi-k3"],
+}
+
+function buildEngineModels(engine: LocalEngine, baseId: Model.ID, home: string): readonly Model.Info[] {
+  const discovered =
+    engine === "codex"
+      ? discoverCodexConfigModels(home)
+      : engine === "claude"
+        ? discoverClaudeConfigModels(home)
+        : engine === "pi"
+          ? discoverPiConfigModels(home)
+          : engine === "opencode"
+            ? discoverOpencodeConfigModels(home)
+            : { defaultModel: undefined, models: [] }
+
+  const subModels = [...new Set([...discovered.models, ...BUILTIN_ENGINE_SUBMODELS[engine]])]
+  const defaultLabel = discovered.defaultModel
+    ? `默认 (${discovered.defaultModel.replace(/^[^/]+\//, "")})`
+    : "默认"
+
+  return [
+    buildLocalModel(baseId, defaultLabel),
+    ...subModels.map((sub) => {
+      const displaySub = engine === "opencode" ? sub.replace(/^[^/]+\//, "") : sub
+      return buildLocalModel(Model.ID.make(`${engine}/${sub}`), displaySub)
+    }),
+  ]
+}
+
 export const NativeCliProviderPlugin = define({
   id: "pigu.provider.local",
   effect: Effect.fn("NativeCliProvider.Plugin")(function* (ctx: Context) {
@@ -1458,6 +1671,8 @@ export const NativeCliProviderPlugin = define({
     const setSessionState = (sessionID: string, state: SessionCliState) =>
       runPromise(ctx.storage.set(`session:${sessionID}`, state))
 
+    const home = os.homedir()
+
     yield* ctx.provider.transform((editor) => {
       editor.add({
         info: {
@@ -1467,15 +1682,15 @@ export const NativeCliProviderPlugin = define({
           package: Provider.aisdk(LOCAL_PACKAGE),
         },
         models: [
-          buildLocalModel(CLAUDE_LOCAL_MODEL_ID, detectLocalDisplayLabel("claude")),
-          buildLocalModel(CODEX_LOCAL_MODEL_ID, detectLocalDisplayLabel("codex")),
-          buildLocalModel(AGY_LOCAL_MODEL_ID, detectLocalDisplayLabel("agy")),
-          buildLocalModel(PI_LOCAL_MODEL_ID, detectLocalDisplayLabel("pi")),
-          buildLocalModel(OPENCODE_LOCAL_MODEL_ID, detectLocalDisplayLabel("opencode")),
-          buildLocalModel(CURSOR_LOCAL_MODEL_ID, detectLocalDisplayLabel("cursor")),
-          buildLocalModel(GROK_LOCAL_MODEL_ID, detectLocalDisplayLabel("grok")),
-          buildLocalModel(DEEPSEEK_HARNESS_LOCAL_MODEL_ID, detectLocalDisplayLabel("deepseek-harness")),
-          buildLocalModel(WORKBUDDY_LOCAL_MODEL_ID, detectLocalDisplayLabel("workbuddy")),
+          ...buildEngineModels("claude", CLAUDE_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("codex", CODEX_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("agy", AGY_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("pi", PI_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("opencode", OPENCODE_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("cursor", CURSOR_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("grok", GROK_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("deepseek-harness", DEEPSEEK_HARNESS_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("workbuddy", WORKBUDDY_LOCAL_MODEL_ID, home),
         ],
       })
     })

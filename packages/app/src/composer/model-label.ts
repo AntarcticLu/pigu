@@ -1,4 +1,5 @@
 import { consoleProviderGroup, consoleProviderName } from "@/providers/catalog/console"
+import { localEngineDefaultLabel } from "@/shell/titlebar/extension-scope-store"
 
 export type ComposerModelLabel = { provider?: string; model: string }
 
@@ -58,15 +59,16 @@ export function composerModelLabels(
       const name = composerProviderName(provider.id, catalog, connected)
 
       return Object.values(provider.models).map((model) => {
+        const providerLabel = provider.id === "local" ? localEngineDefaultLabel(model.id) : name
         const label = model.name.replace("(latest)", "").trim()
 
         return {
           key: composerModelLabelKey(provider.id, model.id),
           providerID: provider.id,
           modelID: model.id,
-          provider: name,
+          provider: providerLabel,
           model: label,
-          text: name ? `${name} / ${label}` : label,
+          text: providerLabel ? `${providerLabel} / ${label}` : label,
         }
       })
     })

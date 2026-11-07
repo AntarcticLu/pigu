@@ -38,7 +38,8 @@
 }
 
 [data-component="dialog-v2"]:has(.model-dialog) [data-slot="dialog-container"] {
-  width: min(calc(100vw - 24px), 480px);
+  width: min(calc(100vw - 24px), 620px);
+  height: min(calc(100vh - 80px), 440px);
   min-height: 0;
   border-radius: 12px;
   background: var(--v2-background-bg-base);
@@ -47,10 +48,14 @@
 .model-dialog {
   /* The inset lives on the field and the rows, so the scroll area and its scrollbar reach the dialog's edges. */
   [data-component="search-list"] {
+    display: grid;
+    grid-template-columns: 188px minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
     padding-top: 6px;
   }
 
   [data-component="search-list"] [data-slot="search-list-search"] {
+    grid-column: 1 / -1;
     display: flex;
     flex-direction: column;
     gap: 6px;
@@ -64,6 +69,84 @@
       content: "";
       transform: scaleY(0.5);
     }
+  }
+
+  [data-component="search-list"] [data-slot="model-dialog-providers"] {
+    grid-column: 1;
+    grid-row: 2;
+    display: flex;
+    min-height: 0;
+    flex-direction: column;
+    border-inline-end: 1px solid color-mix(in srgb, var(--v2-border-border-muted) 65%, transparent);
+    background: color-mix(in srgb, var(--v2-background-bg-layer-01) 45%, transparent);
+  }
+
+  [data-component="search-list"] [data-slot="model-dialog-column-title"] {
+    flex-shrink: 0;
+    padding: 10px 12px 4px;
+    color: var(--v2-text-text-faint);
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 16px;
+    letter-spacing: 0.02em;
+    user-select: none;
+  }
+
+  [data-component="search-list"] [data-slot="model-dialog-providers-scroll"] {
+    display: flex;
+    min-height: 0;
+    flex: 1;
+    flex-direction: column;
+    gap: 2px;
+    overflow-y: auto;
+    padding: 4px 6px 8px;
+  }
+
+  [data-component="search-list"] [data-slot="model-dialog-provider-item"] {
+    display: flex;
+    width: 100%;
+    height: 30px;
+    flex-shrink: 0;
+    align-items: center;
+    gap: 8px;
+    padding: 0 8px;
+    border: 0;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--v2-text-text-muted);
+    font-size: 13px;
+    font-weight: 440;
+    line-height: var(--line-height-base);
+    letter-spacing: -0.04px;
+    text-align: start;
+    cursor: pointer;
+    transition:
+      background-color 100ms ease,
+      color 100ms ease;
+
+    &:hover {
+      background: color-mix(in srgb, var(--v2-overlay-simple-overlay-hover) 65%, transparent);
+      color: var(--v2-text-text-base);
+    }
+
+    &[data-active] {
+      background: var(--v2-overlay-simple-overlay-hover);
+      color: var(--v2-text-text-base);
+      font-weight: 500;
+    }
+  }
+
+  [data-component="search-list"] [data-slot="model-dialog-provider-count"] {
+    flex-shrink: 0;
+    color: var(--v2-text-text-faint);
+    font-size: 11px;
+    line-height: 16px;
+  }
+
+  [data-component="search-list"] [data-slot="search-list-body"] {
+    grid-column: 2;
+    grid-row: 2;
+    min-width: 0;
   }
 
   [data-component="search-list"] [data-slot="search-list-search"] [data-component="text-input-v2"],

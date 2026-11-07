@@ -120,7 +120,10 @@ function isPiguProtocolID(value: string): boolean {
 }
 
 export function buildCatalogEffortMap(
-  records: readonly Provider.Definition[],
+  records: readonly {
+    provider: { id: string; activation: string }
+    models: ReadonlyMap<string, Model.Info>
+  }[],
 ): ReadonlyMap<string, readonly string[]> {
   const map = new Map<string, readonly string[]>()
   const rank = (id: string) => {

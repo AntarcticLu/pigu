@@ -110,6 +110,37 @@ export function stripLegacyLocalPluginSuffix(name: string) {
   return name.replace(/\s*\((?:CLI|桌面端)\)\s*$/i, "").trim()
 }
 
+export function localBaseEngineID(modelID: string) {
+  const slashIndex = modelID.indexOf("/")
+
+  return slashIndex === -1 ? modelID : modelID.slice(0, slashIndex)
+}
+
+export function localEngineDefaultLabel(modelID: string) {
+  const base = localBaseEngineID(modelID)
+  const builtin = BUILTIN_LOCAL_AGENT_PLUGINS.find((item) => item.modelID === base)
+
+  return builtin ? builtin.name : base
+}
+
+export function localEngineCanonicalIcon(modelID: string) {
+  const base = localBaseEngineID(modelID)
+
+  if (base === "claude") return "claude-agent"
+
+  if (base === "codex") return "openai"
+
+  if (base === "agy") return "google"
+
+  if (base === "opencode") return "opencode"
+
+  if (base === "grok") return "xai"
+
+  if (base === "deepseek-harness") return "deepseek"
+
+  return undefined
+}
+
 export type CustomSkillRecord = {
   id: string
   name: string
@@ -452,7 +483,8 @@ export function useExtensionScopeStore() {
   }
 
   const isLocalAgentEnabled = (modelID: string, worktree?: string) => {
-    const pluginID = `local:${modelID}`
+    const baseID = localBaseEngineID(modelID)
+    const pluginID = `local:${baseID}`
 
     if (store.removedPlugins?.[pluginID]) return false
     const custom = store.customPlugins?.[pluginID]
@@ -491,7 +523,8 @@ export function useExtensionScopeStore() {
   }
 
   const localAgentLabel = (modelID: string, fallbackName: string) => {
-    const pluginID = `local:${modelID}`
+    const baseID = localBaseEngineID(modelID)
+    const pluginID = `local:${baseID}`
     const custom = store.customPlugins?.[pluginID]
 
     if (custom?.name?.trim()) return stripLegacyLocalPluginSuffix(custom.name)

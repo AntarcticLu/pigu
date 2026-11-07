@@ -2,7 +2,11 @@ import { type Accessor, createMemo } from "solid-js"
 import { createSimpleContext } from "@opencode/ui/context"
 import { useProviders } from "@/providers/catalog/providers"
 import { useGlobal } from "@/runtime/server/runtime"
-import { useExtensionScopeStore } from "@/shell/titlebar/extension-scope-store"
+import {
+  localEngineCanonicalIcon,
+  localEngineDefaultLabel,
+  useExtensionScopeStore,
+} from "@/shell/titlebar/extension-scope-store"
 
 type ModelKey = { providerID: string; modelID: string }
 
@@ -63,7 +67,7 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
           provider: p,
         })),
       )
-      .filter((m) => (m.provider.id === "local" ? scopeStore.isLocalAgentEnabled(m.id) : true)),
+      .filter((m) => (m.provider.id === "local" ? scopeStore.isLocalAgentEnabled(m.id, directory()) : true)),
   )
 
   // Release dates as epoch ms; an unparseable date is NaN and never counts as recent.
@@ -111,14 +115,29 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
   const list = createMemo(() =>
     available()
       .filter((m) => m.provider.id !== "local" || scopeStore.isLocalAgentEnabled(m.id, directory()))
-      .map((m) => ({
-        ...m,
-        name:
-          m.provider.id === "local"
-            ? scopeStore.localAgentLabel(m.id, m.name)
-            : m.name.replace("(latest)", "").trim(),
-        latest: m.name.includes("(latest)"),
-      })),
+      .map((m) => {
+        if (m.provider.id === "local") {
+          const providerName = scopeStore.localAgentLabel(m.id, localEngineDefaultLabel(m.id))
+          const canonical = localEngineCanonicalIcon(m.id)
+
+          const provider = canonical
+            ? { ...m.provider, name: providerName, canonical }
+            : { ...m.provider, name: providerName }
+
+          return {
+            ...m,
+            name: m.id.includes("/") || m.name.startsWith("默认") ? m.name : providerName,
+            provider,
+            latest: false,
+          }
+        }
+
+        return {
+          ...m,
+          name: m.name.replace("(latest)", "").trim(),
+          latest: m.name.includes("(latest)"),
+        }
+      }),
   )
 
   const find = (key: ModelKey) => list().find((m) => m.id === key.modelID && m.provider.id === key.providerID)
@@ -143,6 +162,8 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
     if (state === "hide") return false
 
     if (state === "show") return true
+
+    if (model.providerID === "local") return true
 
     if (latestSet().has(key) || freeSet().has(key)) return true
 

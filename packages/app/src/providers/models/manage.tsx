@@ -14,6 +14,7 @@ import { DialogConnectProvider } from "@/providers/connect/dialog"
 import { decode64 } from "@/runtime/persistence/base64"
 import { consoleModelGroup, ProviderModelSections } from "@/providers/models/provider-group"
 import { ModelProtocolSelect } from "@/providers/models/protocol"
+import { providerGroupKey } from "@/providers/models/select-dialog"
 import "@/settings/settings.css"
 import "@/shell/search-list.css"
 import "./manage.css"
@@ -31,7 +32,7 @@ export const DialogManageModels: Component = () => {
     void dialog.show(() => <DialogConnectProvider directory={directory()} />)
   }
 
-  const providerList = (providerID: string) => local.model.list().filter((x) => x.provider.id === providerID)
+  const providerList = (providerID: string) => local.model.list().filter((x) => providerGroupKey(x) === providerID)
 
   const providerVisible = (providerID: string) =>
     providerList(providerID).every((x) => local.model.visible({ modelID: x.id, providerID: x.provider.id }))
@@ -50,8 +51,21 @@ export const DialogManageModels: Component = () => {
     items: () => local.model.list(),
     key: (x) => `${x.provider.id}:${x.id}`,
     filterKeys: ["provider.name", "name", "id"],
-    sortBy: (a, b) => a.name.localeCompare(b.name),
-    groupBy: (x) => x.provider.id,
+    sortBy: (a, b) => {
+      if (a.provider.id === "local" && b.provider.id === "local") {
+        const aIsDefault = !a.id.includes("/")
+        const bIsDefault = !b.id.includes("/")
+
+        if (aIsDefault && !bIsDefault) return -1
+
+        if (!aIsDefault && bIsDefault) return 1
+
+        return 0
+      }
+
+      return a.name.localeCompare(b.name)
+    },
+    groupBy: (x) => providerGroupKey(x),
     sortGroupsBy: (a, b) => {
       const aRank = popularProviders.indexOf(a.category)
       const bRank = popularProviders.indexOf(b.category)
