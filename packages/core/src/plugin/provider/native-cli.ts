@@ -67,7 +67,7 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
-function extraBinDirs() {
+function globalBinDirs() {
   const home = os.homedir()
 
   return [
@@ -75,10 +75,6 @@ function extraBinDirs() {
     path.join(home, ".local", "bin"),
     path.join(home, ".claude", "local"),
     path.join(home, ".bun", "bin"),
-    "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin",
-    "/Applications/Antigravity.app/Contents/Resources/app/bin",
-    "/Applications/WorkBuddy.app/Contents/Resources/app/bin",
-    "/Applications/CodeBuddy.app/Contents/Resources/app/bin",
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
@@ -86,79 +82,122 @@ function extraBinDirs() {
   ]
 }
 
+function appBundleRuntimeDirs() {
+  const home = os.homedir()
+  const appRoots = ["/Applications", path.join(home, "Applications")]
+
+  return appRoots.flatMap((root) => [
+    path.join(root, "Codex.app", "Contents", "Resources", "bin"),
+    path.join(root, "Codex.app", "Contents", "Resources", "app", "bin"),
+    path.join(root, "Claude.app", "Contents", "Resources", "bin"),
+    path.join(root, "Claude.app", "Contents", "Resources", "app", "bin"),
+    path.join(root, "Antigravity.app", "Contents", "Resources", "app", "bin"),
+    path.join(root, "DeepSeek Harness.app", "Contents", "Resources", "runtime", "cli", "bin"),
+    path.join(root, "DeepSeek Harness.app", "Contents", "Resources", "runtime", "bin"),
+    path.join(root, "WorkBuddy.app", "Contents", "Resources", "runtime", "cli", "bin"),
+    path.join(root, "WorkBuddy.app", "Contents", "Resources", "app", "bin"),
+    path.join(root, "CodeBuddy.app", "Contents", "Resources", "runtime", "cli", "bin"),
+    path.join(root, "CodeBuddy.app", "Contents", "Resources", "app", "bin"),
+  ])
+}
+
 function buildAugmentedPath() {
   const existing = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
-  const combined = [...new Set([...extraBinDirs(), ...existing])]
+  const combined = [...new Set([...globalBinDirs(), ...appBundleRuntimeDirs(), ...existing])]
 
   return combined.join(path.delimiter)
 }
 
-function resolveExecutableInPath(names: ReadonlyArray<string>) {
-  const dirs = buildAugmentedPath().split(path.delimiter).filter(Boolean)
+function resolveGlobalExecutable(names: ReadonlyArray<string>) {
+  const existing = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
+  const dirs = [...new Set([...globalBinDirs(), ...existing])]
   const candidates = names.flatMap((name) => dirs.map((dir) => path.join(dir, name)))
 
   return candidates.find((candidate) => fs.existsSync(candidate))
 }
 
-function resolveEngineBinary(engine: LocalEngine) {
+function appBundledCliCandidates(engine: LocalEngine) {
+  const home = os.homedir()
+  const appRoots = ["/Applications", path.join(home, "Applications")]
+
   if (engine === "claude") {
-    return (
-      resolveExecutableInPath(["claude"]) ??
-      (["/Applications/Claude.app/Contents/MacOS/Claude"].find((p) => fs.existsSync(p)))
-    )
+    return appRoots.flatMap((root) => [
+      path.join(root, "Claude.app", "Contents", "Resources", "claude"),
+      path.join(root, "Claude.app", "Contents", "Resources", "bin", "claude"),
+      path.join(root, "Claude.app", "Contents", "Resources", "app", "bin", "claude"),
+      path.join(root, "Claude.app", "Contents", "Resources", "runtime", "cli", "bin", "claude"),
+    ])
   }
 
   if (engine === "codex") {
-    return (
-      resolveExecutableInPath(["codex"]) ??
-      (["/Applications/Codex.app/Contents/MacOS/Codex"].find((p) => fs.existsSync(p)))
-    )
+    return appRoots.flatMap((root) => [
+      path.join(root, "Codex.app", "Contents", "Resources", "codex"),
+      path.join(root, "Codex.app", "Contents", "Resources", "bin", "codex"),
+      path.join(root, "Codex.app", "Contents", "Resources", "app", "bin", "codex"),
+      path.join(root, "Codex.app", "Contents", "Resources", "runtime", "cli", "bin", "codex"),
+      path.join(root, "Codex.app", "Contents", "MacOS", "codex"),
+    ])
   }
 
   if (engine === "agy") {
-    return (
-      resolveExecutableInPath(["agy", "antigravity"]) ??
-      ([
-        "/Applications/Antigravity.app/Contents/Resources/app/bin/antigravity",
-        "/Applications/Antigravity.app/Contents/MacOS/Electron",
-      ].find((p) => fs.existsSync(p)))
-    )
+    return appRoots.flatMap((root) => [
+      path.join(root, "Antigravity.app", "Contents", "Resources", "app", "bin", "agy"),
+      path.join(root, "Antigravity.app", "Contents", "Resources", "app", "bin", "antigravity"),
+      path.join(root, "Antigravity.app", "Contents", "Resources", "bin", "agy"),
+    ])
   }
 
   if (engine === "deepseek-harness") {
-    return (
-      resolveExecutableInPath(["dsh", "deepseek-harness"]) ??
-      ([
-        "/Applications/DeepSeek Harness.app/Contents/Resources/runtime/cli/bin/dsh",
-        "/Applications/DeepSeek Harness.app/Contents/MacOS/DeepSeek Harness",
-      ].find((p) => fs.existsSync(p)))
-    )
+    return appRoots.flatMap((root) => [
+      path.join(root, "DeepSeek Harness.app", "Contents", "Resources", "runtime", "cli", "bin", "dsh"),
+    ])
   }
 
-  return (
-    resolveExecutableInPath(["workbuddy", "codebuddy"]) ??
-    ([
-      "/Applications/WorkBuddy.app/Contents/Resources/app/bin/workbuddy",
-      "/Applications/WorkBuddy.app/Contents/MacOS/WorkBuddy",
-      "/Applications/CodeBuddy.app/Contents/Resources/app/bin/codebuddy",
-      "/Applications/CodeBuddy.app/Contents/MacOS/CodeBuddy",
-    ].find((p) => fs.existsSync(p)))
-  )
+  return appRoots.flatMap((root) => [
+    path.join(root, "WorkBuddy.app", "Contents", "Resources", "runtime", "cli", "bin", "workbuddy"),
+    path.join(root, "WorkBuddy.app", "Contents", "Resources", "app", "bin", "workbuddy"),
+    path.join(root, "CodeBuddy.app", "Contents", "Resources", "runtime", "cli", "bin", "codebuddy"),
+    path.join(root, "CodeBuddy.app", "Contents", "Resources", "app", "bin", "codebuddy"),
+  ])
+}
+
+function resolveAppBundledCli(engine: LocalEngine) {
+  return appBundledCliCandidates(engine).find((candidate) => fs.existsSync(candidate))
+}
+
+function resolveEngineBinary(engine: LocalEngine) {
+  if (engine === "claude") {
+    return resolveGlobalExecutable(["claude"]) ?? resolveAppBundledCli("claude")
+  }
+
+  if (engine === "codex") {
+    return resolveGlobalExecutable(["codex"]) ?? resolveAppBundledCli("codex")
+  }
+
+  if (engine === "agy") {
+    return resolveGlobalExecutable(["agy", "antigravity"]) ?? resolveAppBundledCli("agy")
+  }
+
+  if (engine === "deepseek-harness") {
+    return resolveGlobalExecutable(["dsh", "deepseek-harness"]) ?? resolveAppBundledCli("deepseek-harness")
+  }
+
+  return resolveGlobalExecutable(["workbuddy", "codebuddy"]) ?? resolveAppBundledCli("workbuddy")
 }
 
 function detectLocalDisplayLabel(engine: LocalEngine) {
   if (engine === "claude") {
-    const hasCli = Boolean(resolveExecutableInPath(["claude"]))
-    const hasApp = fs.existsSync("/Applications/Claude.app")
-    const kind = !hasCli && hasApp ? "桌面端" : "CLI"
+    const hasGlobalCli = Boolean(resolveGlobalExecutable(["claude"]))
+    const hasApp = fs.existsSync("/Applications/Claude.app") || Boolean(resolveAppBundledCli("claude"))
+    const kind = !hasGlobalCli && hasApp ? "桌面端" : "CLI"
 
     return `claude (${kind})`
   }
 
   if (engine === "codex") {
-    const hasCli = Boolean(resolveExecutableInPath(["codex"]))
-    const hasApp = fs.existsSync("/Applications/Codex.app")
-    const kind = !hasCli && hasApp ? "桌面端" : "CLI"
+    const hasGlobalCli = Boolean(resolveGlobalExecutable(["codex"]))
+    const hasApp = fs.existsSync("/Applications/Codex.app") || Boolean(resolveAppBundledCli("codex"))
+    const kind = !hasGlobalCli && hasApp ? "桌面端" : "CLI"
 
     return `codex (${kind})`
   }
@@ -179,7 +218,7 @@ function detectLocalDisplayLabel(engine: LocalEngine) {
 
   const hasBuddyApp =
     fs.existsSync("/Applications/WorkBuddy.app") || fs.existsSync("/Applications/CodeBuddy.app")
-  const hasBuddyCli = Boolean(resolveExecutableInPath(["workbuddy", "codebuddy"]))
+  const hasBuddyCli = Boolean(resolveGlobalExecutable(["workbuddy", "codebuddy"]))
   const buddyKind = hasBuddyApp && !hasBuddyCli ? "桌面端" : "CLI"
 
   return `workbuddy (${buddyKind})`
@@ -448,16 +487,26 @@ async function runStreamJsonProcess(input: {
         ? ["--resume", targetSessionId]
         : ["--session-id", targetSessionId]
 
-  const args = [
-    "-p",
-    "--output-format",
-    "stream-json",
-    "--verbose",
-    "--include-partial-messages",
-    "--dangerously-skip-permissions",
-    ...sessionFlag,
-    input.prompt,
-  ]
+  const args =
+    input.mode === "agy"
+      ? [
+          "--output-format",
+          "stream-json",
+          "--dangerously-skip-permissions",
+          ...sessionFlag,
+          "-p",
+          input.prompt,
+        ]
+      : [
+          "-p",
+          "--output-format",
+          "stream-json",
+          "--verbose",
+          "--include-partial-messages",
+          "--dangerously-skip-permissions",
+          ...sessionFlag,
+          input.prompt,
+        ]
 
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -499,6 +548,53 @@ async function runStreamJsonProcess(input: {
 
       if (typeof row.conversation_id === "string" && row.conversation_id) {
         state.detectedSessionId = row.conversation_id
+      }
+
+      if (row.event === "init" && isRecord(row.init) && typeof row.init.conversation_id === "string") {
+        if (row.init.conversation_id) state.detectedSessionId = row.init.conversation_id
+
+        return
+      }
+
+      if (row.event === "step_update" && isRecord(row.step_update)) {
+        const step = row.step_update
+
+        if (typeof step.thinking_delta === "string" && step.thinking_delta) {
+          input.emitter.pushReasoning(step.thinking_delta)
+        }
+
+        if (typeof step.text_delta === "string" && step.text_delta) {
+          input.emitter.pushText(step.text_delta)
+        }
+
+        return
+      }
+
+      if (row.event === "result" && isRecord(row.result)) {
+        const res = row.result
+
+        if (typeof res.conversation_id === "string" && res.conversation_id) {
+          state.detectedSessionId = res.conversation_id
+        }
+
+        if (isRecord(res.usage)) {
+          if (typeof res.usage.input_tokens === "number") input.emitter.state.inputTokens = res.usage.input_tokens
+          if (typeof res.usage.output_tokens === "number") input.emitter.state.outputTokens = res.usage.output_tokens
+          if (typeof res.usage.thinking_tokens === "number")
+            input.emitter.state.reasoningTokens = res.usage.thinking_tokens
+        }
+
+        if (!input.emitter.state.hasText && typeof res.response === "string" && res.response.trim()) {
+          input.emitter.pushText(res.response)
+
+          return
+        }
+
+        if (!input.emitter.state.hasText && typeof res.error === "string" && res.error.trim()) {
+          input.emitter.pushText(`${input.engineLabel} 执行出错：${res.error}`)
+        }
+
+        return
       }
 
       if (row.type === "stream_event" && row.parent_tool_use_id === null && isRecord(row.event)) {
