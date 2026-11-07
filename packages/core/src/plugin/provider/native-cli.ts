@@ -15,6 +15,7 @@ import type {
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
 import { Effect, Option, Schema, Stream } from "effect"
+import { Bus } from "../../bus.js"
 import { Credential } from "../../credential.js"
 import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
@@ -1550,10 +1551,11 @@ let agyRefreshInFlight = false
 
 function refreshAgyModelsCache(home: string, onUpdated: () => void) {
   if (agyRefreshInFlight) return
+  const cachePath = path.join(home, ".gemini", "antigravity", "pigu-models-cache.json")
+  if (fs.existsSync(cachePath)) return
   const binary = resolveEngineBinary("agy")
   if (!binary) return
   agyRefreshInFlight = true
-  const cachePath = path.join(home, ".gemini", "antigravity", "pigu-models-cache.json")
 
   childProcess.execFile(
     binary,
@@ -1738,28 +1740,31 @@ export const refreshLocalEngineModels = Effect.fn("NativeCliProvider.refreshLoca
   const home = os.homedir()
   const normalized = (target ?? "").replace(/^local:/, "")
   if (!normalized || normalized === "local" || normalized === "agy") {
-    yield* Effect.async<void>((resume) => {
-      const binary = resolveEngineBinary("agy")
-      if (!binary) {
-        resume(Effect.void)
-        return
-      }
-      const cachePath = path.join(home, ".gemini", "antigravity", "pigu-models-cache.json")
-      childProcess.execFile(
-        binary,
-        ["models"],
-        { timeout: 15_000, env: { ...process.env, PATH: buildAugmentedPath() } },
-        (_err, stdout) => {
-          const parsed = parseAgyModelsStdout(stdout ?? "")
-          if (parsed.length > 0) {
-            const dir = path.dirname(cachePath)
-            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
-            fs.writeFileSync(cachePath, JSON.stringify({ models: parsed }, null, 2), "utf8")
+    yield* Effect.promise(
+      () =>
+        new Promise<void>((resolve) => {
+          const binary = resolveEngineBinary("agy")
+          if (!binary) {
+            resolve()
+            return
           }
-          resume(Effect.void)
-        },
-      )
-    })
+          const cachePath = path.join(home, ".gemini", "antigravity", "pigu-models-cache.json")
+          childProcess.execFile(
+            binary,
+            ["models"],
+            { timeout: 15_000, env: { ...process.env, PATH: buildAugmentedPath() } },
+            (_err, stdout) => {
+              const parsed = parseAgyModelsStdout(stdout ?? "")
+              if (parsed.length > 0) {
+                const dir = path.dirname(cachePath)
+                if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+                fs.writeFileSync(cachePath, JSON.stringify({ models: parsed }, null, 2), "utf8")
+              }
+              resolve()
+            },
+          )
+        }),
+    )
   }
 })
 
@@ -1780,8 +1785,9 @@ export const NativeCliProviderPlugin = define({
       runPromise(ctx.storage.set(`session:${sessionID}`, state))
 
     const home = os.homedir()
+    const bus = yield* Bus.Service
 
-    yield* ctx.event.subscribe(Credential.Event.Updated).pipe(
+    yield* bus.subscribe(Credential.Event.Updated).pipe(
       Stream.runForEach(() => ctx.provider.reload()),
       Effect.forkScoped({ startImmediately: true }),
     )
