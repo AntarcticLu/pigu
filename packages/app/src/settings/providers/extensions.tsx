@@ -280,7 +280,7 @@ export const SettingsExtensions: Component<{
     showToast({ variant: "success", title: "MCP 已删除" })
   }
 
-  const [pluginList] = createResource(
+  const [pluginList, { refetch: refetchPlugins }] = createResource(
     () => serverSdk.connection.status() === "connected",
     () =>
       serverSdk.api.plugin
@@ -482,8 +482,6 @@ export const SettingsExtensions: Component<{
   const togglePlugin = (item: PluginDisplayRow, enabled: boolean) => {
     if (props.directory) {
       scopeStore.setProjectPluginEnabled(props.directory, item.id, enabled)
-
-      return
     }
 
     if (item.custom) {

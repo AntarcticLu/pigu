@@ -17,6 +17,8 @@ export default Runtime.handler(
       const login = yield* Effect.promise(() => import("./auth/login"))
       return yield* login.default({
         target: Option.none(),
+        url: Option.none(),
+        key: Option.none(),
         method: Option.none(),
         answer: [],
       })

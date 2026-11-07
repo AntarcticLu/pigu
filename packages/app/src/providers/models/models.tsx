@@ -140,7 +140,11 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
       }),
   )
 
-  const find = (key: ModelKey) => list().find((m) => m.id === key.modelID && m.provider.id === key.providerID)
+  const find = (key: ModelKey) =>
+    list().find((m) => m.id === key.modelID && m.provider.id === key.providerID) ??
+    (key.providerID === "local" && !key.modelID.includes("/")
+      ? list().find((m) => m.provider.id === "local" && m.id.startsWith(`${key.modelID}/`))
+      : undefined)
 
   function update(model: ModelKey, state: Visibility) {
     const index = store.user.findIndex((x) => x.modelID === model.modelID && x.providerID === model.providerID)

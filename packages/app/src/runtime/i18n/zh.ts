@@ -93,6 +93,13 @@ export const dict = {
   "command.provider.connect": "连接提供商",
 
   "command.settings.open": "打开设置",
+  "command.config.reload": "重新加载配置",
+  "command.commands.search": "搜索命令",
+  "command.session.search": "搜索会话",
+  "command.sidebar.toggle": "切换侧边栏",
+  "command.bottom.toggle": "切换底部面板",
+  "command.prompt.mode.toggle": "切换 Shell 模式",
+  "session.tab.new": "新标签页",
 
   "command.session.location.cycle": "依次切换会话位置",
 
@@ -150,12 +157,16 @@ export const dict = {
 
   "command.session.export": "导出会话",
   "command.session.export.description": "将完整会话记录导出为 JSON",
+  "command.session.rename": "重命名会话",
+  "command.session.delete": "删除会话",
 
   "palette.search.placeholder": "搜索文件、命令和会话",
   "palette.search.placeholder.home": "搜索命令和会话",
   "palette.empty": "未找到结果",
   "palette.group.commands": "命令",
   "palette.group.files": "文件",
+  "palette.group.recentSessions": "最近会话",
+  "palette.group.settings": "设置",
 
   "dialog.provider.search.placeholder": "搜索提供商",
   "dialog.provider.empty": "未找到提供商",
@@ -174,8 +185,13 @@ export const dict = {
   "dialog.model.select.title": "选择模型",
   "dialog.model.search.placeholder": "搜索模型",
   "dialog.model.empty": "未找到模型",
+  "dialog.model.unavailable": "{{model}}（不可用）",
   "dialog.model.manage": "管理模型",
   "dialog.model.manage.description": "自定义模型选择器中显示的模型。",
+  "dialog.model.favorites": "收藏",
+  "dialog.model.recent": "最近使用",
+  "dialog.model.favorite": "收藏模型",
+  "dialog.model.unfavorite": "取消收藏",
   "dialog.model.unpaid.freeModels.title": "OpenCode 提供的免费模型",
   "dialog.model.unpaid.addMore.title": "从热门提供商添加更多模型",
   "dialog.model.unpaid.viewMoreProviders": "查看另外 70 多个提供商",

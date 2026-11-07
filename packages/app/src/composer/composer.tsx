@@ -67,27 +67,25 @@ export function Composer(props: {
         suggestionBoundary={props.suggestionBoundary}
         trailingControl={
           <div class="flex items-center gap-0.5">
+            <ComposerMcpSkillControl model={props.model} />
             <ComposerContextCircle model={props.model} />
             <ComposerFollowUpControl />
           </div>
         }
         modelControl={
-          <div class="flex min-w-0 items-center gap-1">
-            <ComposerModelControl
-              loading={props.model.model.loading}
-              preview={!!props.model.model.preview}
-              paid={props.model.model.paid}
-              title={language.t("command.model.choose")}
-              keybind={command.keybindParts("model.choose")}
-              model={props.model.model.selection}
-              label={modelLabel()}
-              onClose={props.model.restoreFocus}
-              onUnpaidClick={() =>
-                dialog.show(() => <DialogConnectProvider selection={props.model.model.selection} standalone />)
-              }
-            />
-            <ComposerMcpSkillControl model={props.model} />
-          </div>
+          <ComposerModelControl
+            loading={props.model.model.loading}
+            preview={!!props.model.model.preview}
+            paid={props.model.model.paid}
+            title={language.t("command.model.choose")}
+            keybind={command.keybindParts("model.choose")}
+            model={props.model.model.selection}
+            label={modelLabel()}
+            onClose={props.model.restoreFocus}
+            onUnpaidClick={() =>
+              dialog.show(() => <DialogConnectProvider selection={props.model.model.selection} standalone />)
+            }
+          />
         }
       />
     </div>

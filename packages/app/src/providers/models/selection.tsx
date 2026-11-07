@@ -307,6 +307,12 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
         return undefined
       }
 
+      if (session.model.providerID === "local" && !session.model.id.includes("/")) {
+        const matched = models.find({ providerID: "local", modelID: session.model.id })
+
+        return { providerID: "local", modelID: matched?.id ?? session.model.id }
+      }
+
       return { providerID: session.model.providerID, modelID: session.model.id }
     }
 
