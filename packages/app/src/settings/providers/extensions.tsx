@@ -9,6 +9,7 @@ import { Tabs } from "@opencode/ui/tabs"
 import { TextInput } from "@opencode/ui/text-input"
 import { TruncatedText } from "@opencode/ui/truncated-text"
 import { pluginLabel } from "@/providers/catalog/plugin"
+import { useProviders } from "@/providers/catalog/providers"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useData } from "@/runtime/server/current"
 import { useServerSDK } from "@/runtime/server/client"
@@ -72,6 +73,7 @@ export const SettingsExtensions: Component<{
   const platform = usePlatform()
   const host = usePluginHost()
   const scopeStore = useExtensionScopeStore()
+  const providers = useProviders(() => props.directory)
   const location = () => (props.directory ? { directory: props.directory } : data.location.default())
   const toggleMcp = useMcpToggle(() => props.directory)
 
@@ -289,9 +291,13 @@ export const SettingsExtensions: Component<{
     const byID = new Map<string, PluginDisplayRow>()
     const builtinSet = new Set(builtins.map((item) => item.id))
     const localOrder = new Map(BUILTIN_LOCAL_AGENT_PLUGINS.map((item, idx) => [item.id, idx]))
+    const localModels = providers.all().get("local")?.models
+    const hasCatalog = providers.all().size > 0
 
     for (const localItem of BUILTIN_LOCAL_AGENT_PLUGINS) {
       if (scopeStore.isPluginRemoved(localItem.id)) continue
+
+      if (hasCatalog && !localModels?.[localItem.modelID]) continue
       byID.set(localItem.id, {
         id: localItem.id,
         name: localItem.name,
@@ -342,6 +348,8 @@ export const SettingsExtensions: Component<{
     for (const custom of scopeStore.customPlugins()) {
       if (scopeStore.isPluginRemoved(custom.id)) continue
       const builtinLocal = BUILTIN_LOCAL_AGENT_PLUGINS.find((item) => item.id === custom.id)
+
+      if (builtinLocal && hasCatalog && !localModels?.[builtinLocal.modelID]) continue
       const cleanedName = builtinLocal ? stripLegacyLocalPluginSuffix(custom.name) : custom.name
       const isOldDefaultDesc = custom.description?.includes("桥接")
       byID.set(custom.id, {

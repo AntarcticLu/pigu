@@ -1630,6 +1630,8 @@ const BUILTIN_ENGINE_SUBMODELS: Readonly<Record<LocalEngine, readonly string[]>>
 }
 
 function buildEngineModels(engine: LocalEngine, baseId: Model.ID, home: string): readonly Model.Info[] {
+  if (!resolveEngineBinary(engine)) return []
+
   const discovered =
     engine === "codex"
       ? discoverCodexConfigModels(home)

@@ -33,6 +33,13 @@ import { CONSOLE_INTEGRATION } from "@/providers/connect/controller"
 import { DialogConnectProvider, useProviderConnectController } from "@/providers/connect/dialog"
 import { ProviderModelIcon } from "@/providers/models/provider-group"
 import { SettingsList } from "@/settings/list"
+import {
+  BUILTIN_LOCAL_AGENT_PLUGINS,
+  localBaseEngineID,
+  localEngineCanonicalIcon,
+  localEngineDefaultLabel,
+  useExtensionScopeStore,
+} from "@/shell/titlebar/extension-scope-store"
 import { activeProviderAccount, providerAccounts, type ProviderAccount } from "./accounts"
 import { AccountNameInput } from "./account-name"
 import { useProviderAccountActions } from "./account-actions"
@@ -78,6 +85,7 @@ export const SettingsProviders: Component<{
   const integrations = useIntegrations(() => props.directory)
   const providerConnect = useProviderConnectController()
   const accountActions = useProviderAccountActions(() => props.directory)
+  const scopeStore = useExtensionScopeStore()
 
   const [configuredMap, setConfiguredMap] = createSignal<
     Record<string, { name?: string; baseURL?: string; apiKey?: string }>
@@ -394,6 +402,8 @@ export const SettingsProviders: Component<{
     )
   }
 
+  const localPluginOrder = BUILTIN_LOCAL_AGENT_PLUGINS.map((plugin) => plugin.id)
+
   const available = createMemo(() => {
     if (state.held) return state.held
     const connected = providers.connected()
@@ -413,11 +423,60 @@ export const SettingsProviders: Component<{
             consoleConnected ||
             Object.values(provider.models).some((model) => model.cost.input > 0)),
       )
-      .toSorted(
-        (a, b) =>
-          Number(b.id === "local") - Number(a.id === "local") ||
-          Number(b.id === "opencode-go") - Number(a.id === "opencode-go"),
-      )
+      .flatMap((provider): ProviderItem[] => {
+        if (provider.id !== "local") return [provider]
+
+        const byEngine = new Map<string, Record<string, ProviderItem["models"][string]>>()
+
+        for (const [key, model] of Object.entries(provider.models)) {
+          const base = localBaseEngineID(model.id)
+
+          if (!scopeStore.isLocalAgentEnabled(base, props.directory)) continue
+          const current = byEngine.get(base) ?? {}
+          current[key] = model
+          byEngine.set(base, current)
+        }
+
+        return Array.from(byEngine.entries()).map(([base, models]) => {
+          const name = scopeStore.localAgentLabel(base, localEngineDefaultLabel(base))
+          const canonical = localEngineCanonicalIcon(base)
+
+          if (canonical) {
+            return {
+              ...provider,
+              id: `local:${base}`,
+              name,
+              canonical,
+              models,
+            }
+          }
+
+          return {
+            ...provider,
+            id: `local:${base}`,
+            name,
+            models,
+          }
+        })
+      })
+      .toSorted((a, b) => {
+        const isPigu = (id: string) => id === "pigutoken" || id === "pigu"
+
+        if (isPigu(a.id) && !isPigu(b.id)) return -1
+
+        if (!isPigu(a.id) && isPigu(b.id)) return 1
+
+        const aLocal = localPluginOrder.indexOf(a.id)
+        const bLocal = localPluginOrder.indexOf(b.id)
+
+        if (aLocal >= 0 && bLocal >= 0) return aLocal - bLocal
+
+        if (aLocal >= 0) return 1
+
+        if (bLocal >= 0) return -1
+
+        return Number(b.id === "opencode-go") - Number(a.id === "opencode-go")
+      })
   })
 
   // Tells the machine which providers the server catalog lists, so a confirmed removal stops hiding a
@@ -504,7 +563,7 @@ export const SettingsProviders: Component<{
   }
 
   const type = (item: ProviderItem) => {
-    if (item.id === "local") return "本地"
+    if (item.id === "local" || item.id.startsWith("local:")) return "本地插件"
 
     const current = source(item)
 
@@ -709,6 +768,8 @@ export const SettingsProviders: Component<{
                 {(item) => {
                   const managedGroup = () => (consoleGroup()?.root.id === item.id ? consoleGroup() : undefined)
                   const cfg = () => configuredMap()[item.id]
+                  const isExpanded = () =>
+                    Boolean(props.filter?.trim()) || state.collapsed[item.id] === false
 
                   return (
                     <Show
@@ -719,16 +780,22 @@ export const SettingsProviders: Component<{
                             <button
                               type="button"
                               data-action={`provider-toggle-${item.id}`}
-                              aria-expanded={!state.collapsed[item.id]}
+                              aria-expanded={isExpanded()}
                               class="settings-provider-lead cursor-pointer text-left focus-visible:outline-none"
-                              onClick={() => setState("collapsed", item.id, !state.collapsed[item.id])}
+                              onClick={() =>
+                                setState(
+                                  "collapsed",
+                                  item.id,
+                                  state.collapsed[item.id] === false,
+                                )
+                              }
                             >
                               <Show when={props.renderModels}>
                                 <Icon
                                   name="chevron-down"
                                   size="small"
                                   class="shrink-0 text-v2-icon-icon-muted transition-transform"
-                                  classList={{ "-rotate-90": !!state.collapsed[item.id] }}
+                                  classList={{ "-rotate-90": !isExpanded() }}
                                 />
                               </Show>
                               <ProviderModelIcon provider={item} class="settings-provider-icon shrink-0" />
@@ -738,6 +805,9 @@ export const SettingsProviders: Component<{
                                   {item.name}
                                 </span>
                                 <Badge>{type(item)}</Badge>
+                                <span class="shrink-0 text-11-regular text-v2-text-text-faint">
+                                  {Object.keys(item.models).length} 个模型
+                                </span>
                                 <Show when={cfg()?.baseURL}>
                                   {(url) => (
                                     <span class="truncate text-11-regular text-v2-text-text-muted">
@@ -747,7 +817,7 @@ export const SettingsProviders: Component<{
                                 </Show>
                               </div>
                             </button>
-                            <Show when={item.id !== "local"}>
+                            <Show when={item.id !== "local" && !item.id.startsWith("local:")}>
                               <div class="flex items-center gap-1.5">
                                 <Button
                                   size="small"
@@ -776,7 +846,7 @@ export const SettingsProviders: Component<{
                               </div>
                             </Show>
                           </div>
-                          <Show when={!state.collapsed[item.id]}>
+                          <Show when={isExpanded()}>
                             {props.renderModels?.(item.id)}
                           </Show>
                         </div>

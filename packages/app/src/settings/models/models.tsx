@@ -8,6 +8,7 @@ import { useModels } from "@/providers/models/models"
 import { popularProviders } from "@/providers/catalog/providers"
 import { SettingsRow } from "@/settings/row"
 import { ModelProtocolSelect } from "@/providers/models/protocol"
+import { providerGroupKey } from "@/providers/models/select-dialog"
 import { SettingsProviders } from "@/settings/providers/providers"
 import { SettingsSearchEmpty } from "@/settings/search-empty"
 import { SettingsSearchField } from "@/settings/search-field"
@@ -32,8 +33,21 @@ export const SettingsModels: Component<{
     items: (_filter) => models.list().filter((item) => item.provider.id !== "native-cli"),
     key: (x) => `${x.provider.id}:${x.id}`,
     filterKeys: ["provider.name", "name", "id"],
-    sortBy: (a, b) => a.name.localeCompare(b.name),
-    groupBy: (x) => x.provider.id,
+    sortBy: (a, b) => {
+      if (a.provider.id === "local" && b.provider.id === "local") {
+        const aIsDefault = !a.id.includes("/")
+        const bIsDefault = !b.id.includes("/")
+
+        if (aIsDefault && !bIsDefault) return -1
+
+        if (!aIsDefault && bIsDefault) return 1
+
+        return 0
+      }
+
+      return a.name.localeCompare(b.name)
+    },
+    groupBy: (x) => providerGroupKey(x),
     sortGroupsBy: (a, b) => {
       const aIndex = popularProviders.indexOf(a.category)
       const bIndex = popularProviders.indexOf(b.category)
