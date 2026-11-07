@@ -4,7 +4,6 @@ import { type Component, For, type JSX, Show } from "solid-js"
 
 import { Schema } from "effect"
 import { Persistence } from "@/runtime/persistence/schema"
-import { useLanguage } from "@/runtime/i18n/language"
 import { useModels } from "@/providers/models/models"
 import { popularProviders } from "@/providers/catalog/providers"
 import { SettingsRow } from "@/settings/row"
@@ -27,7 +26,6 @@ export const SettingsModels: Component<{
   onReveal?: () => void
   headerAction?: JSX.Element
 }> = (props) => {
-  const language = useLanguage()
   const models = useModels()
 
   const list = useFilteredList<ModelItem>({

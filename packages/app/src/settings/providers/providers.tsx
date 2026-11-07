@@ -168,8 +168,8 @@ export const SettingsProviders: Component<{
               key: cleanKey,
               metadata: {
                 piguAction: "upsert",
-                providerID: initial?.providerID,
-                name: cleanName || undefined,
+                ...(initial?.providerID ? { providerID: initial.providerID } : {}),
+                ...(cleanName ? { name: cleanName } : {}),
                 baseURL: cleanURL,
               },
             },

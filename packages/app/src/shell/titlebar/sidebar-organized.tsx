@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { createEffect, createMemo, Show, onCleanup, untrack, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, Show, onCleanup, type Accessor, type JSX } from "solid-js"
 import { Key } from "@solid-primitives/keyed"
 import { createStore } from "solid-js/store"
 import { useQuery } from "@tanstack/solid-query"
@@ -218,8 +218,6 @@ function ProjectList(props: {
   onExpand: (key: string, next: boolean) => void
   onReorder: (server: string, ids: string[]) => void
 }) {
-  const language = useLanguage()
-
   const servers = useServers()
 
   const layout = useLayout()

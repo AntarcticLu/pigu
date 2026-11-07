@@ -284,16 +284,24 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
       }
 
       if (session.model.providerID === "pigu" && session.model.id === "default") {
-        if (session.metadata?.source === "claude") {
-          return { providerID: "local", modelID: "claude" }
+        const src = String(session.metadata?.source ?? "").toLowerCase()
+
+        if (
+          src === "claude" ||
+          src === "codex" ||
+          src === "agy" ||
+          src === "pi" ||
+          src === "opencode" ||
+          src === "cursor" ||
+          src === "grok" ||
+          src === "deepseek-harness" ||
+          src === "workbuddy"
+        ) {
+          return { providerID: "local", modelID: src }
         }
 
-        if (session.metadata?.source === "codex") {
-          return { providerID: "local", modelID: "codex" }
-        }
-
-        if (session.metadata?.source === "agy") {
-          return { providerID: "local", modelID: "agy" }
+        if (src === "dsh") {
+          return { providerID: "local", modelID: "deepseek-harness" }
         }
 
         return undefined

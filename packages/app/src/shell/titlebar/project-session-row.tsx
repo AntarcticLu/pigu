@@ -72,6 +72,20 @@ export function resolveSessionSource(session: SessionInfo) {
     }
   }
 
+  if (raw === "cursor") {
+    return {
+      label: "Cursor",
+      class: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
+    }
+  }
+
+  if (raw === "grok") {
+    return {
+      label: "Grok",
+      class: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
+    }
+  }
+
   return {
     label: "Pigu",
     class: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",

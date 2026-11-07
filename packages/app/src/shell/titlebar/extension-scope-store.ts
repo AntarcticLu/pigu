@@ -63,6 +63,34 @@ export const BUILTIN_LOCAL_AGENT_PLUGINS: ReadonlyArray<BuiltinLocalAgentPlugin>
     description: "支持本地调用 agy 模型，并自动识别与加载项目下的 Antigravity 会话 JSON",
   },
   {
+    id: "local:pi",
+    modelID: "pi",
+    name: "pi",
+    target: "pi",
+    description: "支持本地调用 pi 模型，并自动识别与加载项目下的 Pi 会话 JSON",
+  },
+  {
+    id: "local:opencode",
+    modelID: "opencode",
+    name: "opencode",
+    target: "opencode",
+    description: "支持本地调用 opencode 模型，并自动识别与加载项目下的 OpenCode 会话 JSON",
+  },
+  {
+    id: "local:cursor",
+    modelID: "cursor",
+    name: "cursor",
+    target: "cursor",
+    description: "支持本地调用 cursor 模型，并自动识别与加载项目下的 Cursor 会话 JSON",
+  },
+  {
+    id: "local:grok",
+    modelID: "grok",
+    name: "grok",
+    target: "grok",
+    description: "支持本地调用 grok 模型，并自动识别与加载项目下的 Grok 会话 JSON",
+  },
+  {
     id: "local:deepseek-harness",
     modelID: "deepseek-harness",
     name: "deepseek harness",
@@ -228,6 +256,30 @@ export function resolveSkillOrigin(skillPath: string, worktree?: string, fromIde
       label: `${prefix}AGY`,
       isLocal: false,
       class: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
+    }
+  }
+
+  if (lower.includes("/.pi/")) {
+    return {
+      label: `${prefix}Pi`,
+      isLocal: false,
+      class: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
+    }
+  }
+
+  if (lower.includes("/.cursor/")) {
+    return {
+      label: `${prefix}Cursor`,
+      isLocal: false,
+      class: "bg-sky-500/15 text-sky-600 dark:text-sky-400",
+    }
+  }
+
+  if (lower.includes("/.grok/")) {
+    return {
+      label: `${prefix}Grok`,
+      isLocal: false,
+      class: "bg-rose-500/15 text-rose-600 dark:text-rose-400",
     }
   }
 
@@ -416,9 +468,18 @@ export function useExtensionScopeStore() {
   const isSessionSourceEnabled = (source: string | undefined, worktree?: string) => {
     const raw = (source ?? "").trim().toLowerCase()
 
-    if (!raw || raw === "pigu" || raw === "opencode") return true
+    if (!raw || raw === "pigu") return true
 
-    if (raw === "claude" || raw === "codex" || raw === "agy" || raw === "workbuddy") {
+    if (
+      raw === "claude" ||
+      raw === "codex" ||
+      raw === "agy" ||
+      raw === "pi" ||
+      raw === "opencode" ||
+      raw === "cursor" ||
+      raw === "grok" ||
+      raw === "workbuddy"
+    ) {
       return isLocalAgentEnabled(raw, worktree)
     }
 

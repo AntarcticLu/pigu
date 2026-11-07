@@ -26,10 +26,23 @@ export const LOCAL_PACKAGE = "@opencode/local"
 export const CLAUDE_LOCAL_MODEL_ID = Model.ID.make("claude")
 export const CODEX_LOCAL_MODEL_ID = Model.ID.make("codex")
 export const AGY_LOCAL_MODEL_ID = Model.ID.make("agy")
+export const PI_LOCAL_MODEL_ID = Model.ID.make("pi")
+export const OPENCODE_LOCAL_MODEL_ID = Model.ID.make("opencode")
+export const CURSOR_LOCAL_MODEL_ID = Model.ID.make("cursor")
+export const GROK_LOCAL_MODEL_ID = Model.ID.make("grok")
 export const DEEPSEEK_HARNESS_LOCAL_MODEL_ID = Model.ID.make("deepseek-harness")
 export const WORKBUDDY_LOCAL_MODEL_ID = Model.ID.make("workbuddy")
 
-export type LocalEngine = "claude" | "codex" | "agy" | "deepseek-harness" | "workbuddy"
+export type LocalEngine =
+  | "claude"
+  | "codex"
+  | "agy"
+  | "pi"
+  | "opencode"
+  | "cursor"
+  | "grok"
+  | "deepseek-harness"
+  | "workbuddy"
 
 const HEADER_REQUEST_KIND = "x-opencode-request-kind"
 const HEADER_SESSION_ID = "x-opencode-session-id"
@@ -43,7 +56,17 @@ const EngineRecordSchema = Schema.Struct({
 
 const SessionCliStateSchema = Schema.Struct({
   lastEngine: Schema.optional(
-    Schema.Literals(["claude", "codex", "agy", "deepseek-harness", "workbuddy"]),
+    Schema.Literals([
+      "claude",
+      "codex",
+      "agy",
+      "pi",
+      "opencode",
+      "cursor",
+      "grok",
+      "deepseek-harness",
+      "workbuddy",
+    ]),
   ),
   lastPromptCount: Schema.optional(Schema.Number),
   claudeSessionId: Schema.optional(Schema.String),
@@ -92,6 +115,13 @@ function appBundleRuntimeDirs() {
     path.join(root, "Claude.app", "Contents", "Resources", "bin"),
     path.join(root, "Claude.app", "Contents", "Resources", "app", "bin"),
     path.join(root, "Antigravity.app", "Contents", "Resources", "app", "bin"),
+    path.join(root, "Cursor.app", "Contents", "Resources", "app", "bin"),
+    path.join(root, "OpenCode.app", "Contents", "Resources", "bin"),
+    path.join(root, "OpenCode.app", "Contents", "Resources", "app", "bin"),
+    path.join(root, "Pi.app", "Contents", "Resources", "bin"),
+    path.join(root, "Pi.app", "Contents", "Resources", "app", "bin"),
+    path.join(root, "Grok.app", "Contents", "Resources", "bin"),
+    path.join(root, "Grok.app", "Contents", "Resources", "app", "bin"),
     path.join(root, "DeepSeek Harness.app", "Contents", "Resources", "runtime", "cli", "bin"),
     path.join(root, "DeepSeek Harness.app", "Contents", "Resources", "runtime", "bin"),
     path.join(root, "WorkBuddy.app", "Contents", "Resources", "runtime", "cli", "bin"),
@@ -147,6 +177,39 @@ function appBundledCliCandidates(engine: LocalEngine) {
     ])
   }
 
+  if (engine === "pi") {
+    return appRoots.flatMap((root) => [
+      path.join(root, "Pi.app", "Contents", "Resources", "bin", "pi"),
+      path.join(root, "Pi.app", "Contents", "Resources", "app", "bin", "pi"),
+      path.join(root, "Pi.app", "Contents", "MacOS", "pi"),
+    ])
+  }
+
+  if (engine === "opencode") {
+    return appRoots.flatMap((root) => [
+      path.join(root, "OpenCode.app", "Contents", "MacOS", "opencode-cli"),
+      path.join(root, "OpenCode.app", "Contents", "Resources", "bin", "opencode"),
+      path.join(root, "OpenCode.app", "Contents", "Resources", "app", "bin", "opencode"),
+    ])
+  }
+
+  if (engine === "cursor") {
+    return appRoots.flatMap((root) => [
+      path.join(root, "Cursor.app", "Contents", "Resources", "app", "bin", "cursor-agent"),
+      path.join(root, "Cursor.app", "Contents", "Resources", "app", "bin", "cursor"),
+      path.join(root, "Cursor.app", "Contents", "Resources", "bin", "cursor-agent"),
+      path.join(root, "Cursor.app", "Contents", "Resources", "bin", "cursor"),
+    ])
+  }
+
+  if (engine === "grok") {
+    return appRoots.flatMap((root) => [
+      path.join(root, "Grok.app", "Contents", "Resources", "bin", "grok"),
+      path.join(root, "Grok.app", "Contents", "Resources", "app", "bin", "grok"),
+      path.join(root, "Grok.app", "Contents", "MacOS", "grok"),
+    ])
+  }
+
   if (engine === "deepseek-harness") {
     return appRoots.flatMap((root) => [
       path.join(root, "DeepSeek Harness.app", "Contents", "Resources", "runtime", "cli", "bin", "dsh"),
@@ -178,6 +241,22 @@ function resolveEngineBinary(engine: LocalEngine) {
     return resolveGlobalExecutable(["agy", "antigravity"]) ?? resolveAppBundledCli("agy")
   }
 
+  if (engine === "pi") {
+    return resolveGlobalExecutable(["pi"]) ?? resolveAppBundledCli("pi")
+  }
+
+  if (engine === "opencode") {
+    return resolveGlobalExecutable(["opencode"]) ?? resolveAppBundledCli("opencode")
+  }
+
+  if (engine === "cursor") {
+    return resolveGlobalExecutable(["cursor-agent", "cursor"]) ?? resolveAppBundledCli("cursor")
+  }
+
+  if (engine === "grok") {
+    return resolveGlobalExecutable(["grok", "grok-cli"]) ?? resolveAppBundledCli("grok")
+  }
+
   if (engine === "deepseek-harness") {
     return resolveGlobalExecutable(["dsh", "deepseek-harness"]) ?? resolveAppBundledCli("deepseek-harness")
   }
@@ -192,6 +271,14 @@ function detectLocalDisplayLabel(engine: LocalEngine) {
 
   if (engine === "agy") return "agy"
 
+  if (engine === "pi") return "pi"
+
+  if (engine === "opencode") return "opencode"
+
+  if (engine === "cursor") return "cursor"
+
+  if (engine === "grok") return "grok"
+
   if (engine === "deepseek-harness") return "deepseek harness"
 
   return "workbuddy"
@@ -201,6 +288,14 @@ function normalizeEngine(modelId: string): LocalEngine {
   if (modelId === "codex" || modelId === "codex-native") return "codex"
 
   if (modelId === "agy" || modelId === "agy-native") return "agy"
+
+  if (modelId === "pi" || modelId === "pi-native") return "pi"
+
+  if (modelId === "opencode" || modelId === "opencode-native") return "opencode"
+
+  if (modelId === "cursor" || modelId === "cursor-agent" || modelId === "cursor-native") return "cursor"
+
+  if (modelId === "grok" || modelId === "grok-cli" || modelId === "grok-native") return "grok"
 
   if (modelId === "deepseek-harness" || modelId === "dsh") return "deepseek-harness"
 
@@ -271,7 +366,46 @@ function findAgySessionFile(home: string, sessionId: string) {
   return fs.existsSync(transcript) ? transcript : undefined
 }
 
+function findPiSessionFile(home: string, sessionId: string) {
+  const piRoot = path.join(home, ".pi", "agent", "sessions")
+
+  if (!fs.existsSync(piRoot)) return undefined
+  const direct = path.join(piRoot, sessionId)
+
+  if (fs.existsSync(direct)) return direct
+  const directJsonl = path.join(piRoot, `${sessionId}.jsonl`)
+
+  return fs.existsSync(directJsonl) ? directJsonl : undefined
+}
+
+function findCursorSessionFile(home: string, sessionId: string) {
+  const projectsRoot = path.join(home, ".cursor", "projects")
+
+  if (!fs.existsSync(projectsRoot)) return undefined
+  const projectDirs = fs.readdirSync(projectsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory())
+  const candidates = projectDirs.map((dir) =>
+    path.join(projectsRoot, dir.name, "agent-transcripts", `${sessionId}.jsonl`),
+  )
+
+  return candidates.find((candidate) => fs.existsSync(candidate))
+}
+
+function findGrokSessionFile(home: string, sessionId: string) {
+  const grokRoot = path.join(home, ".grok", "sessions")
+
+  if (!fs.existsSync(grokRoot)) return undefined
+  const direct = path.join(grokRoot, `${sessionId}.jsonl`)
+
+  if (fs.existsSync(direct)) return direct
+  const directJson = path.join(grokRoot, `${sessionId}.json`)
+
+  return fs.existsSync(directJson) ? directJson : undefined
+}
+
 function findDshSessionFile(home: string, sessionId: string) {
+  const projCacheFile = path.join(home, ".dsh", "storages", "session_projcache", "sessions", `${sessionId}.json`)
+
+  if (fs.existsSync(projCacheFile)) return projCacheFile
   const sessionsDir = path.join(home, ".dsh", "sessions")
 
   if (!fs.existsSync(sessionsDir)) return undefined
@@ -291,6 +425,12 @@ function findEngineSessionFile(home: string, engine: LocalEngine, sessionId: str
   if (engine === "codex") return findCodexSessionFile(home, sessionId)
 
   if (engine === "agy") return findAgySessionFile(home, sessionId)
+
+  if (engine === "pi") return findPiSessionFile(home, sessionId)
+
+  if (engine === "cursor") return findCursorSessionFile(home, sessionId)
+
+  if (engine === "grok") return findGrokSessionFile(home, sessionId)
 
   if (engine === "deepseek-harness") return findDshSessionFile(home, sessionId)
 
@@ -441,7 +581,7 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
 
 async function runStreamJsonProcess(input: {
   engineLabel: string
-  mode: "claude" | "agy"
+  mode: "claude" | "agy" | "cursor"
   binary: string
   cwd: string
   prompt: string
@@ -456,9 +596,13 @@ async function runStreamJsonProcess(input: {
       ? input.resume && input.sessionId
         ? ["--conversation", input.sessionId]
         : []
-      : input.resume
-        ? ["--resume", targetSessionId]
-        : ["--session-id", targetSessionId]
+      : input.mode === "cursor"
+        ? input.resume && input.sessionId
+          ? ["--resume", input.sessionId]
+          : []
+        : input.resume
+          ? ["--resume", targetSessionId]
+          : ["--session-id", targetSessionId]
 
   const args =
     input.mode === "agy"
@@ -470,16 +614,26 @@ async function runStreamJsonProcess(input: {
           "-p",
           input.prompt,
         ]
-      : [
-          "-p",
-          "--output-format",
-          "stream-json",
-          "--verbose",
-          "--include-partial-messages",
-          "--dangerously-skip-permissions",
-          ...sessionFlag,
-          input.prompt,
-        ]
+      : input.mode === "cursor"
+        ? [
+            ...(path.basename(input.binary) === "cursor" ? ["agent"] : []),
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--force",
+            ...sessionFlag,
+            input.prompt,
+          ]
+        : [
+            "-p",
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--include-partial-messages",
+            "--dangerously-skip-permissions",
+            ...sessionFlag,
+            input.prompt,
+          ]
 
   const env: Record<string, string | undefined> = {
     ...process.env,
@@ -497,6 +651,7 @@ async function runStreamJsonProcess(input: {
       detectedSessionId: input.sessionId ?? (input.mode === "claude" ? targetSessionId : undefined),
       streamedMessageIds: new Set<string>(),
       currentMessageId: "",
+      plainLines: [] as string[],
       stderrText: "",
       buffer: "",
     }
@@ -512,7 +667,11 @@ async function runStreamJsonProcess(input: {
       if (!trimmed) return
       const decoded = decodeJsonUnknown(trimmed)
 
-      if (Option.isNone(decoded) || !isRecord(decoded.value)) return
+      if (Option.isNone(decoded) || !isRecord(decoded.value)) {
+        state.plainLines.push(line)
+
+        return
+      }
       const row = decoded.value
 
       if (typeof row.session_id === "string" && row.session_id) {
@@ -666,6 +825,10 @@ async function runStreamJsonProcess(input: {
       input.signal.removeEventListener("abort", onAbort)
 
       if (state.buffer.trim()) handleLine(state.buffer)
+
+      if (!input.emitter.state.hasText && state.plainLines.length > 0) {
+        input.emitter.pushText(state.plainLines.join("\n"))
+      }
 
       if (!input.emitter.state.hasText && code !== 0 && !input.signal.aborted) {
         const detail = state.stderrText.trim() || `${input.engineLabel} 进程退出码 ${code ?? "unknown"}`
@@ -1022,7 +1185,13 @@ class LocalLanguageModel implements LanguageModelV3 {
             saved.lastEngine === undefined &&
             (parsedMetadata?.source === "claude" ||
               parsedMetadata?.source === "codex" ||
-              parsedMetadata?.source === "agy")
+              parsedMetadata?.source === "agy" ||
+              parsedMetadata?.source === "pi" ||
+              parsedMetadata?.source === "opencode" ||
+              parsedMetadata?.source === "cursor" ||
+              parsedMetadata?.source === "grok" ||
+              parsedMetadata?.source === "deepseek-harness" ||
+              parsedMetadata?.source === "workbuddy")
               ? parsedMetadata.source
               : undefined
 
@@ -1067,7 +1236,7 @@ class LocalLanguageModel implements LanguageModelV3 {
           )
 
           const runResult = await (async () => {
-            if (currentEngine === "claude" || currentEngine === "agy") {
+            if (currentEngine === "claude" || currentEngine === "agy" || currentEngine === "cursor") {
               return runStreamJsonProcess({
                 engineLabel: currentEngine,
                 mode: currentEngine,
@@ -1088,6 +1257,55 @@ class LocalLanguageModel implements LanguageModelV3 {
                 prompt: finalPrompt,
                 sessionId: currentRecord.sessionId,
                 resume: canResume,
+                signal,
+                emitter,
+              })
+            }
+
+            if (currentEngine === "pi") {
+              const piArgs = [
+                "-p",
+                ...(canResume && currentRecord.filePath ? ["--session", currentRecord.filePath] : []),
+                finalPrompt,
+              ]
+
+              return runPlainCliProcess({
+                engineLabel: "pi",
+                binary,
+                args: piArgs,
+                cwd,
+                sessionId: currentRecord.sessionId,
+                signal,
+                emitter,
+              })
+            }
+
+            if (currentEngine === "opencode") {
+              const opencodeArgs = [
+                "run",
+                "--auto",
+                ...(canResume && currentRecord.sessionId ? ["--session", currentRecord.sessionId] : []),
+                finalPrompt,
+              ]
+
+              return runPlainCliProcess({
+                engineLabel: "opencode",
+                binary,
+                args: opencodeArgs,
+                cwd,
+                sessionId: currentRecord.sessionId,
+                signal,
+                emitter,
+              })
+            }
+
+            if (currentEngine === "grok") {
+              return runPlainCliProcess({
+                engineLabel: "grok",
+                binary,
+                args: ["-p", finalPrompt],
+                cwd,
+                sessionId: currentRecord.sessionId,
                 signal,
                 emitter,
               })
@@ -1212,6 +1430,10 @@ export const NativeCliProviderPlugin = define({
           buildLocalModel(CLAUDE_LOCAL_MODEL_ID, detectLocalDisplayLabel("claude")),
           buildLocalModel(CODEX_LOCAL_MODEL_ID, detectLocalDisplayLabel("codex")),
           buildLocalModel(AGY_LOCAL_MODEL_ID, detectLocalDisplayLabel("agy")),
+          buildLocalModel(PI_LOCAL_MODEL_ID, detectLocalDisplayLabel("pi")),
+          buildLocalModel(OPENCODE_LOCAL_MODEL_ID, detectLocalDisplayLabel("opencode")),
+          buildLocalModel(CURSOR_LOCAL_MODEL_ID, detectLocalDisplayLabel("cursor")),
+          buildLocalModel(GROK_LOCAL_MODEL_ID, detectLocalDisplayLabel("grok")),
           buildLocalModel(DEEPSEEK_HARNESS_LOCAL_MODEL_ID, detectLocalDisplayLabel("deepseek-harness")),
           buildLocalModel(WORKBUDDY_LOCAL_MODEL_ID, detectLocalDisplayLabel("workbuddy")),
         ],

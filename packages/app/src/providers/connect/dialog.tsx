@@ -1312,7 +1312,8 @@ function ProviderConnection(props: {
     }
 
     const defaultUrl = () => {
-      const def = urlField()?.default
+      const field = urlField()
+      const def = field && "default" in field ? field.default : undefined
 
       return Predicate.isString(def) ? def : ""
     }
@@ -1365,7 +1366,7 @@ function ProviderConnection(props: {
             key: cleanKey,
             metadata: {
               piguAction: "upsert",
-              name: cleanName || undefined,
+              ...(cleanName ? { name: cleanName } : {}),
               baseURL: cleanUrl,
             },
           },

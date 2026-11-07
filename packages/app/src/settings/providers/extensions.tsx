@@ -309,7 +309,12 @@ export const SettingsExtensions: Component<{
 
       if (scopeStore.isPluginRemoved(id)) continue
       const installed = host.installed().find((inst) => inst.id === id && !inst.builtin)
-      const target = item.source.type === "package" ? item.source.target : item.source.path
+      const target =
+        item.source.type === "package"
+          ? item.source.target
+          : item.source.type === "local"
+            ? item.source.path
+            : id
       byID.set(id, {
         id,
         name: label,
@@ -575,7 +580,7 @@ export const SettingsExtensions: Component<{
                 </div>
                 <Button
                   size="small"
-                  variant={mcpForm.open ? "ghost" : "secondary"}
+                  variant={mcpForm.open ? "ghost" : "outline"}
                   onClick={() => {
                     if (mcpForm.open) {
                       resetMcpForm()
@@ -606,14 +611,14 @@ export const SettingsExtensions: Component<{
                     <div class="flex items-center gap-1">
                       <Button
                         size="small"
-                        variant={mcpForm.type === "local" ? "secondary" : "ghost"}
+                        variant={mcpForm.type === "local" ? "outline" : "ghost"}
                         onClick={() => setMcpForm("type", "local")}
                       >
                         本地命令
                       </Button>
                       <Button
                         size="small"
-                        variant={mcpForm.type === "remote" ? "secondary" : "ghost"}
+                        variant={mcpForm.type === "remote" ? "outline" : "ghost"}
                         onClick={() => setMcpForm("type", "remote")}
                       >
                         远程 URL
@@ -645,7 +650,7 @@ export const SettingsExtensions: Component<{
                     <Button size="small" variant="ghost" onClick={resetMcpForm}>
                       取消
                     </Button>
-                    <Button size="small" variant="primary" disabled={mcpForm.saving} onClick={() => void saveMcp()}>
+                    <Button size="small" variant="contrast" disabled={mcpForm.saving} onClick={() => void saveMcp()}>
                       保存配置
                     </Button>
                   </div>
@@ -752,7 +757,7 @@ export const SettingsExtensions: Component<{
                 </div>
                 <Button
                   size="small"
-                  variant={pluginForm.open ? "ghost" : "secondary"}
+                  variant={pluginForm.open ? "ghost" : "outline"}
                   onClick={() => {
                     if (pluginForm.open) {
                       resetPluginForm()
@@ -797,7 +802,7 @@ export const SettingsExtensions: Component<{
                     <Button size="small" variant="ghost" onClick={resetPluginForm}>
                       取消
                     </Button>
-                    <Button size="small" variant="primary" onClick={savePlugin}>
+                    <Button size="small" variant="contrast" onClick={savePlugin}>
                       保存插件
                     </Button>
                   </div>
@@ -861,7 +866,7 @@ export const SettingsExtensions: Component<{
                 </div>
                 <Button
                   size="small"
-                  variant={skillForm.open ? "ghost" : "secondary"}
+                  variant={skillForm.open ? "ghost" : "outline"}
                   onClick={() => {
                     if (skillForm.open) {
                       resetSkillForm()
@@ -908,7 +913,7 @@ export const SettingsExtensions: Component<{
                     <Button size="small" variant="ghost" onClick={resetSkillForm}>
                       取消
                     </Button>
-                    <Button size="small" variant="primary" onClick={saveSkill}>
+                    <Button size="small" variant="contrast" onClick={saveSkill}>
                       保存技能
                     </Button>
                   </div>

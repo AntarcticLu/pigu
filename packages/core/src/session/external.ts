@@ -20,7 +20,16 @@ import { SessionMessage } from "./message.js"
 import { SessionSchema } from "./schema.js"
 import { SessionMessageTable, SessionTable } from "./sql.js"
 
-export type SourceApp = "codex" | "claude" | "agy" | "opencode" | "pi"
+export type SourceApp =
+  | "codex"
+  | "claude"
+  | "agy"
+  | "pi"
+  | "opencode"
+  | "cursor"
+  | "grok"
+  | "deepseek-harness"
+  | "workbuddy"
 
 interface ExternalMessage {
   readonly role: "user" | "assistant"
@@ -590,11 +599,134 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
   return results.filter((item): item is DiscoveredSession => item !== undefined)
 })
 
+const GenericJsonlLineSchema = Schema.Struct({
+  type: Schema.optional(Schema.String),
+  role: Schema.optional(Schema.String),
+  cwd: Schema.optional(Schema.String),
+  timestamp: Schema.optional(Schema.String),
+  content: Schema.optional(Schema.Union([Schema.String, Schema.Array(ContentPartSchema)])),
+  thinking: Schema.optional(Schema.String),
+  message: Schema.optional(
+    Schema.Struct({
+      role: Schema.optional(Schema.String),
+      content: Schema.optional(Schema.Union([Schema.String, Schema.Array(ContentPartSchema)])),
+    }),
+  ),
+})
+
+const decodeGenericJsonlLine = Schema.decodeUnknownOption(GenericJsonlLineSchema)
+
+const scanGenericJsonlSource = Effect.fn("SessionExternal.scanGenericJsonlSource")(function* (input: {
+  fs: FSUtil.Interface
+  home: string
+  rootDir: string
+  pattern: string
+  source: SourceApp
+  sourceLabel: string
+  existing: Set<string>
+}) {
+  if (!(yield* input.fs.isDir(input.rootDir))) return []
+
+  const relativeFiles = yield* input.fs
+    .scan(input.pattern, { cwd: input.rootDir })
+    .pipe(Effect.orElseSucceed((): string[] => []))
+
+  const results = yield* Effect.forEach(
+    relativeFiles.slice(0, 20),
+    Effect.fnUntraced(function* (rel) {
+      const externalID = path.basename(rel, path.extname(rel))
+      const sessionID = makeSessionID(input.source, rel)
+
+      if (input.existing.has(sessionID)) return undefined
+      input.existing.add(sessionID)
+
+      const fullPath = path.join(input.rootDir, rel)
+      const lines = yield* readBoundedJsonlLines(fullPath)
+
+      if (lines.length === 0) return undefined
+      let cwd = ""
+      let createdAt = 0
+      let updatedAt = 0
+      const messages: ExternalMessage[] = []
+
+      for (const rawLine of lines) {
+        const json = decodeJson(rawLine)
+
+        if (Option.isNone(json)) continue
+        const parsed = decodeGenericJsonlLine(json.value)
+
+        if (Option.isNone(parsed)) continue
+        const row = parsed.value
+
+        if (row.cwd && !cwd) cwd = row.cwd
+        const time = parseTime(row.timestamp, updatedAt || Date.now())
+
+        if (!createdAt && row.timestamp) createdAt = time
+        updatedAt = Math.max(updatedAt, time)
+
+        const role = row.message?.role ?? row.role ?? (row.type === "user" || row.type === "assistant" ? row.type : undefined)
+        const rawContent = row.message?.content ?? row.content
+
+        if (role === "user" || role === "assistant") {
+          const extracted = extractParts(rawContent)
+
+          if (extracted.text) {
+            messages.push({
+              role,
+              text: extracted.text,
+              thinking: extracted.thinking ?? row.thinking?.trim(),
+              time,
+            })
+          }
+        }
+      }
+
+      if (!cwd) {
+        const sampleHead = lines.slice(0, 25).join("\n")
+        const pathMatches = [
+          ...sampleHead.matchAll(/\/Volumes\/[^"'\s)\]`]+\/[^"'\s/)\]`]+|\/Users\/[^/"'\s]+\/[^."'\s/)\]`]+/g),
+        ].map((match) => match[0])
+        cwd = pathMatches.find((candidate) => !candidate.includes("/.")) ?? input.home
+      }
+
+      const firstUser = messages.find((msg) => msg.role === "user")
+
+      if (!firstUser) return undefined
+
+      const fallbackTime = Date.now()
+      const discovered: DiscoveredSession = {
+        id: sessionID,
+        source: input.source,
+        sourceLabel: input.sourceLabel,
+        externalID,
+        filePath: fullPath,
+        cwd,
+        title: cleanTitle(firstUser.text),
+        createdAt: createdAt || fallbackTime,
+        updatedAt: Math.max(createdAt || fallbackTime, updatedAt || fallbackTime),
+        messages: capMessages(messages),
+      }
+
+      return discovered
+    }),
+    { concurrency: 4 },
+  )
+
+  return results.filter((item): item is DiscoveredSession => item !== undefined)
+})
+
 const SYNC_COOLDOWN_MS = 300_000
 let lastSyncAt = 0
 let firstSyncDelayed = false
 const checkedExternalIDs = new Set<string>()
 const decodeStringArray = Schema.decodeUnknownOption(Schema.fromJsonString(Schema.Array(Schema.String)))
+
+function localModelForSource(source: SourceApp) {
+  return {
+    providerID: Provider.ID.make("local"),
+    id: Model.ID.make(source),
+  }
+}
 
 export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   readonly db: Database.Interface["db"]
@@ -624,22 +756,6 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
       decoded.forEach((id) => checkedExternalIDs.add(id))
     }
   }
-  const claudeLocalModel = {
-    providerID: Provider.ID.make("local"),
-    id: Model.ID.make("claude"),
-  }
-  const codexLocalModel = {
-    providerID: Provider.ID.make("local"),
-    id: Model.ID.make("codex"),
-  }
-  const agyLocalModel = {
-    providerID: Provider.ID.make("local"),
-    id: Model.ID.make("agy"),
-  }
-  const defaultModel = {
-    providerID: Provider.ID.make("pigu"),
-    id: Model.ID.make("default"),
-  }
 
   const existingRows = yield* input.db
     .select({ id: SessionTable.id, model: SessionTable.model })
@@ -647,6 +763,18 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
     .where(like(SessionTable.id, "ses_ext_%"))
     .all()
     .pipe(Effect.orElseSucceed(() => []))
+
+  const knownSources: ReadonlyArray<SourceApp> = [
+    "claude",
+    "codex",
+    "agy",
+    "pi",
+    "opencode",
+    "cursor",
+    "grok",
+    "deepseek-harness",
+    "workbuddy",
+  ]
 
   for (const row of existingRows) {
     checkedExternalIDs.add(row.id)
@@ -656,28 +784,12 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
       row.model?.providerID === "native-cli"
 
     if (shouldUpgrade) {
-      if (row.id.startsWith("ses_ext_claude_")) {
-        yield* input.db
-          .update(SessionTable)
-          .set({ model: claudeLocalModel })
-          .where(eq(SessionTable.id, row.id))
-          .run()
-          .pipe(Effect.ignoreCause)
-      }
+      const matchedSource = knownSources.find((src) => row.id.startsWith(`ses_ext_${src}_`))
 
-      if (row.id.startsWith("ses_ext_codex_")) {
+      if (matchedSource) {
         yield* input.db
           .update(SessionTable)
-          .set({ model: codexLocalModel })
-          .where(eq(SessionTable.id, row.id))
-          .run()
-          .pipe(Effect.ignoreCause)
-      }
-
-      if (row.id.startsWith("ses_ext_agy_")) {
-        yield* input.db
-          .update(SessionTable)
-          .set({ model: agyLocalModel })
+          .set({ model: localModelForSource(matchedSource) })
           .where(eq(SessionTable.id, row.id))
           .run()
           .pipe(Effect.ignoreCause)
@@ -685,18 +797,63 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
     }
   }
 
-  const [codex, claude, agy, pi] = yield* Effect.all([
+  const [codex, claude, agy, pi, opencode, cursor, grok, dsh, workbuddy] = yield* Effect.all([
     scanCodex(input.fs, home, checkedExternalIDs),
     scanClaude(input.fs, home, checkedExternalIDs),
     scanAgy(input.fs, home, checkedExternalIDs),
     scanPi(input.fs, home, checkedExternalIDs),
+    scanGenericJsonlSource({
+      fs: input.fs,
+      home,
+      rootDir: path.join(home, ".opencode", "sessions"),
+      pattern: "**/*.jsonl",
+      source: "opencode",
+      sourceLabel: "OpenCode",
+      existing: checkedExternalIDs,
+    }),
+    scanGenericJsonlSource({
+      fs: input.fs,
+      home,
+      rootDir: path.join(home, ".cursor", "projects"),
+      pattern: "*/agent-transcripts/*.jsonl",
+      source: "cursor",
+      sourceLabel: "Cursor",
+      existing: checkedExternalIDs,
+    }),
+    scanGenericJsonlSource({
+      fs: input.fs,
+      home,
+      rootDir: path.join(home, ".grok", "sessions"),
+      pattern: "**/*.jsonl",
+      source: "grok",
+      sourceLabel: "Grok",
+      existing: checkedExternalIDs,
+    }),
+    scanGenericJsonlSource({
+      fs: input.fs,
+      home,
+      rootDir: path.join(home, ".dsh", "sessions"),
+      pattern: "**/*.jsonl",
+      source: "deepseek-harness",
+      sourceLabel: "DSH",
+      existing: checkedExternalIDs,
+    }),
+    scanGenericJsonlSource({
+      fs: input.fs,
+      home,
+      rootDir: path.join(home, ".workbuddy", "sessions"),
+      pattern: "**/*.jsonl",
+      source: "workbuddy",
+      sourceLabel: "WorkBuddy",
+      existing: checkedExternalIDs,
+    }),
   ])
 
   yield* Effect.tryPromise(async () => {
     await Bun.write(cacheFile, JSON.stringify([...checkedExternalIDs]))
   }).pipe(Effect.ignoreCause)
 
-  const all = [...codex, ...claude, ...agy, ...pi]
+  const all = [...codex, ...claude, ...agy, ...pi, ...opencode, ...cursor, ...grok, ...dsh, ...workbuddy]
 
   if (all.length === 0) return
 
@@ -704,14 +861,7 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   const defaultAgent = Agent.ID.make("build")
 
   for (const session of all) {
-    const sessionModel =
-      session.source === "claude"
-        ? claudeLocalModel
-        : session.source === "codex"
-          ? codexLocalModel
-          : session.source === "agy"
-            ? agyLocalModel
-            : defaultModel
+    const sessionModel = localModelForSource(session.source)
     const validDir = yield* resolveExistingDir(input.fs, session.cwd, home)
     const cachedProject = resolvedDirs.get(validDir)
     const project = cachedProject ?? (yield* input.projects.resolve(AbsolutePath.make(validDir)))
