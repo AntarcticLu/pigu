@@ -100,7 +100,7 @@ fi
 tar -xzf "$HOME/.pigu/bundle.tar.gz" -C "$HOME/.pigu/app"
 rm -f "$HOME/.pigu/bundle.tar.gz"
 chmod +x "$HOME/.pigu/app/opencode-pty" 2>/dev/null || true
-printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
+printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexport OPENCODE_DB="opencode-local.db"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
 chmod 755 "$HOME/.pigu/bin/pigu"
 cp "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu"
 `

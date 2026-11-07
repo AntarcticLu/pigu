@@ -87,9 +87,13 @@ const layer = Layer.effect(
           if (resolved) return resolved
           return yield* new ModelNotSelectedError({ sessionID: session.id })
         }
-        const selected = (yield* available()).find(
-          (model) => model.providerID === session.model?.providerID && model.id === session.model.id,
-        )
+        const models = yield* available()
+        const selected =
+          models.find((model) => model.providerID === session.model?.providerID && model.id === session.model.id) ??
+          models.find(
+            (model) =>
+              model.providerID === session.model?.providerID && model.id.startsWith(`${session.model.id}/`),
+          )
         if (!selected)
           return yield* new ModelUnavailableError({
             providerID: session.model.providerID,

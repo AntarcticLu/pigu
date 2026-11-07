@@ -99,6 +99,7 @@ function globalBinDirs() {
   return [
     path.join(home, ".mounty", "AL", "node", "bin"),
     path.join(home, ".local", "bin"),
+    path.join(home, ".opencode", "bin"),
     path.join(home, ".claude", "local"),
     path.join(home, ".bun", "bin"),
     "/opt/homebrew/bin",
@@ -410,6 +411,15 @@ function findDshSessionFile(home: string, sessionId: string) {
   return fs.existsSync(directJson) ? directJson : undefined
 }
 
+function findOpencodeSessionFile(home: string, sessionId: string) {
+  const dbFile = path.join(home, ".local", "share", "opencode", "opencode.db")
+
+  if (fs.existsSync(dbFile)) return dbFile
+  const jsonlFile = path.join(home, ".opencode", "sessions", `${sessionId}.jsonl`)
+
+  return fs.existsSync(jsonlFile) ? jsonlFile : undefined
+}
+
 function findEngineSessionFile(home: string, engine: LocalEngine, sessionId: string | undefined) {
   if (!sessionId) return undefined
 
@@ -420,6 +430,8 @@ function findEngineSessionFile(home: string, engine: LocalEngine, sessionId: str
   if (engine === "agy") return findAgySessionFile(home, sessionId)
 
   if (engine === "pi") return findPiSessionFile(home, sessionId)
+
+  if (engine === "opencode") return findOpencodeSessionFile(home, sessionId)
 
   if (engine === "cursor") return findCursorSessionFile(home, sessionId)
 
@@ -1111,6 +1123,110 @@ async function runPlainCliProcess(input: {
   })
 }
 
+async function runOpencodeProcess(input: {
+  binary: string
+  args: ReadonlyArray<string>
+  cwd: string
+  sessionId?: string
+  signal: AbortSignal
+  emitter: ReturnType<typeof createStreamEmitter>
+}): Promise<{ sessionId?: string }> {
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    PATH: buildAugmentedPath(),
+    PWD: input.cwd,
+  }
+  delete env.OPENCODE_DB
+  delete env.OPENCODE_DISABLE_CHANNEL_DB
+
+  return new Promise((resolve, reject) => {
+    const child = childProcess.spawn(input.binary, [...input.args], {
+      cwd: input.cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+
+    const state = {
+      stdoutBuffer: "",
+      stderrText: "",
+      detectedSessionId: input.sessionId,
+      stopTimer: undefined as ReturnType<typeof setTimeout> | undefined,
+    }
+
+    const handleLine = (rawLine: string) => {
+      const trimmed = rawLine.trim()
+      if (!trimmed) return
+      const decoded = decodeJsonUnknown(trimmed)
+      if (Option.isNone(decoded) || !isRecord(decoded.value)) {
+        const cleaned = trimmed.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "").trim()
+        if (cleaned && !cleaned.startsWith("> ")) input.emitter.pushText(`${cleaned}\n`)
+        return
+      }
+      const row = decoded.value
+      if (typeof row.sessionID === "string" && row.sessionID.length > 0) {
+        state.detectedSessionId = row.sessionID
+      }
+      const part = isRecord(row.part) ? row.part : undefined
+      const partType = typeof part?.type === "string" ? part.type : typeof row.type === "string" ? row.type : ""
+      const partText = typeof part?.text === "string" ? part.text : typeof row.text === "string" ? row.text : ""
+      if (partType === "reasoning" && partText) {
+        input.emitter.pushReasoning(partText)
+        return
+      }
+      if (partType === "text" && partText) {
+        input.emitter.pushText(partText)
+        return
+      }
+      if ((partType === "step-finish" || row.type === "step_finish") && part?.reason === "stop") {
+        if (state.stopTimer) clearTimeout(state.stopTimer)
+        state.stopTimer = setTimeout(() => {
+          child.kill("SIGTERM")
+        }, 1200)
+        return
+      }
+      if (row.type === "error" && isRecord(row.error) && typeof row.error.message === "string") {
+        input.emitter.pushText(`opencode 错误：${row.error.message}`)
+      }
+    }
+
+    const onAbort = () => {
+      if (state.stopTimer) clearTimeout(state.stopTimer)
+      child.kill("SIGTERM")
+    }
+    input.signal.addEventListener("abort", onAbort, { once: true })
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      state.stdoutBuffer += chunk.toString("utf8")
+      const lines = state.stdoutBuffer.split(/\r?\n/)
+      state.stdoutBuffer = lines.pop() ?? ""
+      lines.forEach(handleLine)
+    })
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      state.stderrText += chunk.toString("utf8")
+    })
+
+    child.on("error", (err) => {
+      if (state.stopTimer) clearTimeout(state.stopTimer)
+      input.signal.removeEventListener("abort", onAbort)
+      reject(err)
+    })
+
+    child.on("close", (code) => {
+      if (state.stopTimer) clearTimeout(state.stopTimer)
+      input.signal.removeEventListener("abort", onAbort)
+      if (state.stdoutBuffer.trim()) handleLine(state.stdoutBuffer)
+
+      if (!input.emitter.state.hasText && code !== 0 && !input.signal.aborted) {
+        const detail = state.stderrText.trim() || `opencode 进程退出码 ${code ?? "unknown"}`
+        input.emitter.pushText(`opencode 执行出错：${detail}`)
+      }
+
+      resolve({ sessionId: state.detectedSessionId })
+    })
+  })
+}
+
 function getEngineRecord(
   saved: SessionCliState,
   engine: LocalEngine,
@@ -1317,17 +1433,22 @@ class LocalLanguageModel implements LanguageModelV3 {
             }
 
             if (currentEngine === "opencode") {
+              const opencodeSubModel =
+                subModel && subModel.includes("/") ? subModel : discoverOpencodeConfigModels(home).defaultModel
               const opencodeArgs = [
                 "run",
+                "--format",
+                "json",
                 "--auto",
-                ...(subModel ? ["-m", subModel] : []),
-                ...(variant ? ["--variant", variant] : []),
+                "--dir",
+                cwd,
+                ...(opencodeSubModel ? ["-m", opencodeSubModel] : []),
+                ...(variant && variant !== "default" ? ["--variant", variant] : []),
                 ...(canResume && currentRecord.sessionId ? ["--session", currentRecord.sessionId] : []),
                 finalPrompt,
               ]
 
-              return runPlainCliProcess({
-                engineLabel: "opencode",
+              return runOpencodeProcess({
                 binary,
                 args: opencodeArgs,
                 cwd,
@@ -1642,7 +1763,10 @@ function discoverPiConfigModels(home: string): { defaultModel?: string; models: 
 }
 
 function discoverOpencodeConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
-  const cfg = readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json"))
+  const cfg =
+    readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json")) ??
+    readJsonRecordSafe(path.join(home, ".config", "opencode", "config.json")) ??
+    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json"))
   if (!cfg) return { models: [] }
   const defaultModel = typeof cfg.model === "string" ? cfg.model.trim() : undefined
   const providers = isRecord(cfg.provider) ? cfg.provider : {}
@@ -1726,7 +1850,10 @@ function buildEngineModels(
             ? discoverOpencodeConfigModels(home)
             : { defaultModel: undefined, models: [] }
 
-  const subModels = [...new Set([...discovered.models, ...BUILTIN_ENGINE_SUBMODELS[engine]])]
+  const subModels =
+    engine === "opencode" && discovered.models.length > 0
+      ? [...new Set(discovered.models)]
+      : [...new Set([...discovered.models, ...BUILTIN_ENGINE_SUBMODELS[engine]])]
 
   return subModels.map((sub) => {
     const displaySub = engine === "opencode" ? sub.replace(/^[^/]+\//, "") : sub

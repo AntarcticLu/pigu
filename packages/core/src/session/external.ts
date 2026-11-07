@@ -684,7 +684,9 @@ const scanGenericJsonlSource = Effect.fn("SessionExternal.scanGenericJsonlSource
       if (!cwd) {
         const sampleHead = lines.slice(0, 25).join("\n")
         const pathMatches = [
-          ...sampleHead.matchAll(/\/Volumes\/[^"'\s)\]`]+\/[^"'\s/)\]`]+|\/Users\/[^/"'\s]+\/[^."'\s/)\]`]+/g),
+          ...sampleHead.matchAll(
+            /\/Volumes\/[^"'\s)\]`]+\/[^"'\s/)\]`]+|\/Users\/[^/"'\s]+\/[^."'\s/)\]`]+|\/home\/[^/"'\s]+\/[^."'\s/)\]`]+|\/root\/[^."'\s/)\]`]+/g,
+          ),
         ].map((match) => match[0])
         cwd = pathMatches.find((candidate) => !candidate.includes("/.")) ?? input.home
       }
@@ -715,7 +717,152 @@ const scanGenericJsonlSource = Effect.fn("SessionExternal.scanGenericJsonlSource
   return results.filter((item): item is DiscoveredSession => item !== undefined)
 })
 
-const SYNC_COOLDOWN_MS = 300_000
+const OpencodeMessageDataSchema = Schema.Struct({
+  role: Schema.optional(Schema.String),
+})
+const decodeOpencodeMessageData = Schema.decodeUnknownOption(Schema.fromJsonString(OpencodeMessageDataSchema))
+
+const OpencodePartDataSchema = Schema.Struct({
+  type: Schema.optional(Schema.String),
+  text: Schema.optional(Schema.String),
+})
+const decodeOpencodePartData = Schema.decodeUnknownOption(Schema.fromJsonString(OpencodePartDataSchema))
+
+interface OpencodeSessionRow {
+  readonly id: string
+  readonly directory: string | null
+  readonly title: string | null
+  readonly time_created: number | null
+  readonly time_updated: number | null
+}
+
+interface OpencodeMessageRow {
+  readonly id: string
+  readonly time_created: number | null
+  readonly data: string
+}
+
+interface OpencodePartRow {
+  readonly message_id: string
+  readonly time_created: number | null
+  readonly data: string
+}
+
+const scanOpencode = Effect.fn("SessionExternal.scanOpencode")(function* (
+  fs: FSUtil.Interface,
+  home: string,
+  existing: Set<string>,
+) {
+  const jsonlSessions = yield* scanGenericJsonlSource({
+    fs,
+    home,
+    rootDir: path.join(home, ".opencode", "sessions"),
+    pattern: "**/*.jsonl",
+    source: "opencode",
+    sourceLabel: "OpenCode",
+    existing,
+  })
+
+  const dbPath = path.join(home, ".local", "share", "opencode", "opencode.db")
+  if (!(yield* fs.exists(dbPath))) return jsonlSessions
+
+  const sqliteSessions = yield* Effect.tryPromise(async () => {
+    const sqlite = await import("bun:sqlite")
+    const db = new sqlite.Database(dbPath, { readonly: true })
+    const tables = new Set(
+      db
+        .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table'")
+        .all()
+        .map((row) => row.name),
+    )
+    if (!tables.has("session") || !tables.has("message") || !tables.has("part")) {
+      db.close()
+      return [] as DiscoveredSession[]
+    }
+
+    const sessionRows = db
+      .query<OpencodeSessionRow, []>(
+        "SELECT id, directory, title, time_created, time_updated FROM session WHERE parent_id IS NULL ORDER BY time_updated DESC LIMIT 25",
+      )
+      .all()
+
+    const discoveredList = sessionRows.flatMap((row): DiscoveredSession[] => {
+      const sessionID = makeSessionID("opencode", row.id)
+      if (existing.has(sessionID)) return []
+
+      const messageRows = db
+        .query<OpencodeMessageRow, [string]>(
+          "SELECT id, time_created, data FROM message WHERE session_id = ? ORDER BY time_created ASC",
+        )
+        .all(row.id)
+      const partRows = db
+        .query<OpencodePartRow, [string]>(
+          "SELECT message_id, time_created, data FROM part WHERE session_id = ? ORDER BY time_created ASC",
+        )
+        .all(row.id)
+
+      const partsByMessage = new Map<string, { textParts: string[]; thinkingParts: string[] }>()
+      for (const partRow of partRows) {
+        const parsedPart = decodeOpencodePartData(partRow.data)
+        if (Option.isNone(parsedPart)) continue
+        const partText = parsedPart.value.text?.trim()
+        if (!partText) continue
+        const entry = partsByMessage.get(partRow.message_id) ?? { textParts: [], thinkingParts: [] }
+        if (parsedPart.value.type === "text") entry.textParts.push(partText)
+        if (parsedPart.value.type === "reasoning") entry.thinkingParts.push(partText)
+        partsByMessage.set(partRow.message_id, entry)
+      }
+
+      const fallbackTime = Date.now()
+      const messages = messageRows.flatMap((msgRow): ExternalMessage[] => {
+        const parsedMsg = decodeOpencodeMessageData(msgRow.data)
+        if (Option.isNone(parsedMsg)) return []
+        const role = parsedMsg.value.role
+        if (role !== "user" && role !== "assistant") return []
+        const parts = partsByMessage.get(msgRow.id)
+        const text = parts?.textParts.join("\n\n").trim() ?? ""
+        if (!text) return []
+        const thinking = parts && parts.thinkingParts.length > 0 ? parts.thinkingParts.join("\n\n") : undefined
+        return [
+          {
+            role,
+            text,
+            thinking,
+            time: msgRow.time_created || row.time_created || fallbackTime,
+          },
+        ]
+      })
+
+      const firstUser = messages.find((msg) => msg.role === "user")
+      if (!firstUser) return []
+      existing.add(sessionID)
+
+      const createdAt = row.time_created || fallbackTime
+      const updatedAt = Math.max(createdAt, row.time_updated || fallbackTime)
+      return [
+        {
+          id: sessionID,
+          source: "opencode",
+          sourceLabel: "OpenCode",
+          externalID: row.id,
+          filePath: dbPath,
+          cwd: row.directory || home,
+          title: row.title ? cleanTitle(row.title) : cleanTitle(firstUser.text),
+          createdAt,
+          updatedAt,
+          messages: capMessages(messages),
+        },
+      ]
+    })
+
+    db.close()
+    return discoveredList
+  }).pipe(Effect.orElseSucceed((): DiscoveredSession[] => []))
+
+  return [...sqliteSessions, ...jsonlSessions]
+})
+
+const SYNC_COOLDOWN_MS = 15_000
 let lastSyncAt = 0
 let firstSyncDelayed = false
 const checkedExternalIDs = new Set<string>()
@@ -746,7 +893,7 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
 
   const home = os.homedir()
   const cacheDir = path.join(home, ".cache", "pigu")
-  const cacheFile = path.join(cacheDir, "external-scan-cache-v1.json")
+  const cacheFile = path.join(cacheDir, "external-scan-cache-v2.json")
 
   if (checkedExternalIDs.size === 0) {
     const cachedRaw = yield* input.fs.readFileStringSafe(cacheFile).pipe(Effect.orElseSucceed(() => undefined))
@@ -802,15 +949,7 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
     scanClaude(input.fs, home, checkedExternalIDs),
     scanAgy(input.fs, home, checkedExternalIDs),
     scanPi(input.fs, home, checkedExternalIDs),
-    scanGenericJsonlSource({
-      fs: input.fs,
-      home,
-      rootDir: path.join(home, ".opencode", "sessions"),
-      pattern: "**/*.jsonl",
-      source: "opencode",
-      sourceLabel: "OpenCode",
-      existing: checkedExternalIDs,
-    }),
+    scanOpencode(input.fs, home, checkedExternalIDs),
     scanGenericJsonlSource({
       fs: input.fs,
       home,
