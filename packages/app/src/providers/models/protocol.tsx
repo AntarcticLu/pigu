@@ -1,5 +1,6 @@
 import { Option, Schema } from "effect"
 import { createSignal, For, type Component } from "solid-js"
+import { tr } from "@/runtime/i18n/language"
 import type { ModelSelection } from "./selection"
 
 export const PIGU_PROTOCOLS = ["openai-chat", "gemini", "anthropic", "openai-responses"] as const
@@ -37,7 +38,7 @@ export function protocolShortLabel(protocol: PiguProtocol): string {
 
 export function formatProtocolVariantLabel(variant: string, _modelID?: string): string {
   if (variant === "default") {
-    return "默认"
+    return tr("默认", "Default")
   }
 
   if (isPiguProtocol(variant)) {
@@ -105,15 +106,15 @@ export const ModelProtocolSelect: Component<{
   return (
     <select
       data-component="model-protocol-select"
-      aria-label={`${props.modelID} 接口类型`}
-      title="选择该模型的接口类型（自动识别或手动指定）"
+      aria-label={tr(`${props.modelID} 接口类型`, `${props.modelID} API protocol`)}
+      title={tr("选择该模型的接口类型（自动识别或手动指定）", "Select API protocol for this model (auto-detect or manual override)")}
       value={current()}
       onMouseDown={(event) => event.stopPropagation()}
       onClick={(event) => event.stopPropagation()}
       onChange={(event) => update(event.currentTarget.value)}
       class="h-6 shrink-0 cursor-pointer rounded border border-v2-border-border-base bg-v2-background-bg-layer-02 px-1.5 text-[11px] font-[480] text-v2-text-text-muted hover:border-v2-border-border-hover hover:text-v2-text-text-base focus:outline-none"
     >
-      <option value="default">{`自动 · ${protocolShortLabel(detected())}`}</option>
+      <option value="default">{`${tr("自动", "Auto")} · ${protocolShortLabel(detected())}`}</option>
       <For each={PROTOCOL_OPTIONS}>{(opt) => <option value={opt.id}>{opt.label}</option>}</For>
     </select>
   )

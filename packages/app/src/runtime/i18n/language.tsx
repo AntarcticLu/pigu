@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createResource, type JSX } from "solid-js"
+import { createEffect, createMemo, createResource, createSignal, type JSX } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Option, Schema, SchemaGetter } from "effect"
 import { createSimpleContext } from "@opencode/ui/context"
@@ -81,7 +81,7 @@ function cookie(locale: Locale) {
   return `oc_locale=${encodeURIComponent(locale)}; Path=/; Max-Age=31536000; SameSite=Lax`
 }
 
-const LOCALES: readonly Locale[] = DESKTOP_NATIVE_LOCALES
+const LOCALES: readonly Locale[] = ["zh", "en"]
 
 const LocaleSchema = Schema.Literals(DESKTOP_NATIVE_LOCALES)
 
@@ -223,6 +223,12 @@ function readStoredLocale() {
 
 const warm = readStoredLocale() ?? detectLocale()
 
+const [activeLocale, setActiveLocale] = createSignal<Locale>(warm)
+
+export function tr(zh: string, enText: string) {
+  return activeLocale().startsWith("zh") ? zh : enText
+}
+
 const initialLocale =
   warm === "en"
     ? Promise.resolve(warm)
@@ -328,9 +334,10 @@ export const { use: useLanguage, provider: LanguageProvider } = createSimpleCont
     const label = (value: Locale) => DESKTOP_NATIVE_LABELS[value]
 
     createEffect(() => {
+      const value = locale()
+      setActiveLocale(value)
       // oxlint-disable-next-line anti-slop/no-runtime-typeof -- probing for a browser global
       if (typeof document !== "object") return
-      const value = locale()
       document.documentElement.lang = intl()
       document.documentElement.dir = direction()
       document.cookie = cookie(value)
@@ -355,6 +362,7 @@ export const { use: useLanguage, provider: LanguageProvider } = createSimpleCont
       locales: LOCALES,
       label,
       t,
+      tr: (zh: string, enText: string) => (locale().startsWith("zh") ? zh : enText),
       tDynamic,
       plural,
       pluralForm,
@@ -363,7 +371,9 @@ export const { use: useLanguage, provider: LanguageProvider } = createSimpleCont
       rich,
       list,
       setLocale(next: Locale) {
-        setStore("locale", normalizeLocale(next))
+        const normalized = normalizeLocale(next)
+        setActiveLocale(normalized)
+        setStore("locale", normalized)
       },
       setDirection(next: Direction) {
         setLayout("direction", next === localeDirection(locale()) ? undefined : next)

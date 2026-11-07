@@ -208,12 +208,16 @@ function ComposerModelControl(props: {
 
 function ComposerFollowUpControl() {
   const settings = useSettings()
+  const language = useLanguage()
   const isSteer = () => settings.general.followUpBehavior() === "steer"
 
   return (
     <Tooltip
       placement="top"
-      value={`后续消息行为：${isSteer() ? "引导" : "排队"}（点击切换，运行中按 ⌘Enter 可临时切换）`}
+      value={language.tr(
+        `后续消息行为：${isSteer() ? "引导" : "排队"}（点击切换，运行中按 ⌘Enter 可临时切换）`,
+        `Follow-up behavior: ${isSteer() ? "Steer" : "Queue"} (click to toggle, press ⌘Enter while running to switch once)`,
+      )}
     >
       <Button
         data-action="composer-follow-up-behavior"
@@ -224,7 +228,7 @@ function ComposerFollowUpControl() {
         onMouseDown={(event: MouseEvent) => event.preventDefault()}
         onClick={() => settings.general.setFollowUpBehavior(isSteer() ? "queue" : "steer")}
       >
-        <span>{isSteer() ? "引导" : "排队"}</span>
+        <span>{isSteer() ? language.tr("引导", "Steer") : language.tr("排队", "Queue")}</span>
       </Button>
     </Tooltip>
   )

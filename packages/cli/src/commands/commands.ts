@@ -2,25 +2,32 @@ import { Argument, Flag, GlobalFlag } from "effect/cli"
 import { Schema } from "effect"
 import { CliFlag } from "../framework/flag"
 import { Spec } from "../framework/spec"
+import { tr } from "../i18n"
 import { Updater } from "../services/updater"
 
 export const PrintLogs = GlobalFlag.Setting("print-logs")({
   flag: Flag.Boolean("print-logs").pipe(
-    Flag.withDescription("将日志输出到 stderr（服务端日志需搭配 --standalone）"),
+    Flag.withDescription(
+      tr("将日志输出到 stderr（服务端日志需搭配 --standalone）", "Print logs to stderr (use with --standalone for server logs)"),
+    ),
     Flag.withDefault(false),
   ),
 })
 
 export const Standalone = GlobalFlag.Setting("standalone")({
   flag: Flag.Boolean("standalone").pipe(
-    Flag.withDescription("使用独立内嵌服务运行，不连接后台服务"),
+    Flag.withDescription(
+      tr("使用独立内嵌服务运行，不连接后台服务", "Run with an isolated embedded server instead of the background service"),
+    ),
     Flag.withDefault(false),
   ),
 })
 
 export const Server = GlobalFlag.Setting("server")({
   flag: Flag.String("server").pipe(
-    Flag.withDescription("连接到指定的服务端 URL，而非本地后台服务"),
+    Flag.withDescription(
+      tr("连接到指定的服务端 URL，而非本地后台服务", "Connect to the specified server URL instead of the local background service"),
+    ),
     Flag.optional,
   ),
 })
@@ -36,7 +43,9 @@ const ServerParams = {
 
 const PermissionParams = {
   auto: Flag.Boolean("auto").pipe(
-    Flag.withDescription("自动批准未显式拒绝的工具权限请求"),
+    Flag.withDescription(
+      tr("自动批准未显式拒绝的工具权限请求", "Automatically approve tool permissions that are not explicitly denied"),
+    ),
     Flag.withDefault(false),
   ),
   yolo: Flag.Boolean("yolo").pipe(Flag.withDefault(false), Flag.withHidden),
@@ -47,25 +56,30 @@ const PermissionParams = {
 }
 
 const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME : "pigu", {
-  description: "Pigu 命令行与终端交互界面",
+  description: tr("Pigu 命令行工具（配合 Pigu 桌面端与后台服务使用）", "Pigu CLI tool for the Pigu Desktop client and background service"),
   params: {
     ...ServerParams,
-    ...PermissionParams,
+    auto: Flag.Boolean("auto").pipe(Flag.withDefault(false), Flag.withHidden),
+    yolo: Flag.Boolean("yolo").pipe(Flag.withDefault(false), Flag.withHidden),
+    dangerouslySkipPermissions: Flag.Boolean("dangerously-skip-permissions").pipe(
+      Flag.withDefault(false),
+      Flag.withHidden,
+    ),
     directory: Argument.String("directory").pipe(
-      Argument.withDescription("启动 Pigu 的工作目录"),
+      Argument.withDescription(tr("工作目录", "Working directory")),
       Argument.optional,
     ),
     continue: Flag.Boolean("continue").pipe(
       Flag.withAlias("c"),
-      Flag.withDescription("继续上一次会话"),
       Flag.withDefault(false),
+      Flag.withHidden,
     ),
     session: Flag.String("session").pipe(
       Flag.withAlias("s"),
-      Flag.withDescription("继续指定 ID 的会话（若不存在则新建）"),
       Flag.optional,
+      Flag.withHidden,
     ),
-    prompt: Flag.String("prompt").pipe(Flag.withDescription("启动后自动发送的提示词"), Flag.optional),
+    prompt: Flag.String("prompt").pipe(Flag.optional, Flag.withHidden),
   },
   commands: [
     Spec.make("upgrade", {
@@ -247,31 +261,33 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       ],
     }),
     Spec.make("mcp", {
-      description: "管理 MCP（模型上下文协议）服务器",
+      description: tr("管理 MCP（模型上下文协议）服务器", "Manage MCP (Model Context Protocol) servers"),
       commands: [
         Spec.make("list", {
-          description: "列出已配置的 MCP 服务器及其连接状态",
+          description: tr("列出已配置的 MCP 服务器及其连接状态", "List configured MCP servers and their connection status"),
           globalFlags: ServerFlags,
         }),
         Spec.make("add", {
-          description: "向配置中添加 MCP 服务器",
+          description: tr("向配置中添加 MCP 服务器", "Add an MCP server to configuration"),
           params: {
-            name: Argument.String("name").pipe(Argument.withDescription("MCP 服务器名称")),
+            name: Argument.String("name").pipe(Argument.withDescription(tr("MCP 服务器名称", "Name of the MCP server"))),
             command: Argument.String("command").pipe(
-              Argument.withDescription("本地 MCP 服务器的启动命令与参数（在 -- 之后传入）"),
+              Argument.withDescription(
+                tr("本地 MCP 服务器的启动命令与参数（在 -- 之后传入）", "Command and arguments for a local MCP server (pass after --)"),
+              ),
               Argument.variadic({ min: 0 }),
             ),
-            url: Flag.String("url").pipe(Flag.withDescription("远程 MCP 服务器的 URL"), Flag.optional),
+            url: Flag.String("url").pipe(Flag.withDescription(tr("远程 MCP 服务器的 URL", "URL of a remote MCP server")), Flag.optional),
             header: Flag.KeyValuePair("header").pipe(
-              Flag.withDescription("远程服务器的 HTTP 请求头（格式：name=value）"),
+              Flag.withDescription(tr("远程服务器的 HTTP 请求头（格式：name=value）", "HTTP headers for remote servers (key=value)")),
               Flag.optional,
             ),
             env: Flag.KeyValuePair("env").pipe(
-              Flag.withDescription("本地服务器的环境变量（格式：name=value）"),
+              Flag.withDescription(tr("本地服务器的环境变量（格式：name=value）", "Environment variables for local servers (key=value)")),
               Flag.optional,
             ),
             global: Flag.Boolean("global").pipe(
-              Flag.withDescription("写入全局配置而非当前项目配置"),
+              Flag.withDescription(tr("写入全局配置而非当前项目配置", "Write to global configuration instead of the current project")),
               Flag.withDefault(false),
             ),
           },
@@ -293,22 +309,24 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       ],
     }),
     Spec.make("plugin", {
-      description: "管理拓展插件",
+      description: tr("管理拓展插件", "Manage extension plugins"),
       commands: [
         Spec.make("list", {
-          description: "列出已安装的插件",
+          description: tr("列出已安装的插件", "List installed plugins"),
           globalFlags: ServerFlags,
           params: {
             builtin: Flag.Boolean("builtin").pipe(
-              Flag.withDescription("包含内置服务端插件"),
+              Flag.withDescription(tr("包含内置服务端插件", "Include built-in server plugins")),
               Flag.withDefault(false),
             ),
           },
         }),
         Spec.make("add", {
-          description: "安装插件并添加到全局配置",
+          description: tr("安装插件并添加到全局配置", "Install a plugin and add it to global configuration"),
           params: {
-            package: Argument.String("package").pipe(Argument.withDescription("npm 包名或 Git 仓库地址")),
+            package: Argument.String("package").pipe(
+              Argument.withDescription(tr("npm 包名或 Git 仓库地址", "npm package name or Git repository URL")),
+            ),
           },
         }),
         Spec.make("check", {
@@ -334,26 +352,26 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
           },
         }),
         Spec.make("remove", {
-          description: "从全局配置中移除插件",
+          description: tr("从全局配置中移除插件", "Remove a plugin from global configuration"),
           params: {
-            package: Argument.String("package").pipe(Argument.withDescription("已配置的插件包名")),
+            package: Argument.String("package").pipe(Argument.withDescription(tr("已配置的插件包名", "Configured plugin package name"))),
           },
         }),
       ],
     }),
     Spec.make("config", {
-      description: "配置自定义 API 地址（Base URL）与 API Key",
+      description: tr("配置自定义 API 地址（Base URL）与 API Key", "Configure custom API Base URL and API Key"),
       globalFlags: ServerFlags,
       params: {
         url: Flag.String("url").pipe(
-          Flag.withDescription("API Base URL（例如 https://api.openai.com/v1）"),
+          Flag.withDescription(tr("API Base URL（例如 https://api.openai.com/v1）", "API Base URL (e.g. https://api.openai.com/v1)")),
           Flag.optional,
         ),
-        key: Flag.String("key").pipe(Flag.withDescription("API 密钥（API Key）"), Flag.optional),
+        key: Flag.String("key").pipe(Flag.withDescription(tr("API 密钥（API Key）", "API Key")), Flag.optional),
       },
     }),
     Spec.make("models", {
-      description: "列出所有可用模型",
+      description: tr("列出所有可用模型", "List all available models"),
       globalFlags: ServerFlags,
     }),
     Spec.make("stats", {
@@ -426,99 +444,104 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       },
     }),
     Spec.make("run", {
-      description: "单次发送消息并运行 Pigu",
+      description: tr("单次发送消息并运行 Pigu", "Run Pigu with a prompt message"),
       globalFlags: ServerFlags,
       params: {
         message: Argument.String("message").pipe(
-          Argument.withDescription("要发送的消息内容"),
+          Argument.withDescription(tr("要发送的消息内容", "Message to send")),
           Argument.variadic({ min: 0 }),
         ),
         continue: Flag.Boolean("continue").pipe(
           Flag.withAlias("c"),
-          Flag.withDescription("继续上一次会话"),
+          Flag.withDescription(tr("继续上一次会话", "Continue the last session")),
           Flag.withDefault(false),
         ),
         session: Flag.String("session").pipe(
           Flag.withAlias("s"),
-          Flag.withDescription("继续或创建指定 ID 的会话"),
+          Flag.withDescription(tr("继续或创建指定 ID 的会话", "Continue or create a session with the given ID")),
           Flag.optional,
         ),
         fork: Flag.Boolean("fork").pipe(
-          Flag.withDescription("继续前派生（Fork）该会话"),
+          Flag.withDescription(tr("继续前派生（Fork）该会话", "Fork the session before continuing")),
           Flag.withDefault(false),
         ),
         worktree: CliFlag.optionalValue("worktree", "name").pipe(
           Flag.withAlias("w"),
-          Flag.withDescription("在新的 Git Worktree 中启动会话"),
+          Flag.withDescription(tr("在新的 Git Worktree 中启动会话", "Start the session in a new git worktree")),
         ),
         model: Flag.String("model").pipe(
           Flag.withAlias("m"),
-          Flag.withDescription("指定使用的模型（格式：provider/model#variant）"),
+          Flag.withDescription(tr("指定使用的模型（格式：provider/model#variant）", "Model to use (provider/model#variant)")),
           Flag.optional,
         ),
-        agent: Flag.String("agent").pipe(Flag.withDescription("指定使用的智能体"), Flag.optional),
+        agent: Flag.String("agent").pipe(Flag.withDescription(tr("指定使用的智能体", "Agent to use")), Flag.optional),
         format: Flag.Literals("format", ["default", "json"]).pipe(
-          Flag.withDescription("输出格式"),
+          Flag.withDescription(tr("输出格式", "Output format")),
           Flag.withDefault("default"),
         ),
         file: Flag.String("file").pipe(
           Flag.withAlias("f"),
-          Flag.withDescription("附加到消息中的文件"),
+          Flag.withDescription(tr("附加到消息中的文件", "File(s) to attach to the message")),
           Flag.atMost(100),
         ),
-        title: Flag.String("title").pipe(Flag.withDescription("会话标题"), Flag.optional),
+        title: Flag.String("title").pipe(Flag.withDescription(tr("会话标题", "Title for the session")), Flag.optional),
         archived: Flag.Boolean("archived").pipe(
-          Flag.withDescription("创建后自动归档会话"),
+          Flag.withDescription(tr("创建后自动归档会话", "Archive the session on creation")),
           Flag.withDefault(false),
         ),
-        thinking: Flag.Boolean("thinking").pipe(Flag.withDescription("显示思考过程"), Flag.withDefault(false)),
+        thinking: Flag.Boolean("thinking").pipe(
+          Flag.withDescription(tr("显示思考过程", "Show thinking blocks")),
+          Flag.withDefault(false),
+        ),
         ...PermissionParams,
       },
     }),
     Spec.make("session", {
-      description: "管理会话（列表、删除、导入、导出）",
+      description: tr("管理会话（列表、删除、导入、导出）", "Manage sessions (list, delete, export, import)"),
       globalFlags: ServerFlags,
       commands: [
         Spec.make("list", {
-          description: "列出当前项目的会话（按最新排序）",
+          description: tr("列出当前项目的会话（按最新排序）", "List sessions for the current project (newest first)"),
           params: {
             maxCount: Flag.Int("max-count").pipe(
               Flag.withAlias("n"),
               Flag.withSchema(Schema.Int.check(Schema.isGreaterThanOrEqualTo(1))),
-              Flag.withDescription("限制显示的最近会话数量（默认：100）"),
+              Flag.withDescription(tr("限制显示的最近会话数量（默认：100）", "Limit to the N most recent sessions (default: 100)")),
               Flag.optional,
             ),
             format: Flag.Literals("format", ["table", "json"]).pipe(
-              Flag.withDescription("输出格式"),
+              Flag.withDescription(tr("输出格式", "Output format")),
               Flag.withDefault("table"),
             ),
           },
         }),
         Spec.make("delete", {
-          description: "删除指定会话及其子会话",
+          description: tr("删除指定会话及其子会话", "Delete a session and its child sessions"),
           params: {
-            sessionID: Argument.String("sessionID").pipe(Argument.withDescription("要删除的会话 ID")),
+            sessionID: Argument.String("sessionID").pipe(Argument.withDescription(tr("要删除的会话 ID", "Session ID to delete"))),
           },
         }),
         Spec.make("export", {
-          description: "将会话数据导出为 JSON",
+          description: tr("将会话数据导出为 JSON", "Export session data as JSON"),
           params: {
             session: Argument.String("session").pipe(
-              Argument.withDescription("要导出的会话 ID"),
+              Argument.withDescription(tr("要导出的会话 ID", "Session ID to export")),
               Argument.optional,
             ),
             sanitize: Flag.Boolean("sanitize").pipe(
-              Flag.withDescription("脱敏对话与文件中的敏感数据"),
+              Flag.withDescription(tr("脱敏对话与文件中的敏感数据", "Redact sensitive data in messages and files")),
               Flag.withDefault(false),
             ),
           },
         }),
         Spec.make("import", {
-          description: "从 JSON 文件或 URL 导入会话数据",
+          description: tr("从 JSON 文件或 URL 导入会话数据", "Import session data from a JSON file or URL"),
           params: {
-            file: Argument.String("file").pipe(Argument.withDescription("要导入的 JSON 文件路径或 URL")),
+            file: Argument.String("file").pipe(
+              Argument.withDescription(tr("要导入的 JSON 文件路径或 URL", "Path to JSON file or URL to import")),
+            ),
             directory: Flag.String("directory").pipe(
-              Flag.withDescription("导入会话所属的项目目录"),
+              Flag.withDescription(tr("导入会话所属的项目目录", "Project directory for the imported session")),
               Flag.optional,
             ),
           },
@@ -526,41 +549,44 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       ],
     }),
     Spec.make("service", {
-      description: "管理本地后台服务",
+      description: tr("管理本地后台服务", "Manage the local background service"),
       commands: [
-        Spec.make("start", { description: "启动后台服务" }),
-        Spec.make("restart", { description: "重启后台服务" }),
-        Spec.make("status", { description: "查看后台服务状态" }),
-        Spec.make("stop", { description: "停止后台服务" }),
+        Spec.make("start", { description: tr("启动后台服务", "Start the background service") }),
+        Spec.make("restart", { description: tr("重启后台服务", "Restart the background service") }),
+        Spec.make("status", { description: tr("查看后台服务状态", "Check background service status") }),
+        Spec.make("stop", { description: tr("停止后台服务", "Stop the background service") }),
         Spec.make("get", {
-          description: "读取后台服务配置项",
+          description: tr("读取后台服务配置项", "Get a background service configuration value"),
           params: {
-            key: Argument.String("key").pipe(Argument.withDescription("服务配置项或环境变量"), Argument.optional),
+            key: Argument.String("key").pipe(
+              Argument.withDescription(tr("服务配置项或环境变量", "Service configuration key or env")),
+              Argument.optional,
+            ),
             name: Argument.String("name").pipe(
-              Argument.withDescription("环境变量名"),
+              Argument.withDescription(tr("环境变量名", "Environment variable name")),
               Argument.optional,
             ),
           },
         }),
         Spec.make("set", {
-          description: "设置后台服务配置项",
+          description: tr("设置后台服务配置项", "Set a background service configuration value"),
           params: {
-            key: Argument.String("key").pipe(Argument.withDescription("服务配置项或环境变量")),
+            key: Argument.String("key").pipe(Argument.withDescription(tr("服务配置项或环境变量", "Service configuration key or env"))),
             value: Argument.String("value").pipe(
-              Argument.withDescription("配置值或环境变量名"),
+              Argument.withDescription(tr("配置值或环境变量名", "Configuration value or environment variable name")),
             ),
             nestedValue: Argument.String("env-value").pipe(
-              Argument.withDescription("环境变量值"),
+              Argument.withDescription(tr("环境变量值", "Environment variable value")),
               Argument.optional,
             ),
           },
         }),
         Spec.make("unset", {
-          description: "重置后台服务配置项",
+          description: tr("重置后台服务配置项", "Reset a background service configuration value"),
           params: {
-            key: Argument.String("key").pipe(Argument.withDescription("服务配置项或环境变量")),
+            key: Argument.String("key").pipe(Argument.withDescription(tr("服务配置项或环境变量", "Service configuration key or env"))),
             name: Argument.String("name").pipe(
-              Argument.withDescription("环境变量名"),
+              Argument.withDescription(tr("环境变量名", "Environment variable name")),
               Argument.optional,
             ),
           },
@@ -605,13 +631,13 @@ const Root = Spec.make(typeof OPENCODE_CLI_NAME === "string" ? OPENCODE_CLI_NAME
       },
     }),
     Spec.make("serve", {
-      description: "启动 Pigu API 服务进程",
+      description: tr("启动 Pigu API 服务进程", "Start a Pigu API server process"),
       params: {
         hostname: Flag.String("hostname").pipe(Flag.optional),
         port: Flag.Int("port").pipe(Flag.optional),
         cors: Flag.String("cors").pipe(
           Flag.withSchema(Schema.NonEmptyString),
-          Flag.withDescription("额外允许的 CORS 源（可重复指定）"),
+          Flag.withDescription(tr("额外允许的 CORS 源（可重复指定）", "Additional allowed CORS origins (repeatable)")),
           Flag.atLeast(0),
         ),
         service: Flag.Boolean("service").pipe(Flag.withDefault(false)),

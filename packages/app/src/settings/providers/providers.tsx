@@ -154,13 +154,13 @@ export const SettingsProviders: Component<{
         const cleanName = form.name.trim()
 
         if (!cleanURL) {
-          setForm("error", "请输入 API 地址 (Base URL)")
+          setForm("error", language.tr("请输入 API 地址 (Base URL)", "Please enter API Base URL"))
 
           return
         }
 
         if (!cleanKey && !isEditing) {
-          setForm("error", "请输入 API 密钥 (API Key)")
+          setForm("error", language.tr("请输入 API 密钥 (API Key)", "Please enter API Key"))
 
           return
         }
@@ -187,13 +187,15 @@ export const SettingsProviders: Component<{
           showToast({
             variant: "success",
             icon: "circle-check",
-            title: isEditing ? "已更新供应商" : "已添加供应商",
+            title: isEditing
+              ? language.tr("已更新供应商", "Provider updated")
+              : language.tr("已添加供应商", "Provider added"),
             description: cleanName || cleanURL,
           })
         } catch (error) {
           setForm({
             saving: false,
-            error: error instanceof Error ? error.message : "保存供应商失败",
+            error: error instanceof Error ? error.message : language.tr("保存供应商失败", "Failed to save provider"),
           })
         }
       }
@@ -201,18 +203,25 @@ export const SettingsProviders: Component<{
       return (
         <Dialog containerClass="!w-[min(calc(100vw_-_16px),520px)] !rounded-[12px] !bg-v2-background-bg-base">
           <DialogHeader closeLabel={language.t("common.close")}>
-            <DialogTitle>{isEditing ? `编辑供应商 · ${initial?.name ?? initial?.providerID}` : "新增供应商 (API)"}</DialogTitle>
+            <DialogTitle>
+              {isEditing
+                ? `${language.tr("编辑供应商", "Edit Provider")} · ${initial?.name ?? initial?.providerID}`
+                : language.tr("新增供应商 (API)", "Add Provider (API)")}
+            </DialogTitle>
           </DialogHeader>
           <DialogBody class="px-5 pb-5 pt-2">
             <form data-component="provider-manage-form" class="flex flex-col gap-4" onSubmit={(e) => void submit(e)}>
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
-                  供应商名称
+                  {language.tr("供应商名称", "Provider Name")}
                 </label>
                 <TextField
                   data-input="manage-provider-name"
                   type="text"
-                  placeholder="例如：PiguToken / DeepSeek（留空自动根据域名命名）"
+                  placeholder={language.tr(
+                    "例如：PiguToken / DeepSeek（留空自动根据域名命名）",
+                    "e.g. PiguToken / DeepSeek (leave empty to name by domain)",
+                  )}
                   value={form.name}
                   onChange={(value) => setForm({ name: value, error: undefined })}
                 />
@@ -220,7 +229,7 @@ export const SettingsProviders: Component<{
 
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
-                  API 地址 (URL)
+                  {language.tr("API 地址 (URL)", "API Base URL")}
                 </label>
                 <TextField
                   data-input="manage-provider-url"
@@ -233,12 +242,16 @@ export const SettingsProviders: Component<{
 
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
-                  API 密钥 (Key)
+                  {language.tr("API 密钥 (Key)", "API Key")}
                 </label>
                 <TextField
                   data-input="manage-provider-key"
                   type="text"
-                  placeholder={isEditing ? "留空则保留原密钥，或输入新密钥 sk-..." : "sk-..."}
+                  placeholder={
+                    isEditing
+                      ? language.tr("留空则保留原密钥，或输入新密钥 sk-...", "Leave empty to keep existing key, or enter new sk-...")
+                      : "sk-..."
+                  }
                   value={form.apiKey}
                   onChange={(value) => setForm({ apiKey: value, error: undefined })}
                 />
@@ -250,10 +263,14 @@ export const SettingsProviders: Component<{
 
               <div class="flex items-center justify-end gap-2 pt-1">
                 <Button type="button" variant="ghost-muted" onClick={() => dialog.close()}>
-                  取消
+                  {language.tr("取消", "Cancel")}
                 </Button>
                 <Button type="submit" variant="contrast" disabled={form.saving}>
-                  {form.saving ? "正在保存并拉取模型..." : isEditing ? "保存修改" : "保存并连接"}
+                  {form.saving
+                    ? language.tr("正在保存并拉取模型...", "Saving and fetching models...")
+                    : isEditing
+                      ? language.tr("保存修改", "Save Changes")
+                      : language.tr("保存并连接", "Save & Connect")}
                 </Button>
               </div>
             </form>
@@ -286,13 +303,13 @@ export const SettingsProviders: Component<{
       showToast({
         variant: "success",
         icon: "circle-check",
-        title: "已删除供应商",
+        title: language.tr("已删除供应商", "Provider deleted"),
         description: item.name,
       })
     } catch (error) {
       showToast({
         variant: "error",
-        title: "删除供应商失败",
+        title: language.tr("删除供应商失败", "Failed to delete provider"),
         description: error instanceof Error ? error.message : item.name,
       })
     }
@@ -334,7 +351,7 @@ export const SettingsProviders: Component<{
     showToast({
       variant: "success",
       icon: "circle-check",
-      title: `已刷新 ${item.name} 的模型列表`,
+      title: language.tr(`已刷新 ${item.name} 的模型列表`, `Refreshed models for ${item.name}`),
     })
   }
 
@@ -592,7 +609,7 @@ export const SettingsProviders: Component<{
   }
 
   const type = (item: ProviderItem) => {
-    if (item.id === "local" || item.id.startsWith("local:")) return "本地插件"
+    if (item.id === "local" || item.id.startsWith("local:")) return language.tr("本地插件", "Local Plugin")
 
     const current = source(item)
 
@@ -784,7 +801,7 @@ export const SettingsProviders: Component<{
                 data-action="provider-add"
                 onClick={() => openManageProvider()}
               >
-                新增供应商
+                {language.tr("新增供应商", "Add Provider")}
               </Button>
             </Show>
           </div>
@@ -835,7 +852,10 @@ export const SettingsProviders: Component<{
                                 </span>
                                 <Badge>{type(item)}</Badge>
                                 <span class="shrink-0 text-11-regular text-v2-text-text-faint">
-                                  {Object.keys(item.models).length} 个模型
+                                  {language.tr(
+                                    `${Object.keys(item.models).length} 个模型`,
+                                    `${Object.keys(item.models).length} models`,
+                                  )}
                                 </span>
                                 <Show when={cfg()?.baseURL}>
                                   {(url) => (
@@ -854,7 +874,9 @@ export const SettingsProviders: Component<{
                                 data-action={`provider-refresh-${item.id}`}
                                 onClick={() => void refreshSingleProvider(item)}
                               >
-                                {state.refreshingID === item.id ? "刷新中..." : "刷新"}
+                                {state.refreshingID === item.id
+                                  ? language.tr("刷新中...", "Refreshing...")
+                                  : language.tr("刷新", "Refresh")}
                               </Button>
                               <Show when={item.id !== "local" && !item.id.startsWith("local:")}>
                                 <Button
@@ -870,7 +892,7 @@ export const SettingsProviders: Component<{
                                     })
                                   }
                                 >
-                                  编辑
+                                  {language.tr("编辑", "Edit")}
                                 </Button>
                                 <Button
                                   size="small"
@@ -879,7 +901,7 @@ export const SettingsProviders: Component<{
                                   class="text-v2-text-text-muted hover:text-[var(--v2-state-fg-danger)]"
                                   onClick={() => void deleteCustomProvider(item)}
                                 >
-                                  删除
+                                  {language.tr("删除", "Delete")}
                                 </Button>
                               </Show>
                             </div>

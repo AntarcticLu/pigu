@@ -3,6 +3,7 @@ import { Switch } from "@opencode/ui/switch"
 import { type Component, For, type JSX, Show } from "solid-js"
 
 import { Schema } from "effect"
+import { useLanguage } from "@/runtime/i18n/language"
 import { Persistence } from "@/runtime/persistence/schema"
 import { useModels } from "@/providers/models/models"
 import { popularProviders } from "@/providers/catalog/providers"
@@ -27,6 +28,7 @@ export const SettingsModels: Component<{
   onReveal?: () => void
   headerAction?: JSX.Element
 }> = (props) => {
+  const language = useLanguage()
   const models = useModels()
 
   const list = useFilteredList<ModelItem>({
@@ -105,7 +107,7 @@ export const SettingsModels: Component<{
       <div class="settings-tab-header settings-tab-header--stacked">
         <div class="settings-tab-header-row">
           <div class="flex min-w-0 items-center">
-            <h2 class="settings-tab-title">模型</h2>
+            <h2 class="settings-tab-title">{language.tr("模型", "Models")}</h2>
           </div>
           <div class="settings-tab-header-actions">{props.headerAction}</div>
         </div>
@@ -113,7 +115,7 @@ export const SettingsModels: Component<{
           value={list.filter()}
           active={props.active ?? true}
           onInput={list.onInput}
-          placeholder="搜索供应商或模型..."
+          placeholder={language.tr("搜索供应商或模型...", "Search providers or models...")}
         />
       </div>
 

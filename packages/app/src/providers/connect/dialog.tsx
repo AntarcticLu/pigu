@@ -1344,13 +1344,13 @@ function ProviderConnection(props: {
       const cleanKey = localState.apiKey.trim()
 
       if (!cleanUrl) {
-        setLocalState("localError", "请输入 API 地址 (URL)")
+        setLocalState("localError", language.tr("请输入 API 地址 (URL)", "Please enter API Base URL"))
 
         return
       }
 
       if (!cleanKey) {
-        setLocalState("localError", "请输入 API 密钥 (Key)")
+        setLocalState("localError", language.tr("请输入 API 密钥 (Key)", "Please enter API Key"))
 
         return
       }
@@ -1383,29 +1383,37 @@ function ProviderConnection(props: {
         showToast({
           variant: "success",
           icon: "circle-check",
-          title: "已配置并连接供应商",
+          title: language.tr("已配置并连接供应商", "Provider configured and connected"),
           description: cleanName || cleanUrl,
         })
         dialog.close()
       } catch (error) {
         setLocalState({
           saving: false,
-          localError: error instanceof Error ? error.message : "配置供应商失败",
+          localError: error instanceof Error ? error.message : language.tr("配置供应商失败", "Failed to configure provider"),
         })
       }
     }
 
     return (
       <div class="flex flex-col gap-5 px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-muted">
-        <p>同时输入兼容接口的供应商名称、API 地址与密钥，连接后将自动拉取可用模型列表。</p>
+        <p>
+          {language.tr(
+            "同时输入兼容接口的供应商名称、API 地址与密钥，连接后将自动拉取可用模型列表。",
+            "Enter the compatible provider name, API Base URL, and API Key to connect and automatically fetch available models.",
+          )}
+        </p>
         <form onSubmit={(event) => void handleSubmit(event)} class="flex flex-col items-start gap-4 self-stretch">
           <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
-            供应商名称
+            {language.tr("供应商名称", "Provider name")}
             <TextInput
               class="!w-full"
               name="providerName"
               data-input="provider-name"
-              placeholder="例如：PiguToken / DeepSeek（留空自动根据域名命名）"
+              placeholder={language.tr(
+                "例如：PiguToken / DeepSeek（留空自动根据域名命名）",
+                "e.g. PiguToken / DeepSeek (optional, auto-named from domain)",
+              )}
               value={localState.name}
               readOnly={localState.saving}
               autocomplete="off"
@@ -1414,7 +1422,7 @@ function ProviderConnection(props: {
             />
           </label>
           <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
-            API 地址 (URL)
+            {language.tr("API 地址 (URL)", "API Base URL")}
             <TextInput
               ref={urlRef}
               class="!w-full"
@@ -1429,7 +1437,7 @@ function ProviderConnection(props: {
             />
           </label>
           <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
-            API 密钥 (Key)
+            {language.tr("API 密钥 (Key)", "API Key")}
             <TextInput
               class="!w-full"
               name="apiKey"
@@ -1458,7 +1466,9 @@ function ProviderConnection(props: {
             disabled={localState.saving}
             aria-busy={localState.saving}
           >
-            {localState.saving ? "正在配置并拉取模型..." : "配置并连接"}
+            {localState.saving
+              ? language.tr("正在配置并拉取模型...", "Saving and fetching models...")
+              : language.tr("配置并连接", "Save & Connect")}
           </Button>
         </form>
       </div>

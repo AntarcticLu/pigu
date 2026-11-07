@@ -1264,10 +1264,26 @@ export function AssistantTextContent(props: {
           <MessageActionButton
             icon="file-document"
             size="small"
-            label={props.changedFilesOpen ? "收起变更文件" : "变更文件"}
+            label={
+              i18n.locale().toLowerCase().startsWith("zh")
+                ? props.changedFilesOpen
+                  ? "收起变更文件"
+                  : "变更文件"
+                : props.changedFilesOpen
+                  ? "Hide changed files"
+                  : "Changed files"
+            }
             onMouseDown={(event) => event.preventDefault()}
             onClick={() => props.onToggleChangedFiles?.()}
-            aria-label={props.changedFilesOpen ? "收起变更文件" : "变更文件"}
+            aria-label={
+              i18n.locale().toLowerCase().startsWith("zh")
+                ? props.changedFilesOpen
+                  ? "收起变更文件"
+                  : "变更文件"
+                : props.changedFilesOpen
+                  ? "Hide changed files"
+                  : "Changed files"
+            }
           />
           <Show when={meta().length > 0}>
             <span data-slot="text-part-meta">

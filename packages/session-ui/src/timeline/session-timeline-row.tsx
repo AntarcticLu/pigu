@@ -935,7 +935,9 @@ export function createSessionTimelineRowRenderer(input: {
         when={paths().length > 0}
         fallback={
           <Show when={props.showEmpty}>
-            <div class="pt-2 text-[12px] text-v2-text-text-faint">本轮无变更文件</div>
+            <div class="pt-2 text-[12px] text-v2-text-text-faint">
+              {i18n.locale().toLowerCase().startsWith("zh") ? "本轮无变更文件" : "No changed files in this turn"}
+            </div>
           </Show>
         }
       >

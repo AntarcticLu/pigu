@@ -465,7 +465,7 @@ export function Titlebar(props: { verticalTabs?: { mount?: HTMLElement } }) {
                   onClick={() => command.trigger("sessions.search")}
                 >
                   <Icon name="magnifying-glass" class="shrink-0" />
-                  <span class="min-w-0 truncate">搜索会话</span>
+                  <span class="min-w-0 truncate">{language.tr("搜索会话", "Search sessions")}</span>
                   <div class="ms-auto hidden shrink-0 group-hover:block group-focus-visible:block" aria-hidden="true">
                     <Keybind keys={command.keybindParts("sessions.search")} variant="neutral" dir="ltr" />
                   </div>

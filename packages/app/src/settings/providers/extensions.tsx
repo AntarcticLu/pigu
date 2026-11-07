@@ -269,7 +269,7 @@ export const SettingsExtensions: Component<{
     data.location.mcp.server.invalidate(data.location.default())
     void data.location.mcp.server.sync(data.location.default()).catch(() => undefined)
     resetMcpForm()
-    showToast({ variant: "success", title: "MCP 已保存" })
+    showToast({ variant: "success", title: language.tr("MCP 已保存", "MCP saved") })
   }
 
   const deleteMcp = async (name: string) => {
@@ -277,7 +277,7 @@ export const SettingsExtensions: Component<{
     await serverSdk.api.experimental.mcp.remove({ server: name, location: location() }).catch(() => undefined)
     data.location.mcp.server.invalidate(data.location.default())
     void data.location.mcp.server.sync(data.location.default()).catch(() => undefined)
-    showToast({ variant: "success", title: "MCP 已删除" })
+    showToast({ variant: "success", title: language.tr("MCP 已删除", "MCP deleted") })
   }
 
   const [pluginList, { refetch: refetchPlugins }] = createResource(
@@ -357,7 +357,10 @@ export const SettingsExtensions: Component<{
       const cleanedName = builtinLocal ? stripLegacyLocalPluginSuffix(custom.name) : custom.name
 
       const isOldDefaultDesc =
-        custom.description?.includes("桥接") || custom.description?.includes("调用 agy 模型")
+        custom.description?.includes("桥接") ||
+        custom.description?.includes("调用 agy 模型") ||
+        custom.description?.startsWith("支持本地调用") ||
+        custom.description?.startsWith("Invoke local")
 
       byID.set(custom.id, {
         id: custom.id,
@@ -435,7 +438,10 @@ export const SettingsExtensions: Component<{
     const detectedCount = plugins().filter((item) => item.id.startsWith("local:") && item.detected).length
     showToast({
       variant: "success",
-      title: `已重新扫描本机环境，当前已识别 ${detectedCount} 个插件`,
+      title: language.tr(
+        `已重新扫描本机环境，当前已识别 ${detectedCount} 个插件`,
+        `Rescanned local environment, ${detectedCount} plugins detected`,
+      ),
     })
   }
 
@@ -476,7 +482,7 @@ export const SettingsExtensions: Component<{
       pluginForm.editingID || undefined,
     )
     resetPluginForm()
-    showToast({ variant: "success", title: "插件已保存" })
+    showToast({ variant: "success", title: language.tr("插件已保存", "Plugin saved") })
   }
 
   const togglePlugin = (item: PluginDisplayRow, enabled: boolean) => {
@@ -513,7 +519,7 @@ export const SettingsExtensions: Component<{
 
   const deletePlugin = (id: string) => {
     scopeStore.removePlugin(id)
-    showToast({ variant: "success", title: "插件已删除" })
+    showToast({ variant: "success", title: language.tr("插件已删除", "Plugin deleted") })
   }
 
   createEffect(() => {
@@ -573,12 +579,12 @@ export const SettingsExtensions: Component<{
       skillForm.editingKey || undefined,
     )
     resetSkillForm()
-    showToast({ variant: "success", title: "技能已保存" })
+    showToast({ variant: "success", title: language.tr("技能已保存", "Skill saved") })
   }
 
   const deleteSkill = (skill: ScopedSkillInfo) => {
     scopeStore.removeSkill(skill)
-    showToast({ variant: "success", title: "技能已删除" })
+    showToast({ variant: "success", title: language.tr("技能已删除", "Skill deleted") })
   }
 
   return (
@@ -621,7 +627,7 @@ export const SettingsExtensions: Component<{
                     type="search"
                     value={mcpForm.query}
                     onInput={(event) => setMcpForm("query", event.currentTarget.value)}
-                    placeholder="搜索 MCP..."
+                    placeholder={language.tr("搜索 MCP...", "Search MCPs...")}
                     showClearButton={mcpForm.query.length > 0}
                     onClearClick={() => setMcpForm("query", "")}
                   />
@@ -646,7 +652,7 @@ export const SettingsExtensions: Component<{
                     })
                   }}
                 >
-                  {mcpForm.open ? "收起" : "+ 新增 MCP"}
+                  {mcpForm.open ? language.tr("收起", "Collapse") : language.tr("+ 新增 MCP", "+ Add MCP")}
                 </Button>
               </div>
 
@@ -654,7 +660,9 @@ export const SettingsExtensions: Component<{
                 <div class="flex flex-col gap-2.5 rounded-lg border border-v2-border-border-base bg-v2-background-bg-layer-01 p-3">
                   <div class="flex items-center justify-between">
                     <span class="text-12-medium text-v2-text-text-base">
-                      {mcpForm.editingName ? `编辑 MCP：${mcpForm.editingName}` : "新增 MCP 服务"}
+                      {mcpForm.editingName
+                        ? `${language.tr("编辑 MCP", "Edit MCP")}: ${mcpForm.editingName}`
+                        : language.tr("新增 MCP 服务", "Add MCP Server")}
                     </span>
                     <div class="flex items-center gap-1">
                       <Button
@@ -662,21 +670,21 @@ export const SettingsExtensions: Component<{
                         variant={mcpForm.type === "local" ? "outline" : "ghost"}
                         onClick={() => setMcpForm("type", "local")}
                       >
-                        本地命令
+                        {language.tr("本地命令", "Local Command")}
                       </Button>
                       <Button
                         size="small"
                         variant={mcpForm.type === "remote" ? "outline" : "ghost"}
                         onClick={() => setMcpForm("type", "remote")}
                       >
-                        远程 URL
+                        {language.tr("远程 URL", "Remote URL")}
                       </Button>
                     </div>
                   </div>
                   <TextInput
                     value={mcpForm.name}
                     onInput={(event) => setMcpForm("name", event.currentTarget.value)}
-                    placeholder="MCP 名称（例如 filesystem）"
+                    placeholder={language.tr("MCP 名称（例如 filesystem）", "MCP name (e.g. filesystem)")}
                   />
                   <Show
                     when={mcpForm.type === "local"}
@@ -684,22 +692,22 @@ export const SettingsExtensions: Component<{
                       <TextInput
                         value={mcpForm.url}
                         onInput={(event) => setMcpForm("url", event.currentTarget.value)}
-                        placeholder="远程 MCP 地址（例如 https://example.com/mcp）"
+                        placeholder={language.tr("远程 MCP 地址（例如 https://example.com/mcp）", "Remote MCP URL (e.g. https://example.com/mcp)")}
                       />
                     }
                   >
                     <TextInput
                       value={mcpForm.command}
                       onInput={(event) => setMcpForm("command", event.currentTarget.value)}
-                      placeholder="启动命令（例如 npx -y @modelcontextprotocol/server-filesystem /path）"
+                      placeholder={language.tr("启动命令（例如 npx -y @modelcontextprotocol/server-filesystem /path）", "Command (e.g. npx -y @modelcontextprotocol/server-filesystem /path)")}
                     />
                   </Show>
                   <div class="flex items-center justify-end gap-2">
                     <Button size="small" variant="ghost" onClick={resetMcpForm}>
-                      取消
+                      {language.tr("取消", "Cancel")}
                     </Button>
                     <Button size="small" variant="contrast" disabled={mcpForm.saving} onClick={() => void saveMcp()}>
-                      保存配置
+                      {language.tr("保存配置", "Save")}
                     </Button>
                   </div>
                 </div>
@@ -747,10 +755,10 @@ export const SettingsExtensions: Component<{
                             </Button>
                           </Show>
                           <Button size="small" variant="ghost-muted" onClick={() => openEditMcp(item)}>
-                            编辑
+                            {language.tr("编辑", "Edit")}
                           </Button>
                           <Button size="small" variant="ghost-muted" onClick={() => void deleteMcp(item.name)}>
-                            删除
+                            {language.tr("删除", "Delete")}
                           </Button>
                           <Show
                             when={item.status === "needs_auth" && item.integrationID}
@@ -798,7 +806,7 @@ export const SettingsExtensions: Component<{
                     type="search"
                     value={pluginForm.query}
                     onInput={(event) => setPluginForm("query", event.currentTarget.value)}
-                    placeholder="搜索插件..."
+                    placeholder={language.tr("搜索插件...", "Search plugins...")}
                     showClearButton={pluginForm.query.length > 0}
                     onClearClick={() => setPluginForm("query", "")}
                   />
@@ -810,7 +818,7 @@ export const SettingsExtensions: Component<{
                     disabled={pluginForm.scanning}
                     onClick={() => void rescanLocalPlugins()}
                   >
-                    {pluginForm.scanning ? "检测中..." : "重新检测"}
+                    {pluginForm.scanning ? language.tr("检测中...", "Detecting...") : language.tr("重新检测", "Re-detect")}
                   </Button>
                   <Button
                     size="small"
@@ -831,7 +839,7 @@ export const SettingsExtensions: Component<{
                       })
                     }}
                   >
-                    {pluginForm.open ? "收起" : "+ 新增插件"}
+                    {pluginForm.open ? language.tr("收起", "Collapse") : language.tr("+ 新增插件", "+ Add Plugin")}
                   </Button>
                 </div>
               </div>
@@ -839,29 +847,31 @@ export const SettingsExtensions: Component<{
               <Show when={pluginForm.open}>
                 <div class="flex flex-col gap-2.5 rounded-lg border border-v2-border-border-base bg-v2-background-bg-layer-01 p-3">
                   <span class="text-12-medium text-v2-text-text-base">
-                    {pluginForm.editingID ? `编辑插件：${pluginForm.name}` : "新增插件"}
+                    {pluginForm.editingID
+                      ? `${language.tr("编辑插件", "Edit Plugin")}: ${pluginForm.name}`
+                      : language.tr("新增插件", "Add Plugin")}
                   </span>
                   <TextInput
                     value={pluginForm.name}
                     onInput={(event) => setPluginForm("name", event.currentTarget.value)}
-                    placeholder="插件名称（例如 my-plugin）"
+                    placeholder={language.tr("插件名称（例如 my-plugin）", "Plugin name (e.g. my-plugin)")}
                   />
                   <TextInput
                     value={pluginForm.target}
                     onInput={(event) => setPluginForm("target", event.currentTarget.value)}
-                    placeholder="NPM 包名或本地路径（例如 @scope/plugin）"
+                    placeholder={language.tr("NPM 包名或本地路径（例如 @scope/plugin）", "NPM package or local path (e.g. @scope/plugin)")}
                   />
                   <TextInput
                     value={pluginForm.description}
                     onInput={(event) => setPluginForm("description", event.currentTarget.value)}
-                    placeholder="插件说明（可选）"
+                    placeholder={language.tr("插件说明（可选）", "Description (optional)")}
                   />
                   <div class="flex items-center justify-end gap-2">
                     <Button size="small" variant="ghost" onClick={resetPluginForm}>
-                      取消
+                      {language.tr("取消", "Cancel")}
                     </Button>
                     <Button size="small" variant="contrast" onClick={savePlugin}>
-                      保存插件
+                      {language.tr("保存插件", "Save Plugin")}
                     </Button>
                   </div>
                 </div>
@@ -881,12 +891,12 @@ export const SettingsExtensions: Component<{
                                 when={item.detected}
                                 fallback={
                                   <span class="shrink-0 rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[10px] leading-none font-medium text-v2-text-text-faint">
-                                    未检测到本机环境
+                                    {language.tr("未检测到本机环境", "Not detected")}
                                   </span>
                                 }
                               >
                                 <span class="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] leading-none font-medium text-emerald-600 dark:text-emerald-400">
-                                  已识别
+                                  {language.tr("已识别", "Detected")}
                                 </span>
                               </Show>
                             </Show>
@@ -898,10 +908,10 @@ export const SettingsExtensions: Component<{
                       </div>
                       <div class="settings-extension-trailing flex items-center gap-1.5">
                         <Button size="small" variant="ghost-muted" onClick={() => openEditPlugin(item)}>
-                          编辑
+                          {language.tr("编辑", "Edit")}
                         </Button>
                         <Button size="small" variant="ghost-muted" onClick={() => deletePlugin(item.id)}>
-                          删除
+                          {language.tr("删除", "Delete")}
                         </Button>
                         <Switch
                           hideLabel
@@ -926,7 +936,7 @@ export const SettingsExtensions: Component<{
                     type="search"
                     value={skillForm.query}
                     onInput={(event) => setSkillForm("query", event.currentTarget.value)}
-                    placeholder="搜索技能..."
+                    placeholder={language.tr("搜索技能...", "Search skills...")}
                     showClearButton={skillForm.query.length > 0}
                     onClearClick={() => setSkillForm("query", "")}
                   />
@@ -950,38 +960,40 @@ export const SettingsExtensions: Component<{
                     })
                   }}
                 >
-                  {skillForm.open ? "收起" : "+ 新增技能"}
+                  {skillForm.open ? language.tr("收起", "Collapse") : language.tr("+ 新增技能", "+ Add Skill")}
                 </Button>
               </div>
 
               <Show when={skillForm.open}>
                 <div class="flex flex-col gap-2.5 rounded-lg border border-v2-border-border-base bg-v2-background-bg-layer-01 p-3">
                   <span class="text-12-medium text-v2-text-text-base">
-                    {skillForm.editingKey ? `编辑技能：${skillForm.name}` : "新增技能"}
+                    {skillForm.editingKey
+                      ? `${language.tr("编辑技能", "Edit Skill")}: ${skillForm.name}`
+                      : language.tr("新增技能", "Add Skill")}
                   </span>
                   <TextInput
                     value={skillForm.name}
                     onInput={(event) => setSkillForm("name", event.currentTarget.value)}
-                    placeholder="技能标识名称（例如 code-review）"
+                    placeholder={language.tr("技能标识名称（例如 code-review）", "Skill ID (e.g. code-review)")}
                   />
                   <TextInput
                     value={skillForm.description}
                     onInput={(event) => setSkillForm("description", event.currentTarget.value)}
-                    placeholder="技能简短描述"
+                    placeholder={language.tr("技能简短描述", "Short description")}
                   />
                   <textarea
                     rows={4}
                     value={skillForm.content}
                     onInput={(event) => setSkillForm("content", event.currentTarget.value)}
-                    placeholder="输入技能指令内容 (SKILL.md)..."
+                    placeholder={language.tr("输入技能指令内容 (SKILL.md)...", "Enter skill instructions (SKILL.md)...")}
                     class="w-full rounded-md border border-v2-border-border-base bg-v2-background-bg-base px-2.5 py-2 text-12-regular text-v2-text-text-base outline-none focus:border-v2-border-border-focus"
                   />
                   <div class="flex items-center justify-end gap-2">
                     <Button size="small" variant="ghost" onClick={resetSkillForm}>
-                      取消
+                      {language.tr("取消", "Cancel")}
                     </Button>
                     <Button size="small" variant="contrast" onClick={saveSkill}>
-                      保存技能
+                      {language.tr("保存技能", "Save Skill")}
                     </Button>
                   </div>
                 </div>
@@ -1024,10 +1036,10 @@ export const SettingsExtensions: Component<{
                         </div>
                         <div class="settings-extension-trailing flex items-center gap-1.5">
                           <Button size="small" variant="ghost-muted" onClick={() => openEditSkill(skill)}>
-                            编辑
+                            {language.tr("编辑", "Edit")}
                           </Button>
                           <Button size="small" variant="ghost-muted" onClick={() => deleteSkill(skill)}>
-                            删除
+                            {language.tr("删除", "Delete")}
                           </Button>
                           <Switch
                             checked={enabled()}

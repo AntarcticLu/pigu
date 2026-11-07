@@ -32,13 +32,13 @@ import { PluginSettingsPages } from "@/runtime/plugin/settings-page-view"
 import "@/settings/settings.css"
 
 const rootClientTabs = [
-  { value: "general", icon: pageIcons.general, label: "通用" },
-  { value: "shortcuts", icon: pageIcons.shortcuts, label: "快捷键" },
+  { value: "general", icon: pageIcons.general, zh: "通用", en: "General" },
+  { value: "shortcuts", icon: pageIcons.shortcuts, zh: "快捷键", en: "Shortcuts" },
 ] as const
 
 const serverTabs = [
-  { value: "models", icon: pageIcons.models, label: "模型" },
-  { value: "extensions", icon: pageIcons.extensions, label: "拓展" },
+  { value: "models", icon: pageIcons.models, zh: "模型", en: "Models" },
+  { value: "extensions", icon: pageIcons.extensions, zh: "拓展", en: "Extensions" },
 ] as const
 
 // The heading of each per-server page, which its unreachable state keeps.
@@ -204,8 +204,8 @@ function RootSettings() {
   const groups = createMemo<SettingsNavGroup[]>(() => [
     {
       items: [
-        ...serverTabs.map((item) => ({ ...item })),
-        ...rootClientTabs.map((item) => ({ ...item })),
+        ...serverTabs.map((item) => ({ value: item.value, icon: item.icon, label: language.tr(item.zh, item.en) })),
+        ...rootClientTabs.map((item) => ({ value: item.value, icon: item.icon, label: language.tr(item.zh, item.en) })),
         {
           value: "servers",
           icon: pageIcons.servers,

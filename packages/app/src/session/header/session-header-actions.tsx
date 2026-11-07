@@ -25,8 +25,14 @@ export function SessionReviewToggle(props: { onToggle: () => void; glyph?: (fill
         placement="bottom"
         value={
           enabled()
-            ? "会话通知：已开启（任务完成或需要关注时提醒，点击关闭）"
-            : "会话通知：已关闭（点击开启任务完成或需要关注时的提醒）"
+            ? language.tr(
+                "会话通知：已开启（任务完成或需要关注时提醒，点击关闭）",
+                "Session notifications: On (alert when task completes or needs attention; click to turn off)",
+              )
+            : language.tr(
+                "会话通知：已关闭（点击开启任务完成或需要关注时的提醒）",
+                "Session notifications: Off (click to turn on alerts when task completes or needs attention)",
+              )
         }
       >
         <IconButton
@@ -37,7 +43,11 @@ export function SessionReviewToggle(props: { onToggle: () => void; glyph?: (fill
           class={enabled() ? "shrink-0 !text-v2-text-text-base" : "shrink-0 opacity-45"}
           onMouseDown={(event) => event.preventDefault()}
           onClick={() => settings.notifications.setAgent(!enabled())}
-          aria-label={enabled() ? "关闭会话通知" : "开启会话通知"}
+          aria-label={
+            enabled()
+              ? language.tr("关闭会话通知", "Turn off session notifications")
+              : language.tr("开启会话通知", "Turn on session notifications")
+          }
           aria-pressed={enabled()}
           icon={
             <svg data-slot="icon-svg" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">

@@ -1,6 +1,7 @@
 import { type Accessor, createMemo } from "solid-js"
 import { createSimpleContext } from "@opencode/ui/context"
 import { useProviders } from "@/providers/catalog/providers"
+import { tr } from "@/runtime/i18n/language"
 import { useGlobal } from "@/runtime/server/runtime"
 import {
   localEngineCanonicalIcon,
@@ -124,9 +125,11 @@ const createModelsController = (directory: Accessor<string | undefined>) => {
             ? { ...m.provider, name: providerName, canonical }
             : { ...m.provider, name: providerName }
 
+          const rawName = m.id.includes("/") || m.name.startsWith("默认") ? m.name : providerName
+
           return {
             ...m,
-            name: m.id.includes("/") || m.name.startsWith("默认") ? m.name : providerName,
+            name: rawName.replace(/^默认\b/, tr("默认", "Default")),
             provider,
             latest: false,
           }

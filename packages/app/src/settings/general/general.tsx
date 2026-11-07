@@ -145,9 +145,9 @@ export const SettingsGeneral: Component = () => {
 
   const VersionSection = () => (
     <div class="settings-section">
-      <h3 class="settings-section-title">版本</h3>
+      <h3 class="settings-section-title">{language.tr("版本", "Version")}</h3>
       <SettingsList>
-        <SettingsRow title="当前版本">
+        <SettingsRow title={language.tr("当前版本", "Current version")}>
           <span data-action="settings-current-version" class="text-13-regular text-v2-text-text-muted">
             v0.0.1
           </span>
@@ -161,7 +161,7 @@ export const SettingsGeneral: Component = () => {
       <div class="settings-tab-header">
         <div class="settings-tab-header-row">
           <div class="flex flex-col gap-1">
-            <h2 class="settings-tab-title">通用与外观</h2>
+            <h2 class="settings-tab-title">{language.tr("通用与外观", "General & Appearance")}</h2>
           </div>
         </div>
       </div>

@@ -1,3 +1,6 @@
+import { mkdirSync, writeFileSync } from "node:fs"
+import os from "node:os"
+import path from "node:path"
 import {
   DESKTOP_NATIVE_ENGLISH,
   DESKTOP_NATIVE_KEYS,
@@ -12,6 +15,10 @@ let bundle: DesktopNativeBundle = { locale: "en", messages: { ...DESKTOP_NATIVE_
 const listeners = new Set<() => void>()
 
 export function setNativeTranslations(next: DesktopNativeBundle) {
+  const configDir = process.env.OPENCODE_CONFIG_DIR ?? path.join(os.homedir(), ".config", "opencode")
+  mkdirSync(configDir, { recursive: true })
+  writeFileSync(path.join(configDir, "pigu-locale.json"), JSON.stringify({ locale: next.locale === "zh" ? "zh" : "en" }))
+
   if (
     next.locale === bundle.locale &&
     DESKTOP_NATIVE_KEYS.every((key) => next.messages[key] === bundle.messages[key])

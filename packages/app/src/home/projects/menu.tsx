@@ -27,7 +27,7 @@ export function ProjectMenuItems(props: {
   return (
     <>
       <Menu.Item onSelect={() => props.onHideProject(props.server, props.project)}>
-        {props.archived ? "恢复展示项目" : "收纳项目"}
+        {props.archived ? language.tr("恢复展示项目", "Unarchive project") : language.tr("收纳项目", "Archive project")}
       </Menu.Item>
       <Menu.Separator />
       <Menu.Item onSelect={() => props.onOpenProjectNewSession(props.server, props.project.worktree)}>

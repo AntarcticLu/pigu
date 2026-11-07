@@ -19,7 +19,7 @@ import { addProjects } from "@/home/projects/add"
 import { ProjectMenuItems } from "@/home/projects/menu"
 import { buildHomeSessionRecords } from "@/home/sessions/records"
 import { arrayMove } from "@/runtime/array-move"
-import { useLanguage } from "@/runtime/i18n/language"
+import { tr, useLanguage } from "@/runtime/i18n/language"
 import { Persistence } from "@/runtime/persistence/schema"
 import { Persist, persisted } from "@/runtime/persistence/storage"
 import { ServerConnection, useServers } from "@/runtime/server/registry"
@@ -145,7 +145,7 @@ export function SidebarOrganized(props: {
                 aria-expanded={!state.projectsCollapsed}
                 onClick={() => setState("projectsCollapsed", (value) => !value)}
               >
-                <span class="min-w-0 truncate">项目</span>
+                <span class="min-w-0 truncate">{tr("项目", "Projects")}</span>
                 <Icon
                   name="fill-triangle-down"
                   size="small"
@@ -159,8 +159,8 @@ export function SidebarOrganized(props: {
                     icon={<Icon name="plus" size="small" />}
                     variant="ghost-muted"
                     size="small"
-                    aria-label="添加项目"
-                    title="添加项目"
+                    aria-label={tr("添加项目", "Add project")}
+                    title={tr("添加项目", "Add project")}
                     onClick={() => {
                       const ctx = global.serverCtx(ServerConnection.key(conn()))
 
@@ -392,7 +392,7 @@ function ProjectList(props: {
         <Key
           each={shownSessions().slice(0, limit())}
           by={(record) => record.session.id}
-          fallback={<div class="ps-8 pe-2 py-1.5 text-12-regular text-v2-text-text-faint">暂无会话</div>}
+          fallback={<div class="ps-8 pe-2 py-1.5 text-12-regular text-v2-text-text-faint">{tr("暂无会话", "No sessions")}</div>}
         >
           {(record) => (
             <ProjectSessionRow
@@ -424,7 +424,7 @@ function ProjectList(props: {
             class="ms-[23px] self-start"
             onClick={() => setLocal("sessionLimits", key(), (value) => (value ?? 6) + 6)}
           >
-            展开更多 ({shownSessions().length - limit()})
+            {tr("展开更多", "Show more")} ({shownSessions().length - limit()})
           </Button>
         </Show>
         <Show when={archivedSessions().length > 0}>
@@ -440,7 +440,7 @@ function ProjectList(props: {
                 class="shrink-0 text-v2-icon-icon-faint transition-transform"
                 classList={{ "-rotate-90 rtl:rotate-90": !local.showArchivedSessions[key()] }}
               />
-              <span>已收纳会话 ({archivedSessions().length})</span>
+              <span>{tr("已收纳会话", "Archived sessions")} ({archivedSessions().length})</span>
             </button>
             <Show when={local.showArchivedSessions[key()]}>
               <div class="flex flex-col gap-[2px] opacity-80">
@@ -528,7 +528,7 @@ function ProjectList(props: {
                       class="shrink-0 text-v2-icon-icon-faint transition-transform"
                       classList={{ "-rotate-90 rtl:rotate-90": !local.showArchivedProjects }}
                     />
-                    <span>已收纳项目 ({archivedProjects().length})</span>
+                    <span>{tr("已收纳项目", "Archived projects")} ({archivedProjects().length})</span>
                   </button>
                 </div>
                 <Show when={local.showArchivedProjects}>
@@ -622,7 +622,7 @@ function ProjectRow(props: {
                 : "bg-blue-500/10 text-blue-600 dark:text-blue-400"
             }`}
           >
-            {props.isLocal ? "本地" : "远程"}
+            {props.isLocal ? tr("本地", "Local") : tr("远程", "Remote")}
           </span>
           <Show when={props.sessionCount > 0}>
             <span class="shrink-0 text-[11px] text-v2-text-text-faint group-hover/project:hidden">

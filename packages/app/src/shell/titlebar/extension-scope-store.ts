@@ -1,6 +1,7 @@
 import type { PermissionRule } from "@opencode/client/promise"
 import { Schema } from "effect"
 import { batch, createEffect, createMemo } from "solid-js"
+import { tr } from "@/runtime/i18n/language"
 import { Persistence } from "@/runtime/persistence/schema"
 import { Persist, persisted } from "@/runtime/persistence/storage"
 import { ServerConnection, useServers } from "@/runtime/server/registry"
@@ -46,63 +47,108 @@ export const BUILTIN_LOCAL_AGENT_PLUGINS: ReadonlyArray<BuiltinLocalAgentPlugin>
     modelID: "claude",
     name: "claude",
     target: "claude",
-    description: "支持本地调用 claude 模型，并自动识别与加载项目下的 Claude 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 claude 模型，并自动识别与加载项目下的 Claude 会话 JSON",
+        "Invoke local Claude CLI models and automatically discover Claude session JSON files in projects",
+      )
+    },
   },
   {
     id: "local:codex",
     modelID: "codex",
     name: "codex",
     target: "codex",
-    description: "支持本地调用 codex 模型，并自动识别与加载项目下的 Codex 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 codex 模型，并自动识别与加载项目下的 Codex 会话 JSON",
+        "Invoke local Codex CLI models and automatically discover Codex session JSON files in projects",
+      )
+    },
   },
   {
     id: "local:agy",
     modelID: "agy",
     name: "antigravity",
     target: "antigravity",
-    description: "支持本地调用 antigravity 模型，并自动识别与加载项目下的 Antigravity 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 antigravity 模型，并自动识别与加载项目下的 Antigravity 会话 JSON",
+        "Invoke local Antigravity models and automatically discover Antigravity session JSON files in projects",
+      )
+    },
   },
   {
     id: "local:pi",
     modelID: "pi",
     name: "pi",
     target: "pi",
-    description: "支持本地调用 pi 模型，并自动识别与加载项目下的 Pi 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 pi 模型，并自动识别与加载项目下的 Pi 会话 JSON",
+        "Invoke local Pi models and automatically discover Pi session JSON files in projects",
+      )
+    },
   },
   {
     id: "local:opencode",
     modelID: "opencode",
     name: "opencode",
     target: "opencode",
-    description: "支持本地调用 opencode 模型，并自动识别与加载项目下的 OpenCode 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 opencode 模型，并自动识别与加载项目下的 OpenCode 会话 JSON",
+        "Invoke local OpenCode models and automatically discover OpenCode session JSON files in projects",
+      )
+    },
   },
   {
     id: "local:cursor",
     modelID: "cursor",
     name: "cursor",
     target: "cursor",
-    description: "支持本地调用 cursor 模型，并自动识别与加载项目下的 Cursor 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 cursor 模型，并自动识别与加载项目下的 Cursor 会话 JSON",
+        "Invoke local Cursor models and automatically discover Cursor session JSON files in projects",
+      )
+    },
   },
   {
     id: "local:grok",
     modelID: "grok",
     name: "grok",
     target: "grok",
-    description: "支持本地调用 grok 模型，并自动识别与加载项目下的 Grok 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 grok 模型，并自动识别与加载项目下的 Grok 会话 JSON",
+        "Invoke local Grok models and automatically discover Grok session JSON files in projects",
+      )
+    },
   },
   {
     id: "local:deepseek-harness",
     modelID: "deepseek-harness",
     name: "deepseek harness",
     target: "dsh",
-    description: "支持本地调用 deepseek harness 模型，并自动识别与加载项目下的 DSH 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 deepseek harness 模型，并自动识别与加载项目下的 DSH 会话 JSON",
+        "Invoke local DeepSeek Harness models and automatically discover DSH session JSON files in projects",
+      )
+    },
   },
   {
     id: "local:workbuddy",
     modelID: "workbuddy",
     name: "workbuddy",
     target: "workbuddy",
-    description: "支持本地调用 workbuddy 模型，并自动识别与加载项目下的 WorkBuddy 会话 JSON",
+    get description() {
+      return tr(
+        "支持本地调用 workbuddy 模型，并自动识别与加载项目下的 WorkBuddy 会话 JSON",
+        "Invoke local WorkBuddy models and automatically discover WorkBuddy session JSON files in projects",
+      )
+    },
   },
 ]
 
@@ -253,7 +299,7 @@ export function isProjectLocalSkill(skillPath: string, worktree?: string) {
 export function resolveSkillOrigin(skillPath: string, worktree?: string, fromIdeGlobal?: boolean) {
   if (skillPath.startsWith("custom://")) {
     return {
-      label: "自定义",
+      label: tr("自定义", "Custom"),
       isLocal: false,
       class: "bg-purple-500/15 text-purple-600 dark:text-purple-400",
     }
@@ -261,7 +307,7 @@ export function resolveSkillOrigin(skillPath: string, worktree?: string, fromIde
 
   if (isProjectLocalSkill(skillPath, worktree)) {
     return {
-      label: "项目专属",
+      label: tr("项目专属", "Project"),
       isLocal: true,
       class: "bg-indigo-500/15 text-indigo-600 dark:text-indigo-400",
     }
@@ -319,7 +365,7 @@ export function resolveSkillOrigin(skillPath: string, worktree?: string, fromIde
   }
 
   return {
-    label: fromIdeGlobal ? "IDE 全局" : "全局",
+    label: fromIdeGlobal ? tr("IDE 全局", "IDE Global") : tr("全局", "Global"),
     isLocal: false,
     class: "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400",
   }

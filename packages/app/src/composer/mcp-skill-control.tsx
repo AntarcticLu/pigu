@@ -269,7 +269,7 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
       containerClass="!w-[min(92vw,860px)] !h-[min(80vh,560px)] !rounded-[10px]"
     >
       <DialogHeader>
-        <DialogTitleGroup title="MCP 与 Skill" />
+        <DialogTitleGroup title={language.tr("MCP 与 Skill", "MCP & Skills")} />
       </DialogHeader>
 
       <DialogBody class="min-h-0 flex-1 px-4 pb-4 pt-0">
@@ -295,7 +295,7 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                       )
                     }
                   >
-                    全选
+                    {language.tr("全选", "Select all")}
                   </Button>
                   <Button
                     variant="ghost-muted"
@@ -307,7 +307,7 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                       )
                     }
                   >
-                    清空
+                    {language.tr("清空", "Clear")}
                   </Button>
                 </div>
               </Show>
@@ -321,7 +321,7 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                 when={mcps().length > 0}
                 fallback={
                   <div class="flex h-full items-center justify-center py-12 text-13-regular text-v2-text-text-faint">
-                    暂无 MCP 服务
+                    {language.tr("暂无 MCP 服务", "No MCP servers")}
                   </div>
                 }
               >
@@ -403,7 +403,7 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                       )
                     }
                   >
-                    全选
+                    {language.tr("全选", "Select all")}
                   </Button>
                   <Button
                     variant="ghost-muted"
@@ -415,7 +415,7 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                       )
                     }
                   >
-                    清空
+                    {language.tr("清空", "Clear")}
                   </Button>
                 </div>
               </Show>
@@ -429,7 +429,7 @@ function DialogSessionMcpSkills(props: { directory: string; isLocal: boolean }) 
                 when={skills().length > 0}
                 fallback={
                   <div class="flex h-full items-center justify-center py-12 text-13-regular text-v2-text-text-faint">
-                    暂无可用 Skill
+                    {language.tr("暂无可用 Skill", "No skills available")}
                   </div>
                 }
               >

@@ -272,7 +272,7 @@ export const ProjectSettingsExtensions: Component<{
               <div class="flex items-center gap-2">
                 <h2 class="settings-tab-title truncate">{projectTitle()}</h2>
                 <span class="rounded bg-v2-background-bg-layer-02 px-2 py-0.5 text-[11px] font-medium text-v2-text-text-muted">
-                  项目专属扩展配置
+                  {language.tr("项目专属扩展配置", "Project extensions")}
                 </span>
               </div>
               <span class="truncate font-mono text-11-regular text-v2-text-text-muted">{directory()}</span>
@@ -280,7 +280,7 @@ export const ProjectSettingsExtensions: Component<{
           </div>
           <div class="settings-tab-header-actions">
             <Button variant="ghost-muted" size="small" onClick={() => surface.open("extensions")}>
-              前往全局 MCP 与扩展库
+              {language.tr("前往全局 MCP 与扩展库", "Open global extensions")}
             </Button>
           </div>
         </div>
@@ -309,9 +309,17 @@ export const ProjectSettingsExtensions: Component<{
             <div class="project-settings-extension-section">
               <div class="project-settings-extension-section-header">
                 <div class="project-settings-extension-section-copy">
-                  <span>当前项目可用的 Skill 技能（已启用 {enabledSkillCount()} / {allSkills().length}）</span>
+                  <span>
+                    {language.tr(
+                      `当前项目可用的 Skill 技能（已启用 ${enabledSkillCount()} / ${allSkills().length}）`,
+                      `Skills available in this project (${enabledSkillCount()} / ${allSkills().length} enabled)`,
+                    )}
+                  </span>
                   <span class="project-settings-extension-empty-description">
-                    可为当前项目单独开关项目内或全局继承（Codex / Claude / AGY）的 Skill，对话中默认继承此处配置。
+                    {language.tr(
+                      "可为当前项目单独开关项目内或全局继承（Codex / Claude / AGY）的 Skill，对话中默认继承此处配置。",
+                      "Enable or disable project-local and inherited global skills (Codex / Claude / AGY) for this project.",
+                    )}
                   </span>
                 </div>
                 <Show when={allSkills().length > 0}>
@@ -329,7 +337,7 @@ export const ProjectSettingsExtensions: Component<{
                         )
                       }
                     >
-                      仅启用项目专属
+                      {language.tr("仅启用项目专属", "Project only")}
                     </Button>
                     <Button
                       variant="ghost-muted"
@@ -341,7 +349,7 @@ export const ProjectSettingsExtensions: Component<{
                         )
                       }
                     >
-                      全部启用
+                      {language.tr("全部启用", "Enable all")}
                     </Button>
                     <Button
                       variant="ghost-muted"
@@ -353,7 +361,7 @@ export const ProjectSettingsExtensions: Component<{
                         )
                       }
                     >
-                      全部关闭
+                      {language.tr("全部关闭", "Disable all")}
                     </Button>
                   </div>
                 </Show>
@@ -403,10 +411,16 @@ export const ProjectSettingsExtensions: Component<{
                   <span>
                     {allMcps().length === 0
                       ? language.t("project.settings.extensions.empty.mcps.title")
-                      : `当前项目可用的 MCP 服务（已连接 ${enabledMcpCount()} / ${allMcps().length}）`}
+                      : language.tr(
+                          `当前项目可用的 MCP 服务（已连接 ${enabledMcpCount()} / ${allMcps().length}）`,
+                          `MCP servers available in this project (${enabledMcpCount()} / ${allMcps().length} connected)`,
+                        )}
                   </span>
                   <span class="project-settings-extension-empty-description">
-                    按项目独立控制 MCP 服务连接状态，不同项目之间互不干扰。
+                    {language.tr(
+                      "按项目独立控制 MCP 服务连接状态，不同项目之间互不干扰。",
+                      "Control MCP server connections independently per project.",
+                    )}
                   </span>
                 </div>
                 <span>{language.t("settings.extensions.manageConfig")}</span>
@@ -430,7 +444,7 @@ export const ProjectSettingsExtensions: Component<{
                                     : "bg-zinc-500/15 text-zinc-600 dark:text-zinc-400"
                                 }`}
                               >
-                                {isProjectOnly() ? "项目专属" : "全局共享"}
+                                {isProjectOnly() ? language.tr("项目专属", "Project") : language.tr("全局共享", "Global")}
                               </span>
                             </>
                           }

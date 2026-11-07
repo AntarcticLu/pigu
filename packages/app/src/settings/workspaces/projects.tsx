@@ -6,7 +6,7 @@ import { IconButton } from "@opencode/ui/icon-button"
 import { Select } from "@opencode/ui/select"
 import { TextInput } from "@opencode/ui/text-input"
 import { displayName } from "@opencode/ui/project-avatar"
-import { useLanguage } from "@/runtime/i18n/language"
+import { tr, useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
 import { useServer } from "@/runtime/server/current"
 import { ServerConnection, useServers } from "@/runtime/server/registry"
@@ -92,7 +92,7 @@ function ProjectBasicInfoSection(props: {
     props.onRelocated(added)
     showToast({
       variant: "success",
-      title: "项目路径已更新",
+      title: tr("项目路径已更新", "Project path updated"),
       description: added.worktree,
     })
   }
@@ -101,7 +101,7 @@ function ProjectBasicInfoSection(props: {
     if (!props.isLocal || platform.platform !== "desktop") return
 
     const result = await platform.openDirectoryPickerDialog({
-      title: "选择项目文件夹",
+      title: tr("选择项目文件夹", "Select project folder"),
       multiple: false,
     })
 
@@ -114,7 +114,7 @@ function ProjectBasicInfoSection(props: {
 
   return (
     <SettingsList>
-      <SettingsRow title="项目名称">
+      <SettingsRow title={tr("项目名称", "Project name")}>
         <Show
           when={editingName()}
           fallback={
@@ -130,7 +130,7 @@ function ProjectBasicInfoSection(props: {
                 variant="ghost-muted"
                 size="small"
                 icon={<Icon name="edit" size="small" />}
-                aria-label="编辑项目名称"
+                aria-label={tr("编辑项目名称", "Edit project name")}
                 onClick={startEditingName}
               />
             </div>
@@ -172,7 +172,7 @@ function ProjectBasicInfoSection(props: {
               variant="ghost-muted"
               size="small"
               icon={<Icon name="check" size="small" />}
-              aria-label="保存项目名称"
+              aria-label={tr("保存项目名称", "Save project name")}
               onMouseDown={(event) => event.preventDefault()}
               onClick={commitName}
             />
@@ -180,7 +180,7 @@ function ProjectBasicInfoSection(props: {
         </Show>
       </SettingsRow>
 
-      <SettingsRow title={props.isLocal ? "本地路径" : "远程路径"}>
+      <SettingsRow title={props.isLocal ? tr("本地路径", "Local path") : tr("远程路径", "Remote path")}>
         <div class="flex max-w-full items-center gap-2">
           <span
             data-action="settings-project-path"
@@ -197,7 +197,7 @@ function ProjectBasicInfoSection(props: {
               disabled={relocating()}
               onClick={() => void browseDirectory()}
             >
-              浏览...
+              {tr("浏览...", "Browse...")}
             </Button>
           </Show>
         </div>
@@ -220,7 +220,7 @@ export const DialogEditProject: Component<{
   return (
     <Dialog fit containerClass="!w-[min(92vw,520px)] !rounded-[10px]">
       <DialogHeader>
-        <DialogTitleGroup title="编辑项目" />
+        <DialogTitleGroup title={tr("编辑项目", "Edit project")} />
       </DialogHeader>
       <DialogBody class="px-4 pb-4 pt-0">
         <SettingsServerDataScope server={props.server}>
@@ -282,7 +282,7 @@ export const SettingsProjects: Component<{
       <div class="settings-tab-header">
         <div class="settings-tab-header-row">
           <div class="flex min-w-0 items-center gap-2">
-            <h2 class="settings-tab-title">项目配置</h2>
+            <h2 class="settings-tab-title">{tr("项目配置", "Project settings")}</h2>
             <Show when={currentProject()}>
               <span
                 class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${
@@ -291,7 +291,7 @@ export const SettingsProjects: Component<{
                     : "bg-blue-500/10 text-blue-600 dark:text-blue-400"
                 }`}
               >
-                {isLocalServer() ? "本地项目" : "远程项目"}
+                {isLocalServer() ? tr("本地项目", "Local project") : tr("远程项目", "Remote project")}
               </span>
             </Show>
           </div>
@@ -319,7 +319,7 @@ export const SettingsProjects: Component<{
           keyed
           fallback={
             <div class="py-12 text-center text-v2-text-text-muted text-13-regular">
-              暂无项目，可在左侧边栏点击「项目 +」添加本地项目目录
+              {tr("暂无项目，可在左侧边栏点击「项目 +」添加本地项目目录", "No projects yet. Click 'Projects +' in the left sidebar to add a local project folder.")}
             </div>
           }
         >

@@ -264,7 +264,7 @@ export function ProjectSessionRow(props: {
         >
           <Show when={props.onToggleArchive}>
             <Menu.Item onSelect={() => props.onToggleArchive?.()}>
-              {props.archived ? "恢复展示会话" : "收纳会话"}
+              {props.archived ? language.tr("恢复展示会话", "Unarchive session") : language.tr("收纳会话", "Archive session")}
             </Menu.Item>
             <Menu.Separator />
           </Show>

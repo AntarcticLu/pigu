@@ -72,10 +72,10 @@ export function createServerShellController(server: Accessor<ServerConnection.An
 }
 
 const classicThemes = [
-  { id: "oc-2", name: "黑色" },
-  { id: "white", name: "白色" },
-  { id: "zenburn", name: "灰色" },
-  { id: "everforest", name: "绿色" },
+  { id: "oc-2", zh: "黑色", en: "Dark" },
+  { id: "white", zh: "白色", en: "Light" },
+  { id: "zenburn", zh: "灰色", en: "Gray" },
+  { id: "everforest", zh: "绿色", en: "Green" },
 ] as const
 
 export function createAppearanceSettingsController() {
@@ -83,7 +83,9 @@ export function createAppearanceSettingsController() {
   const platform = usePlatform()
   const language = useLanguage()
   const theme = useTheme()
-  const themes = () => [...classicThemes]
+  const themes = createMemo(() =>
+    classicThemes.map((item) => ({ id: item.id, name: language.tr(item.zh, item.en) })),
+  )
 
   onMount(() => void theme.loadThemes())
 
@@ -94,7 +96,7 @@ export function createAppearanceSettingsController() {
     },
     theme: {
       options: themes,
-      current: createMemo(() => classicThemes.find((option) => option.id === theme.themeId()) ?? classicThemes[2]),
+      current: createMemo(() => themes().find((option) => option.id === theme.themeId()) ?? themes()[2]),
       select: (option: { id: string } | null) => option && theme.setTheme(option.id),
     },
     zoom: {
