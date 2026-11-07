@@ -600,7 +600,7 @@ async function runStreamJsonProcess(input: {
   const modelFlag = input.subModel ? ["--model", input.subModel] : []
 
   const effortFlag =
-    input.mode === "claude" &&
+    (input.mode === "claude" || input.mode === "agy") &&
     input.variant &&
     (input.variant === "low" ||
       input.variant === "medium" ||
@@ -617,6 +617,7 @@ async function runStreamJsonProcess(input: {
           "stream-json",
           "--dangerously-skip-permissions",
           ...modelFlag,
+          ...effortFlag,
           ...sessionFlag,
           "-p",
           input.prompt,
@@ -1450,11 +1451,12 @@ function localModelEfforts(engine: LocalEngine, subModel?: string): readonly str
   return []
 }
 
-function buildLocalModel(id: Model.ID, name: string): Model.Info {
+function buildLocalModel(id: Model.ID, name: string, explicitEfforts?: readonly string[]): Model.Info {
   const defaults = Model.Info.default(LOCAL_PROVIDER_ID, id)
   const engine = normalizeEngine(id)
   const subModel = extractSubModel(id)
-  const variants = localModelEfforts(engine, subModel).map((effort) => ({
+  const efforts = explicitEfforts ?? localModelEfforts(engine, subModel)
+  const variants = efforts.map((effort) => ({
     id: Model.VariantID.make(effort),
     settings: { reasoningEffort: effort },
   }))
@@ -1484,6 +1486,94 @@ function readJsonRecordSafe(filePath: string): Record<string, unknown> | undefin
   return isRecord(decoded) ? decoded : undefined
 }
 
+type AgyModelSpec = {
+  readonly id: string
+  readonly efforts: readonly string[]
+}
+
+const DEFAULT_AGY_MODELS: readonly AgyModelSpec[] = [
+  { id: "gemini-4-argon", efforts: ["low", "medium", "high"] },
+  { id: "gemini-3.8-flash", efforts: ["low", "medium", "high"] },
+  { id: "claude-opus-5-5", efforts: ["low", "medium", "high"] },
+  { id: "claude-sonnet-5-5", efforts: ["low", "medium", "high"] },
+  { id: "gpt-oss-120b", efforts: [] },
+]
+
+const EFFORT_SORT_ORDER = ["low", "medium", "high", "xhigh", "max"] as const
+
+function parseAgyModelsStdout(stdout: string): readonly AgyModelSpec[] {
+  const clean = stdout.replace(/\u001b\[[0-9;]*[a-zA-Z]/g, "")
+  const lines = clean.split(/[\r\n]+/)
+  const byBase = new Map<string, Set<string>>()
+
+  for (const rawLine of lines) {
+    const trimmed = rawLine.replace(/^[⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏\s]+/, "").trim()
+    const match = /^([a-z0-9][a-z0-9._-]*)(?:\t|\s{2,})(.+)$/i.exec(trimmed)
+    if (!match) continue
+    const rawId = match[1]
+    if (rawId.toLowerCase() === "usage:" || rawId.toLowerCase() === "flags:") continue
+    const effortMatch = /^(.*?)-(low|medium|high|xhigh|max)$/i.exec(rawId)
+    const baseId = effortMatch ? effortMatch[1] : rawId
+    const effort = effortMatch ? effortMatch[2].toLowerCase() : undefined
+    const set = byBase.get(baseId) ?? new Set<string>()
+    if (effort) set.add(effort)
+    byBase.set(baseId, set)
+  }
+
+  return Array.from(byBase.entries()).map(([id, effortSet]) => {
+    const sorted = EFFORT_SORT_ORDER.filter((tier) => effortSet.has(tier))
+    return {
+      id,
+      efforts: sorted.length > 1 ? sorted : [],
+    }
+  })
+}
+
+function discoverAgyModels(home: string): readonly AgyModelSpec[] {
+  const cachePath = path.join(home, ".gemini", "antigravity", "pigu-models-cache.json")
+  const cached = readJsonRecordSafe(cachePath)
+  if (cached && Array.isArray(cached.models)) {
+    const parsed = cached.models.flatMap((entry): AgyModelSpec[] => {
+      if (!isRecord(entry) || typeof entry.id !== "string" || !entry.id.trim()) return []
+      const efforts = Array.isArray(entry.efforts)
+        ? entry.efforts.filter((item): item is string => typeof item === "string")
+        : []
+      return [{ id: entry.id.trim(), efforts }]
+    })
+    if (parsed.length > 0) return parsed
+  }
+  return DEFAULT_AGY_MODELS
+}
+
+let agyRefreshInFlight = false
+
+function refreshAgyModelsCache(home: string, onUpdated: () => void) {
+  if (agyRefreshInFlight) return
+  const binary = resolveEngineBinary("agy")
+  if (!binary) return
+  agyRefreshInFlight = true
+  const cachePath = path.join(home, ".gemini", "antigravity", "pigu-models-cache.json")
+
+  childProcess.execFile(
+    binary,
+    ["models"],
+    { timeout: 15_000, env: { ...process.env, PATH: buildAugmentedPath() } },
+    (err, stdout) => {
+      agyRefreshInFlight = false
+      if (err && !stdout) return
+      const parsed = parseAgyModelsStdout(stdout)
+      if (parsed.length === 0) return
+      const nextJson = JSON.stringify({ models: parsed }, null, 2)
+      const prevJson = fs.existsSync(cachePath) ? fs.readFileSync(cachePath, "utf8") : ""
+      if (nextJson === prevJson) return
+      const dir = path.dirname(cachePath)
+      if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+      fs.writeFileSync(cachePath, nextJson, "utf8")
+      onUpdated()
+    },
+  )
+}
+
 function discoverCodexConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
   const configPath = path.join(home, ".codex", "config.toml")
   if (!fs.existsSync(configPath)) return { models: [] }
@@ -1503,23 +1593,31 @@ function discoverCodexConfigModels(home: string): { defaultModel?: string; model
   }
 }
 
+function normalizeClaudeModelId(raw: string): string {
+  return raw.trim().replace(/-\d{8}$/, "")
+}
+
 function discoverClaudeConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
   const settings = readJsonRecordSafe(path.join(home, ".claude", "settings.json"))
   const env = settings && isRecord(settings.env) ? settings.env : undefined
   const defaultModel =
-    (typeof settings?.model === "string" ? settings.model.trim() : undefined) ||
-    (typeof env?.ANTHROPIC_MODEL === "string" ? env.ANTHROPIC_MODEL.trim() : undefined)
+    (typeof settings?.model === "string" ? normalizeClaudeModelId(settings.model) : undefined) ||
+    (typeof env?.ANTHROPIC_MODEL === "string" ? normalizeClaudeModelId(env.ANTHROPIC_MODEL) : undefined)
   const envModels = [
     env?.ANTHROPIC_MODEL,
     env?.ANTHROPIC_DEFAULT_OPUS_MODEL,
     env?.ANTHROPIC_DEFAULT_SONNET_MODEL,
     env?.ANTHROPIC_DEFAULT_HAIKU_MODEL,
-  ].filter((val): val is string => typeof val === "string" && val.trim().length > 0)
+  ]
+    .filter((val): val is string => typeof val === "string" && val.trim().length > 0)
+    .map(normalizeClaudeModelId)
 
   const stats = readJsonRecordSafe(path.join(home, ".claude", "stats-cache.json"))
   const usageModels =
     stats && isRecord(stats.modelUsage)
-      ? Object.keys(stats.modelUsage).filter((key) => key.trim().length > 0 && !key.startsWith("<"))
+      ? Object.keys(stats.modelUsage)
+          .filter((key) => /^claude-/i.test(key.trim()))
+          .map(normalizeClaudeModelId)
       : []
 
   return {
@@ -1559,78 +1657,60 @@ const BUILTIN_ENGINE_SUBMODELS: Readonly<Record<LocalEngine, readonly string[]>>
   claude: [
     "claude-opus-5-5",
     "claude-sonnet-5-5",
-    "claude-fable-5-1",
-    "claude-haiku-5-5",
-    "claude-opus-5",
-    "claude-sonnet-5",
+    "claude-fable-5",
     "claude-opus-4-8",
-    "claude-opus-4-7",
-    "claude-opus-4-6",
     "claude-sonnet-4-6",
     "claude-haiku-4-5",
   ],
   codex: [
-    "gpt-6.1-sol",
-    "gpt-6-astra",
-    "gpt-6-luna",
-    "gpt-6-sol",
     "gpt-5.6-sol",
-    "gpt-5.6-terra",
-    "gpt-5.6-luna",
     "gpt-5.5",
-    "gpt-5.4-mini",
-    "gpt-5.3-codex-spark",
+    "gpt-5.4",
+    "gpt-5.3-codex",
   ],
-  agy: [
-    "gemini-3.8-flash-high",
-    "gemini-3.8-flash-medium",
-    "gemini-3.8-flash-low",
-    "gemini-3.7-flash-high",
-    "gemini-3.7-flash-medium",
-    "gemini-3.7-flash-low",
-    "gemini-pro-agent",
-    "gemini-3.1-pro-low",
-    "claude-sonnet-4-6",
-    "claude-opus-4-6",
-  ],
+  agy: [],
   pi: [
     "claude-sonnet-4-6",
     "claude-opus-4-6",
-    "gpt-6.1-sol",
     "gpt-5.6-sol",
     "gemini-3.8-flash",
-    "deepseek-v4-pro-0813",
   ],
   opencode: [
     "claude-sonnet-4-6",
     "claude-opus-4-6",
-    "gpt-6.1-sol",
     "gpt-5.6-sol",
     "gemini-3.8-flash",
   ],
   cursor: [
-    "claude-sonnet-4-6",
-    "claude-opus-4-6",
     "claude-sonnet-5-5",
-    "gpt-6.1-sol",
+    "claude-opus-5-5",
     "gpt-5.6-sol",
     "gemini-3.8-flash",
-    "grok-4.7",
-    "deepseek-v4-pro-0813",
   ],
-  grok: ["grok-4.7", "grok-4", "grok-code-fast-1", "grok-3", "grok-3-mini"],
+  grok: ["grok-4.7", "grok-4", "grok-code-fast-1", "grok-3-mini"],
   "deepseek-harness": [
-    "deepseek-v4-pro-0813",
-    "deepseek-v4.1-flash",
-    "deepseek-v4-flash-0731",
+    "deepseek-flash",
     "deepseek-reasoner",
     "deepseek-chat",
   ],
-  workbuddy: ["claude-sonnet-4-6", "gpt-5.6-sol", "deepseek-v4-pro-0813", "glm-5.3", "kimi-k3"],
+  workbuddy: ["claude-sonnet-4-6", "gpt-5.6-sol", "glm-5.3", "kimi-k3"],
 }
 
-function buildEngineModels(engine: LocalEngine, baseId: Model.ID, home: string): readonly Model.Info[] {
+function buildEngineModels(
+  engine: LocalEngine,
+  _baseId: Model.ID,
+  home: string,
+  onAgyUpdated?: () => void,
+): readonly Model.Info[] {
   if (!resolveEngineBinary(engine)) return []
+
+  if (engine === "agy") {
+    if (onAgyUpdated) refreshAgyModelsCache(home, onAgyUpdated)
+    const agyModels = discoverAgyModels(home)
+    return agyModels.map((spec) =>
+      buildLocalModel(Model.ID.make(`agy/${spec.id}`), spec.id, spec.efforts),
+    )
+  }
 
   const discovered =
     engine === "codex"
@@ -1644,17 +1724,11 @@ function buildEngineModels(engine: LocalEngine, baseId: Model.ID, home: string):
             : { defaultModel: undefined, models: [] }
 
   const subModels = [...new Set([...discovered.models, ...BUILTIN_ENGINE_SUBMODELS[engine]])]
-  const defaultLabel = discovered.defaultModel
-    ? `默认 (${discovered.defaultModel.replace(/^[^/]+\//, "")})`
-    : "默认"
 
-  return [
-    buildLocalModel(baseId, defaultLabel),
-    ...subModels.map((sub) => {
-      const displaySub = engine === "opencode" ? sub.replace(/^[^/]+\//, "") : sub
-      return buildLocalModel(Model.ID.make(`${engine}/${sub}`), displaySub)
-    }),
-  ]
+  return subModels.map((sub) => {
+    const displaySub = engine === "opencode" ? sub.replace(/^[^/]+\//, "") : sub
+    return buildLocalModel(Model.ID.make(`${engine}/${sub}`), displaySub)
+  })
 }
 
 export const NativeCliProviderPlugin = define({
@@ -1686,7 +1760,9 @@ export const NativeCliProviderPlugin = define({
         models: [
           ...buildEngineModels("claude", CLAUDE_LOCAL_MODEL_ID, home),
           ...buildEngineModels("codex", CODEX_LOCAL_MODEL_ID, home),
-          ...buildEngineModels("agy", AGY_LOCAL_MODEL_ID, home),
+          ...buildEngineModels("agy", AGY_LOCAL_MODEL_ID, home, () => {
+            void runPromise(ctx.provider.reload())
+          }),
           ...buildEngineModels("pi", PI_LOCAL_MODEL_ID, home),
           ...buildEngineModels("opencode", OPENCODE_LOCAL_MODEL_ID, home),
           ...buildEngineModels("cursor", CURSOR_LOCAL_MODEL_ID, home),

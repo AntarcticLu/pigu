@@ -298,6 +298,9 @@ export const SettingsExtensions: Component<{
     const localOrder = new Map(BUILTIN_LOCAL_AGENT_PLUGINS.map((item, idx) => [item.id, idx]))
     const localModels = providers.all().get("local")?.models
 
+    const hasLocalEngine = (engineID: string) =>
+      Object.keys(localModels ?? {}).some((key) => key === engineID || key.startsWith(`${engineID}/`))
+
     for (const localItem of BUILTIN_LOCAL_AGENT_PLUGINS) {
       if (scopeStore.isPluginRemoved(localItem.id)) continue
       byID.set(localItem.id, {
@@ -307,7 +310,7 @@ export const SettingsExtensions: Component<{
         description: localItem.description,
         enabled: true,
         custom: true,
-        detected: Boolean(localModels?.[localItem.modelID]),
+        detected: hasLocalEngine(localItem.modelID),
       })
     }
 
@@ -364,7 +367,7 @@ export const SettingsExtensions: Component<{
           (!isOldDefaultDesc && custom.description) || builtinLocal?.description || custom.target,
         enabled: custom.enabled,
         custom: true,
-        detected: builtinLocal ? Boolean(localModels?.[builtinLocal.modelID]) : undefined,
+        detected: builtinLocal ? hasLocalEngine(builtinLocal.modelID) : undefined,
       })
     }
 
