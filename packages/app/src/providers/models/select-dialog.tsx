@@ -957,7 +957,7 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
           </Show>
         </span>
         <Show when={usage(item())}>{(value) => <ModelUsageTag usage={value()} />}</Show>
-        <Show when={active()}>
+        <Show when={active() && variantsOf(item()).length > 0}>
           <span data-slot="model-dialog-variant">
             <span class="truncate">{formatProtocolVariantLabel(variant(item()) ?? "default", item().id)}</span>
             <Icon name="chevron-right" size="small" />
@@ -1068,28 +1068,29 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
             onMouseEnter={() => triangle.cancel()}
           >
             <MenuScroll>
-              {/* A model without variants still lists Default, its only option. */}
-              <For each={[undefined, ...variantsOf(item())]}>
-                {(value) => (
-                  <div
-                    data-component="menu-v2-item"
-                    role="menuitemradio"
-                    aria-checked={variant(item()) === value}
-                    data-checked={variant(item()) === value ? "" : undefined}
-                    onMouseEnter={(event) => event.currentTarget.setAttribute("data-highlighted", "")}
-                    onMouseLeave={(event) => event.currentTarget.removeAttribute("data-highlighted")}
-                    onClick={() => choose(item(), value ?? null)}
-                  >
-                    <span data-slot="menu-v2-item-content">
-                      {formatProtocolVariantLabel(value ?? "default", item().id)}
-                    </span>
-                    <span data-slot="menu-v2-item-indicator" data-checked={variant(item()) === value ? "" : undefined}>
-                      <Icon name="check" size="small" />
-                    </span>
-                  </div>
-                )}
-              </For>
-              <div data-slot="menu-v2-separator" role="separator" />
+              <Show when={variantsOf(item()).length > 0}>
+                <For each={[undefined, ...variantsOf(item())]}>
+                  {(value) => (
+                    <div
+                      data-component="menu-v2-item"
+                      role="menuitemradio"
+                      aria-checked={variant(item()) === value}
+                      data-checked={variant(item()) === value ? "" : undefined}
+                      onMouseEnter={(event) => event.currentTarget.setAttribute("data-highlighted", "")}
+                      onMouseLeave={(event) => event.currentTarget.removeAttribute("data-highlighted")}
+                      onClick={() => choose(item(), value ?? null)}
+                    >
+                      <span data-slot="menu-v2-item-content">
+                        {formatProtocolVariantLabel(value ?? "default", item().id)}
+                      </span>
+                      <span data-slot="menu-v2-item-indicator" data-checked={variant(item()) === value ? "" : undefined}>
+                        <Icon name="check" size="small" />
+                      </span>
+                    </div>
+                  )}
+                </For>
+                <div data-slot="menu-v2-separator" role="separator" />
+              </Show>
               <div
                 data-component="menu-v2-item"
                 role="menuitem"

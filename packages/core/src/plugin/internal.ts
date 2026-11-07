@@ -249,7 +249,6 @@ const pre = [
   GoalPlugin.Plugin,
   SkillPlugin.Plugin,
   VcsHgPlugin.Plugin,
-  PiguProviderPlugin,
   NativeCliProviderPlugin,
   PatchTool.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.
@@ -292,6 +291,7 @@ const post = [
   ConfigCompatibilityPlugin.Plugin,
   ConfigSkillPlugin.Plugin,
   ConfigProviderPlugin.Plugin,
+  PiguProviderPlugin,
   // Run the dynamic npm SDK loader after SDK, instance, and external plugins register their `sdk` hooks.
   DynamicProviderPlugin,
   ConfigWebSearchPlugin.Plugin,

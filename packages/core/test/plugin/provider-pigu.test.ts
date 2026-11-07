@@ -157,14 +157,18 @@ describe("PiguProviderPlugin", () => {
         settings: { baseURL: "https://api.example.com/v1", provider: "pigu", piguProtocol: "anthropic" },
       })
 
-      const overridden = yield* ModelResolver.withVariant(gemini!, Model.VariantID.make("openai-chat"))
+      expect(gpt4o?.variants).toEqual([])
+      expect(gemini?.variants.map((v) => String(v.id))).toEqual(["low", "medium", "high"])
+      expect(claude?.variants.map((v) => String(v.id))).toEqual(["high", "max"])
+
+      const overridden = yield* ModelResolver.withVariant(gemini!, Model.VariantID.make("high"))
       expect(overridden).toMatchObject({
-        package: "@opencode/ai/providers/openai-compatible",
+        package: "@opencode/ai/providers/google",
         settings: {
-          baseURL: "https://api.example.com/v1",
+          baseURL: "https://api.example.com/v1beta",
           provider: "pigu",
-          piguPackage: "@opencode/ai/providers/openai-compatible",
-          piguProtocol: "openai-chat",
+          piguProtocol: "gemini",
+          thinkingConfig: { includeThoughts: true, thinkingLevel: "high" },
         },
       })
 
@@ -175,6 +179,7 @@ describe("PiguProviderPlugin", () => {
         settings: { baseURL: "https://api.example.com/v1", provider: "pigu", piguProtocol: "openai-chat" },
         limit: { context: 128_000, output: 16_384 },
       })
+      expect(r1?.variants.map((v) => String(v.id))).toEqual(["low", "high", "max"])
     }),
   )
 

@@ -1,5 +1,5 @@
-import { For, type Component } from "solid-js"
-import { useGlobal } from "@/runtime/server/runtime"
+import { Option, Schema } from "effect"
+import { createSignal, For, type Component } from "solid-js"
 import type { ModelSelection } from "./selection"
 
 export const PIGU_PROTOCOLS = ["openai-chat", "gemini", "anthropic", "openai-responses"] as const
@@ -35,11 +35,9 @@ export function protocolShortLabel(protocol: PiguProtocol): string {
   return PROTOCOL_OPTIONS.find((item) => item.id === protocol)?.short ?? protocol
 }
 
-export function formatProtocolVariantLabel(variant: string, modelID?: string): string {
+export function formatProtocolVariantLabel(variant: string, _modelID?: string): string {
   if (variant === "default") {
-    const detected = detectModelProtocol(modelID ?? "")
-
-    return `自动 (${protocolShortLabel(detected)})`
+    return "默认"
   }
 
   if (isPiguProtocol(variant)) {
@@ -49,37 +47,58 @@ export function formatProtocolVariantLabel(variant: string, modelID?: string): s
   return variant
 }
 
+const PROTOCOL_STORAGE_KEY = "pigu.model.protocol.v1"
+
+const decodeSavedProtocols = Schema.decodeUnknownOption(
+  Schema.fromJsonString(Schema.Record(Schema.String, Schema.String)),
+)
+
+function readSavedProtocols(): Record<string, PiguProtocol> {
+  if (!("localStorage" in globalThis)) return {}
+  const raw = globalThis.localStorage.getItem(PROTOCOL_STORAGE_KEY)
+
+  if (!raw) return {}
+  const parsed = Option.getOrUndefined(decodeSavedProtocols(raw))
+
+  if (!parsed) return {}
+
+  return Object.fromEntries(
+    Object.entries(parsed).filter((entry): entry is [string, PiguProtocol] => isPiguProtocol(entry[1])),
+  )
+}
+
+const [savedProtocols, setSavedProtocols] = createSignal<Record<string, PiguProtocol>>(readSavedProtocols())
+
 export const ModelProtocolSelect: Component<{
   providerID: string
   modelID: string
   selection?: ModelSelection
 }> = (props) => {
-  const models = useGlobal().models
   const variantKey = () => `${props.providerID}/${props.modelID}`
   const detected = () => detectModelProtocol(props.modelID)
 
   const current = () => {
-    const saved = models.store.variant?.[variantKey()]
+    const saved = savedProtocols()[variantKey()]
 
     return isPiguProtocol(saved) ? saved : "default"
   }
 
   const update = (next: string) => {
     const key = variantKey()
-    const value = isPiguProtocol(next) ? next : "default"
+    const currentMap = { ...savedProtocols() }
 
-    if (!models.store.variant) {
-      models.set("variant", { [key]: value })
+    if (isPiguProtocol(next)) {
+      currentMap[key] = next
     }
 
-    if (models.store.variant) {
-      models.set("variant", key, value)
+    if (!isPiguProtocol(next)) {
+      delete currentMap[key]
     }
 
-    const active = props.selection?.current()
+    setSavedProtocols(currentMap)
 
-    if (active && active.provider.id === props.providerID && active.id === props.modelID) {
-      props.selection?.variant.set(value === "default" ? undefined : value)
+    if ("localStorage" in globalThis) {
+      globalThis.localStorage.setItem(PROTOCOL_STORAGE_KEY, JSON.stringify(currentMap))
     }
   }
 

@@ -19,9 +19,11 @@ import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
 import { AbsolutePath } from "../../schema.js"
 import { SharedCache } from "../../shared-cache.js"
+import { Variant } from "../../variant.js"
 import type { PluginInternal } from "../internal.js"
 import { configuredSettings } from "./configured.js"
 import { activeCredential } from "./credential-settings.js"
+import { LOCAL_PROVIDER_ID } from "./native-cli.js"
 import { ProviderRefresh } from "./refresh.js"
 
 const providerID = Provider.ID.make("pigu")
@@ -102,6 +104,99 @@ export function protocolVariants(baseURL: string) {
   }))
 }
 
+const CANONICAL_PROVIDER_PRIORITY = [
+  "openai",
+  "anthropic",
+  "google",
+  "deepseek",
+  "zai",
+  "xai",
+  "moonshotai",
+  "alibaba",
+] as const
+
+function isPiguProtocolID(value: string): boolean {
+  return value === "openai-chat" || value === "gemini" || value === "anthropic" || value === "openai-responses"
+}
+
+export function buildCatalogEffortMap(
+  records: readonly Provider.Definition[],
+): ReadonlyMap<string, readonly string[]> {
+  const map = new Map<string, readonly string[]>()
+  const rank = (id: string) => {
+    const idx = CANONICAL_PROVIDER_PRIORITY.indexOf(id as (typeof CANONICAL_PROVIDER_PRIORITY)[number])
+    return idx === -1 ? CANONICAL_PROVIDER_PRIORITY.length : idx
+  }
+  const ordered = records
+    .filter((record) => record.provider.activation === "auto")
+    .toSorted((a, b) => rank(a.provider.id) - rank(b.provider.id))
+  ordered.forEach((record) => {
+    Array.from(record.models.values()).forEach((model) => {
+      const key = model.id.toLowerCase()
+      if (map.has(key)) return
+      const efforts = model.variants
+        .map((variant) => String(variant.id))
+        .filter((id) => id !== "none" && id !== "thinking" && !isPiguProtocolID(id))
+      map.set(key, efforts)
+    })
+  })
+  return map
+}
+
+export function inferModelReasoningEfforts(
+  rawModelID: string,
+  catalogEfforts?: ReadonlyMap<string, readonly string[]>,
+): readonly string[] {
+  const normalized = rawModelID.trim().toLowerCase().replace(/^models\//, "")
+  if (!normalized) return []
+  const shortID = normalized.includes("/") ? normalized.slice(normalized.lastIndexOf("/") + 1) : normalized
+
+  // Fixed-tier model endpoints (e.g. gemini-3.5-flash-high, gemini-3.8-flash-low, gemini-3.8-flash-tiered)
+  // already bake the reasoning degree into the model ID itself.
+  if (/-(none|minimal|low|medium|high|xhigh|max|tiered)$/i.test(shortID)) return []
+
+  const fromCatalog = catalogEfforts?.get(shortID) ?? catalogEfforts?.get(normalized)
+  if (fromCatalog !== undefined) return fromCatalog
+
+  if (/gpt-[56789]|codex/i.test(shortID)) return ["low", "medium", "high", "xhigh"]
+  if (/^(o1|o3|o4)\b/i.test(shortID)) return ["low", "medium", "high"]
+
+  if (/claude/i.test(shortID)) {
+    if (/opus-4[.-]6|sonnet-4[.-]6/i.test(shortID)) return ["low", "medium", "high", "max"]
+    if (/(opus|sonnet|fable|mythos)-(4[.-][789]|[56789])/i.test(shortID)) {
+      return ["low", "medium", "high", "xhigh", "max"]
+    }
+    if (/3[.-]7|(opus|sonnet|haiku)-4([.-][0-5])?\b/i.test(shortID)) return ["high", "max"]
+    return []
+  }
+
+  if (/gemini-(2\.5|[3456789])/i.test(shortID)) return ["low", "medium", "high"]
+  if (/deepseek-(r1|reasoner|v4|v3\.2)/i.test(shortID)) return ["low", "high", "max"]
+  if (/glm-([56789]|4\.[56789])/i.test(shortID) && !/flash/i.test(shortID)) return ["low", "high", "max"]
+  if (/kimi-k[3456789]/i.test(shortID)) return ["low", "high", "max"]
+  if (/grok-[456789]/i.test(shortID)) return ["low", "medium", "high", "xhigh"]
+  if (/grok-3-mini/i.test(shortID)) return ["low", "high"]
+  if (/qwen3|qwq/i.test(shortID)) return ["low", "medium", "xhigh"]
+
+  return []
+}
+
+export function resolveModelReasoningVariants(
+  model: Model.Info,
+  packageName: string | undefined,
+  catalogEfforts?: ReadonlyMap<string, readonly string[]>,
+): Model.MutableInfo["variants"] {
+  const effectivePackage = packageName ?? model.package ?? "@opencode/ai/providers/openai-compatible"
+  const efforts = inferModelReasoningEfforts(model.modelID ?? model.id, catalogEfforts)
+  if (efforts.length === 0) return []
+  return [
+    ...Variant.resolve(
+      { ...model, package: effectivePackage },
+      [{ type: "effort", values: efforts }],
+    ),
+  ]
+}
+
 export const PiguProviderPlugin = define({
   id: "pigu.provider.custom",
   effect: Effect.fn(function* (ctx) {
@@ -175,6 +270,7 @@ export const PiguProviderPlugin = define({
     })
 
     yield* ctx.provider.transform((providers) => {
+      const catalogEfforts = buildCatalogEffortMap(providers.list())
       const baseURL =
         discovered.current.baseURL ||
         normalizeBaseURL(process.env.PIGU_BASE_URL ?? process.env.OPENAI_BASE_URL ?? configured?.baseURL)
@@ -209,7 +305,6 @@ export const PiguProviderPlugin = define({
             ...(targetURL ? { baseURL: targetURL } : {}),
             piguProtocol: protocol,
           }
-          draft.variants = protocolVariants(baseURL)
           draft.capabilities = {
             tools: true,
             input: ["text", "image"],
@@ -219,30 +314,33 @@ export const PiguProviderPlugin = define({
             context: item.context ?? 128_000,
             output: item.output ?? 16_384,
           }
+          draft.variants = resolveModelReasoningVariants(draft, draft.package, catalogEfforts)
         })
       })
-      providers
-        .list()
-        .filter((record) => record.provider.id !== providerID)
-        .forEach((record) => {
-          const providerURL =
-            Predicate.isString(record.provider.settings?.baseURL)
-              ? normalizeBaseURL(record.provider.settings.baseURL)
-              : ""
-          Array.from(record.models.values()).forEach((model) => {
-            const protocol = detectModelProtocol(model.id)
-            const targetURL = protocolBaseURL(providerURL, protocol)
-            providers.models.update(record.provider.id, model.id, (draft) => {
-              draft.package = protocolPackage(protocol)
-              draft.settings = {
-                ...draft.settings,
-                ...(targetURL ? { baseURL: targetURL } : {}),
-                piguProtocol: protocol,
-              }
-              draft.variants = protocolVariants(providerURL)
-            })
-          })
+    })
+
+    yield* ctx.model.transform((models) => {
+      const providerRecords = models.provider.list()
+      const catalogEfforts = buildCatalogEffortMap(providerRecords)
+      const catalogProviderIDs = new Set(
+        providerRecords.filter((record) => record.provider.activation === "auto").map((record) => record.provider.id),
+      )
+      models.list().forEach((model) => {
+        if (model.providerID === LOCAL_PROVIDER_ID || catalogProviderIDs.has(model.providerID)) return
+        const currentIDs = model.variants.map((item) => String(item.id))
+        const isGenericDefault =
+          currentIDs.length === 0 ||
+          (currentIDs.length === 3 &&
+            currentIDs[0] === "low" &&
+            currentIDs[1] === "medium" &&
+            currentIDs[2] === "high") ||
+          currentIDs.every(isPiguProtocolID)
+        if (!isGenericDefault) return
+        const providerPackage = models.provider.get(model.providerID)?.provider.package
+        models.update(model.providerID, model.id, (draft) => {
+          draft.variants = resolveModelReasoningVariants(draft, draft.package ?? providerPackage, catalogEfforts)
         })
+      })
     })
   }),
 } satisfies PluginInternal.InternalPlugin)

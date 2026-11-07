@@ -48,6 +48,7 @@ const HEADER_REQUEST_KIND = "x-opencode-request-kind"
 const HEADER_SESSION_ID = "x-opencode-session-id"
 const HEADER_SESSION_CWD = "x-pigu-session-cwd"
 const HEADER_SESSION_METADATA = "x-pigu-session-metadata"
+const HEADER_MODEL_VARIANT = "x-pigu-model-variant"
 
 const EngineRecordSchema = Schema.Struct({
   sessionId: Schema.optional(Schema.String),
@@ -587,6 +588,7 @@ async function runStreamJsonProcess(input: {
   prompt: string
   sessionId?: string
   resume: boolean
+  variant?: string
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
@@ -603,6 +605,17 @@ async function runStreamJsonProcess(input: {
         : input.resume
           ? ["--resume", targetSessionId]
           : ["--session-id", targetSessionId]
+
+  const effortFlag =
+    input.mode === "claude" &&
+    input.variant &&
+    (input.variant === "low" ||
+      input.variant === "medium" ||
+      input.variant === "high" ||
+      input.variant === "xhigh" ||
+      input.variant === "max")
+      ? ["--effort", input.variant]
+      : []
 
   const args =
     input.mode === "agy"
@@ -631,6 +644,7 @@ async function runStreamJsonProcess(input: {
             "--verbose",
             "--include-partial-messages",
             "--dangerously-skip-permissions",
+            ...effortFlag,
             ...sessionFlag,
             input.prompt,
           ]
@@ -846,10 +860,19 @@ async function runCodexProcess(input: {
   prompt: string
   sessionId?: string
   resume: boolean
+  variant?: string
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
   const lastMsgFile = path.join(os.tmpdir(), `pigu-codex-last-${crypto.randomUUID()}.txt`)
+  const effortFlag =
+    input.variant &&
+    (input.variant === "low" ||
+      input.variant === "medium" ||
+      input.variant === "high" ||
+      input.variant === "xhigh")
+      ? ["-c", `model_reasoning_effort="${input.variant}"`]
+      : []
   const args =
     input.resume && input.sessionId
       ? [
@@ -860,6 +883,7 @@ async function runCodexProcess(input: {
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           "--skip-git-repo-check",
+          ...effortFlag,
           "-o",
           lastMsgFile,
         ]
@@ -869,6 +893,7 @@ async function runCodexProcess(input: {
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           "--skip-git-repo-check",
+          ...effortFlag,
           "-C",
           input.cwd,
           "-o",
@@ -1134,6 +1159,7 @@ class LocalLanguageModel implements LanguageModelV3 {
     const kind = headers[HEADER_REQUEST_KIND] ?? "primary"
     const sessionID = headers[HEADER_SESSION_ID] ?? ""
     const cwd = headers[HEADER_SESSION_CWD] || this.defaultDirectory
+    const variant = headers[HEADER_MODEL_VARIANT]
     const rawMetadata = headers[HEADER_SESSION_METADATA]
     const parsedMetadata = rawMetadata ? Option.getOrUndefined(decodeSessionMetadata(rawMetadata)) : undefined
 
@@ -1245,6 +1271,7 @@ class LocalLanguageModel implements LanguageModelV3 {
                 prompt: finalPrompt,
                 sessionId: currentRecord.sessionId,
                 resume: canResume,
+                variant,
                 signal,
                 emitter,
               })
@@ -1257,6 +1284,7 @@ class LocalLanguageModel implements LanguageModelV3 {
                 prompt: finalPrompt,
                 sessionId: currentRecord.sessionId,
                 resume: canResume,
+                variant,
                 signal,
                 emitter,
               })
@@ -1382,13 +1410,25 @@ class LocalLanguageModel implements LanguageModelV3 {
   }
 }
 
+function localModelEfforts(engine: LocalEngine): readonly string[] {
+  if (engine === "claude") return ["low", "medium", "high", "xhigh", "max"]
+  if (engine === "codex") return ["low", "medium", "high", "xhigh"]
+  return []
+}
+
 function buildLocalModel(id: Model.ID, name: string): Model.Info {
   const defaults = Model.Info.default(LOCAL_PROVIDER_ID, id)
+  const engine = normalizeEngine(id)
+  const variants = localModelEfforts(engine).map((effort) => ({
+    id: Model.VariantID.make(effort),
+    settings: { reasoningEffort: effort },
+  }))
 
   return {
     ...defaults,
     name,
     package: Provider.aisdk(LOCAL_PACKAGE),
+    variants,
     capabilities: {
       tools: true,
       input: ["text", "image", "pdf"],
@@ -1459,6 +1499,9 @@ export const NativeCliProviderPlugin = define({
         Effect.gen(function* () {
           event.headers[HEADER_REQUEST_KIND] = event.kind
           event.headers[HEADER_SESSION_ID] = event.sessionID
+          if (event.model.variant) {
+            event.headers[HEADER_MODEL_VARIANT] = event.model.variant
+          }
           const session = yield* ctx.session.get({ sessionID: event.sessionID }).pipe(Effect.option)
 
           if (Option.isSome(session)) {
