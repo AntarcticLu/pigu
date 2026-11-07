@@ -37,7 +37,6 @@ import type { Sizing } from "@/session/helpers"
 import { PanelTrigger } from "./panel-trigger"
 import { createSessionPanelMenuEntries, type SessionPanelMenuEntry } from "./panel-menu"
 import { RegionContent, type Region, type RegionPane } from "./panels"
-import { PluginSlot } from "./render"
 import { createTabStripScroll } from "./tab-strip-scroll"
 import { closedTabsModifier, type ClosedSideTab } from "./closed-tabs"
 import { ClosedTabsSection, NewTabButton } from "./closed-tabs-view"
@@ -413,22 +412,9 @@ export function PaneTabs(props: {
           onPointerDown={(event) => event.stopPropagation()}
           onClick={(event) => event.stopPropagation()}
         >
-          <Show when={props.actions}>
-            <PluginSlot
-              at="session.panel.end"
-              input={{
-                get session() {
-                  return props.view
-                },
-                get screen() {
-                  return props.screen
-                },
-              }}
-            />
-          </Show>
           {props.end}
           <Show when={props.actions && props.present()}>
-            <div class="size-7 shrink-0" aria-hidden />
+            <div class="h-7 w-16 shrink-0" aria-hidden />
           </Show>
         </div>
       </div>
