@@ -412,6 +412,20 @@ export const SettingsExtensions: Component<{
   const rescanLocalPlugins = async () => {
     setPluginForm("scanning", true)
     const ref = location()
+    await serverSdk.api.credential
+      .create({
+        integrationID: "pigu",
+        label: "local",
+        value: {
+          type: "key",
+          key: "",
+          metadata: {
+            piguAction: "refresh",
+            providerID: "local",
+          },
+        },
+      })
+      .catch(() => undefined)
     await Promise.all([
       data.location.provider.sync(ref).catch(() => undefined),
       data.location.model.sync(ref).catch(() => undefined),

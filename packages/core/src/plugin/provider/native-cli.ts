@@ -14,7 +14,8 @@ import type {
 } from "@ai-sdk/provider"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
-import { Effect, Option, Schema } from "effect"
+import { Effect, Option, Schema, Stream } from "effect"
+import { Credential } from "../../credential.js"
 import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
 import type { PluginInternal } from "../internal.js"
@@ -1731,6 +1732,37 @@ function buildEngineModels(
   })
 }
 
+export const refreshLocalEngineModels = Effect.fn("NativeCliProvider.refreshLocalEngineModels")(function* (
+  target?: string,
+) {
+  const home = os.homedir()
+  const normalized = (target ?? "").replace(/^local:/, "")
+  if (!normalized || normalized === "local" || normalized === "agy") {
+    yield* Effect.async<void>((resume) => {
+      const binary = resolveEngineBinary("agy")
+      if (!binary) {
+        resume(Effect.void)
+        return
+      }
+      const cachePath = path.join(home, ".gemini", "antigravity", "pigu-models-cache.json")
+      childProcess.execFile(
+        binary,
+        ["models"],
+        { timeout: 15_000, env: { ...process.env, PATH: buildAugmentedPath() } },
+        (_err, stdout) => {
+          const parsed = parseAgyModelsStdout(stdout ?? "")
+          if (parsed.length > 0) {
+            const dir = path.dirname(cachePath)
+            if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+            fs.writeFileSync(cachePath, JSON.stringify({ models: parsed }, null, 2), "utf8")
+          }
+          resume(Effect.void)
+        },
+      )
+    })
+  }
+})
+
 export const NativeCliProviderPlugin = define({
   id: "pigu.provider.local",
   effect: Effect.fn("NativeCliProvider.Plugin")(function* (ctx: Context) {
@@ -1748,6 +1780,11 @@ export const NativeCliProviderPlugin = define({
       runPromise(ctx.storage.set(`session:${sessionID}`, state))
 
     const home = os.homedir()
+
+    yield* ctx.event.subscribe(Credential.Event.Updated).pipe(
+      Stream.runForEach(() => ctx.provider.reload()),
+      Effect.forkScoped({ startImmediately: true }),
+    )
 
     yield* ctx.provider.transform((editor) => {
       editor.add({

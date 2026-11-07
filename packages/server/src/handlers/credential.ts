@@ -36,7 +36,12 @@ export const CredentialHandler = HttpApiBuilder.group(Api, "server.credential", 
           ) {
             const meta = ctx.payload.value.metadata
             yield* PiguProvider.manageCustomProvider({
-              action: meta.piguAction === "delete" ? "delete" : "upsert",
+              action:
+                meta.piguAction === "delete"
+                  ? "delete"
+                  : meta.piguAction === "refresh"
+                    ? "refresh"
+                    : "upsert",
               providerID: Predicate.isString(meta.providerID) ? meta.providerID : undefined,
               name: Predicate.isString(meta.name) ? meta.name : ctx.payload.label,
               baseURL: Predicate.isString(meta.baseURL) ? meta.baseURL : undefined,

@@ -23,7 +23,7 @@ import { Variant } from "../../variant.js"
 import type { PluginInternal } from "../internal.js"
 import { configuredSettings } from "./configured.js"
 import { activeCredential } from "./credential-settings.js"
-import { LOCAL_PROVIDER_ID } from "./native-cli.js"
+import { LOCAL_PROVIDER_ID, refreshLocalEngineModels } from "./native-cli.js"
 import { ProviderRefresh } from "./refresh.js"
 
 const providerID = Provider.ID.make("pigu")
@@ -415,7 +415,7 @@ function deriveProviderID(name: string, baseURL: string): string {
 }
 
 export const manageCustomProvider = Effect.fn("PiguProvider.manageCustomProvider")(function* (input: {
-  readonly action: "upsert" | "delete"
+  readonly action: "upsert" | "delete" | "refresh"
   readonly providerID?: string
   readonly name?: string
   readonly baseURL?: string
@@ -426,6 +426,16 @@ export const manageCustomProvider = Effect.fn("PiguProvider.manageCustomProvider
   const http = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
   const credential = yield* Credential.Service
   const bus = yield* Bus.Service
+
+  if (
+    input.action === "refresh" &&
+    (!input.providerID || input.providerID === "local" || input.providerID.startsWith("local:"))
+  ) {
+    yield* refreshLocalEngineModels(input.providerID)
+    yield* bus.publish(Credential.Event.Updated, {})
+    yield* Effect.sleep("120 millis")
+    return
+  }
 
   const directory = AbsolutePath.make(globalService.config)
   const candidates = ConfigDiscovery.names.map((name) => path.join(directory, name))
@@ -465,11 +475,6 @@ export const manageCustomProvider = Effect.fn("PiguProvider.manageCustomProvider
     return
   }
 
-  const baseURL = normalizeBaseURL(input.baseURL)
-  if (!baseURL) return
-  const name = input.name?.trim() || deriveProviderName(baseURL)
-  const targetID = input.providerID?.trim() || deriveProviderID(name, baseURL)
-
   const parsed = parse(text)
   const existingProviders = isRecord(parsed)
     ? isRecord(parsed.provider)
@@ -478,7 +483,29 @@ export const manageCustomProvider = Effect.fn("PiguProvider.manageCustomProvider
         ? parsed.providers
         : undefined
     : undefined
-  const existingEntry = existingProviders && isRecord(existingProviders[targetID]) ? existingProviders[targetID] : undefined
+
+  const initialTargetID = input.providerID?.trim()
+  const initialEntry =
+    initialTargetID && existingProviders && isRecord(existingProviders[initialTargetID])
+      ? existingProviders[initialTargetID]
+      : undefined
+  const initialOptions =
+    initialEntry && isRecord(initialEntry.options)
+      ? initialEntry.options
+      : initialEntry && isRecord(initialEntry.settings)
+        ? initialEntry.settings
+        : undefined
+  const savedBaseURL =
+    initialOptions && Predicate.isString(initialOptions.baseURL) ? initialOptions.baseURL : undefined
+  const savedName = initialEntry && Predicate.isString(initialEntry.name) ? initialEntry.name : undefined
+
+  const baseURL = normalizeBaseURL(input.baseURL || savedBaseURL)
+  if (!baseURL) return
+  const name = input.name?.trim() || savedName || deriveProviderName(baseURL)
+  const targetID = initialTargetID || deriveProviderID(name, baseURL)
+
+  const existingEntry =
+    existingProviders && isRecord(existingProviders[targetID]) ? existingProviders[targetID] : undefined
   const existingOptions =
     existingEntry && isRecord(existingEntry.options)
       ? existingEntry.options

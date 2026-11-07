@@ -13,7 +13,6 @@ export const ProviderHandler = HttpApiBuilder.group(Api, "server.provider", (han
         Effect.fn(function* () {
           yield* awaitPlugins
           const providers = yield* Provider.Service
-          yield* providers.reload()
           return yield* response(providers.available())
         }),
       )

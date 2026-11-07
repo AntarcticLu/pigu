@@ -301,6 +301,7 @@ export const SettingsProviders: Component<{
   const [state, setState] = createStore<{
     consoleExpanded: boolean
     collapsed: Record<string, boolean>
+    refreshingID?: string
     credentialID?: string
     renaming?: string
     held?: ProviderItem[]
@@ -308,6 +309,34 @@ export const SettingsProviders: Component<{
     consoleExpanded: false,
     collapsed: {},
   })
+
+  const refreshSingleProvider = async (item: ProviderItem) => {
+    const cfg = configuredMap()[item.id]
+    setState("refreshingID", item.id)
+    await serverSdk.api.credential
+      .create({
+        integrationID: "pigu",
+        label: item.name,
+        value: {
+          type: "key",
+          key: cfg?.apiKey ?? "",
+          metadata: {
+            piguAction: "refresh",
+            providerID: item.id,
+            ...(cfg?.name ? { name: cfg.name } : {}),
+            ...(cfg?.baseURL ? { baseURL: cfg.baseURL } : {}),
+          },
+        },
+      })
+      .catch(() => undefined)
+    await refreshProviderData()
+    setState("refreshingID", undefined)
+    showToast({
+      variant: "success",
+      icon: "circle-check",
+      title: `已刷新 ${item.name} 的模型列表`,
+    })
+  }
 
   const [disconnects, setDisconnects] = createSignal(createProviderDisconnectState())
 
@@ -817,8 +846,17 @@ export const SettingsProviders: Component<{
                                 </Show>
                               </div>
                             </button>
-                            <Show when={item.id !== "local" && !item.id.startsWith("local:")}>
-                              <div class="flex items-center gap-1.5">
+                            <div class="flex items-center gap-1.5">
+                              <Button
+                                size="small"
+                                variant="ghost-muted"
+                                disabled={state.refreshingID === item.id}
+                                data-action={`provider-refresh-${item.id}`}
+                                onClick={() => void refreshSingleProvider(item)}
+                              >
+                                {state.refreshingID === item.id ? "刷新中..." : "刷新"}
+                              </Button>
+                              <Show when={item.id !== "local" && !item.id.startsWith("local:")}>
                                 <Button
                                   size="small"
                                   variant="ghost-muted"
@@ -843,8 +881,8 @@ export const SettingsProviders: Component<{
                                 >
                                   删除
                                 </Button>
-                              </div>
-                            </Show>
+                              </Show>
+                            </div>
                           </div>
                           <Show when={isExpanded()}>
                             {props.renderModels?.(item.id)}
