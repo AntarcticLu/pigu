@@ -144,6 +144,22 @@ const setup: Plugin.Setup<typeof definition> = (ctx) => {
     MenuItem,
     (): MenuItem => ({
       menu: "server.row",
+      id: "project",
+      title: ctx.t("project", { host: "SSH" }),
+      order: 0,
+      when: (key) => byKey(key)?.stage === "ready",
+      run: (key) => {
+        const item = byKey(key)
+
+        if (!item) return
+        layout.project(key, ctx.t("project", { host: sshName(item.config) }))
+      },
+    }),
+  )
+  ctx.add(
+    MenuItem,
+    (): MenuItem => ({
+      menu: "server.row",
       id: "connect",
       title: ctx.t("connect"),
       order: 1,

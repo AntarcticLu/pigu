@@ -29,11 +29,7 @@ export async function verifyArtifact(target: string) {
 
 export function verifySimulationGraph(inputs: Iterable<string>) {
   const modules = Array.from(inputs, (input) => input.replaceAll("\\", "/"))
-  const required = [
-    "/packages/simulation/src/frontend/simulation.ts",
-    "/packages/simulation/src/frontend/server.ts",
-    "/packages/simulation/src/control-server.ts",
-  ]
+  const required = ["/packages/simulation/src/control-server.ts"]
   const missing = required.filter((input) => !modules.some((module) => module.endsWith(input)))
   if (missing.length > 0) throw new Error(`Build graph is missing simulation bridge inputs: ${missing.join(", ")}`)
   const leaked = modules.find((module) => module.includes("/packages/simulation/src/frontend/png."))

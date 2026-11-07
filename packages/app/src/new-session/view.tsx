@@ -27,6 +27,8 @@ import {
 } from "@/new-session/project/selector"
 import type { useNewSessionLocationDialog } from "@/new-session/location/dialog"
 import { useLanguage } from "@/runtime/i18n/language"
+import { useServer } from "@/runtime/server/current"
+import { serverName, useServers } from "@/runtime/server/registry"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { useProviders } from "@/providers/catalog/providers"
 import { NEW_SESSION_CONTENT_WIDTH } from "@/new-session/layout"
@@ -233,6 +235,8 @@ function NewSessionLocation(props: {
   onWorktree?: () => void
 }) {
   const language = useLanguage()
+  const server = useServer()
+  const servers = useServers()
   const command = useCommand()
   const [layout, setLayout] = createStore({ width: 0, font: "" })
 
@@ -345,7 +349,10 @@ function NewSessionLocation(props: {
                       class="shrink-0 text-v2-icon-icon-muted"
                     />
                     <span class="min-w-0 truncate">
-                      {worktree() ?? language.t("session.new.workspace.triggerLocal")}
+                      {worktree() ??
+                        (servers.local(server.conn)
+                          ? language.t("session.new.workspace.triggerLocal")
+                          : serverName(server.conn) || language.t("session.new.workspace.triggerLocal"))}
                     </span>
                     <Show when={props.onboarding}>
                       <span

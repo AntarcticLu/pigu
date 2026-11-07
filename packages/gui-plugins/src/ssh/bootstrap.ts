@@ -1,5 +1,8 @@
+import { existsSync, readFileSync } from "node:fs"
+import { homedir } from "node:os"
+import path from "node:path"
 import { Effect, Option, Schema } from "effect"
-import { parseTarget, runSsh, sshArgs, SshFailure } from "./command"
+import { parseTarget, quote, runSsh, sshArgs, SshFailure } from "./command"
 import { RemoteCli } from "./remote-cli"
 
 // Use commands supported by released V2 CLIs. The registration is the service's
@@ -85,6 +88,23 @@ function connectionAddress(address: string, password: string) {
   }
 }
 
+const autoInstallBundleScript = `set -eu
+mkdir -p "$HOME/.pigu/bun" "$HOME/.pigu/app" "$HOME/.pigu/bin" "$HOME/.local/bin"
+cat > "$HOME/.pigu/bundle.tar.gz"
+if [ ! -x "$HOME/.pigu/bun/bin/bun" ]; then
+  curl -fsSL https://registry.npmmirror.com/@oven/bun-linux-x64/-/bun-linux-x64-1.4.4.tgz -o "$HOME/.pigu/bun.tgz" || curl -fsSL https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-1.4.4.tgz -o "$HOME/.pigu/bun.tgz"
+  tar -xzf "$HOME/.pigu/bun.tgz" -C "$HOME/.pigu/bun" --strip-components=1
+  chmod +x "$HOME/.pigu/bun/bin/bun"
+  rm -f "$HOME/.pigu/bun.tgz"
+fi
+tar -xzf "$HOME/.pigu/bundle.tar.gz" -C "$HOME/.pigu/app"
+rm -f "$HOME/.pigu/bundle.tar.gz"
+chmod +x "$HOME/.pigu/app/opencode-pty" 2>/dev/null || true
+printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
+chmod 755 "$HOME/.pigu/bin/pigu"
+cp "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu"
+`
+
 export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
   target: ReturnType<typeof parseTarget>
   version: string
@@ -99,7 +119,24 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
       stdin: script,
     })
 
-  const output = yield* run(input.replace ? startScript(input.version, true) : discoverScript)
+  const firstOutput = yield* run(input.replace ? startScript(input.version, true) : discoverScript)
+
+  const resolveOutput = Effect.fnUntraced(function* () {
+    if (!firstOutput.includes("OPENCODE_SSH_CLI_MISSING=1")) return firstOutput
+    const cachedBundle = path.join(homedir(), ".pigu", "cache", "pigu-bundle-linux-x64.tar.gz")
+
+    if (!existsSync(cachedBundle)) return yield* Effect.fail(new SshFailure("install"))
+    const archive = new Uint8Array(readFileSync(cachedBundle))
+    yield* runSsh({
+      args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallBundleScript)}`],
+      env: input.env,
+      stdin: archive,
+    }).pipe(Effect.mapError(() => new SshFailure("install")))
+
+    return yield* run(startScript(input.version, false))
+  })
+
+  const output = yield* resolveOutput()
 
   if (output.includes("OPENCODE_SSH_CLI_MISSING=1")) {
     return yield* Effect.fail(new SshFailure("install"))

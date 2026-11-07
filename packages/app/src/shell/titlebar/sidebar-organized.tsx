@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { createEffect, createMemo, Show, onCleanup, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, For, Show, onCleanup, type Accessor, type JSX } from "solid-js"
 import { Key } from "@solid-primitives/keyed"
 import { createStore } from "solid-js/store"
 import { useQuery } from "@tanstack/solid-query"
@@ -22,7 +22,7 @@ import { arrayMove } from "@/runtime/array-move"
 import { tr, useLanguage } from "@/runtime/i18n/language"
 import { Persistence } from "@/runtime/persistence/schema"
 import { Persist, persisted } from "@/runtime/persistence/storage"
-import { ServerConnection, useServers } from "@/runtime/server/registry"
+import { ServerConnection, serverName, useServers } from "@/runtime/server/registry"
 import { useGlobal, useServerCtx } from "@/runtime/server/runtime"
 import type { Project } from "@/runtime/server/types"
 import { ProjectIcon } from "@/shell/layout/project-icon"
@@ -111,7 +111,13 @@ export function SidebarOrganized(props: {
 
   const pickDirectory = useDirectoryPicker()
 
+  const actions = createProjectSessionActions()
+
+  const projectActions = createProjectActions()
+
   const archive = useArchiveState()
+
+  const scopeStore = useExtensionScopeStore()
 
   const activeConnection = createMemo(
     () =>
@@ -122,6 +128,27 @@ export function SidebarOrganized(props: {
 
   const isOpenTab = (server: ServerConnection.Key, sessionId: string) =>
     tabs.store.some((tab) => tab.type === "session" && tab.server === server && tab.sessionId === sessionId)
+
+  const openAddProject = (conn: ServerConnection.Any) => {
+    const key = ServerConnection.key(conn)
+    const ctx = global.serverCtx(key)
+
+    if (!ctx) return
+    pickDirectory({
+      server: conn,
+      title: language.t("command.project.open"),
+      multiple: true,
+      onSelect: (result) => {
+        const directories = homeProjectDirectories(result)
+        directories.forEach((directory) => archive.setProjectArchived(directory, false))
+        void addProjects(ctx, directories).then((project) => {
+          if (project) archive.setProjectArchived(project.worktree, false)
+        })
+
+        if (directories[0]) void tabs.newDraft({ server: key, directory: directories[0] })
+      },
+    })
+  }
 
   return (
     <div
@@ -153,47 +180,73 @@ export function SidebarOrganized(props: {
                   classList={{ "-rotate-90 rtl:rotate-90": state.projectsCollapsed }}
                 />
               </button>
-              <Show when={activeConnection()}>
-                {(conn) => (
-                  <IconButton
+              <Show
+                when={servers.visible.length > 1}
+                fallback={
+                  <Show when={activeConnection()}>
+                    {(conn) => (
+                      <IconButton
+                        icon={<Icon name="plus" size="small" />}
+                        variant="ghost-muted"
+                        size="small"
+                        aria-label={tr("添加项目", "Add project")}
+                        title={tr("添加项目", "Add project")}
+                        onClick={() => openAddProject(conn())}
+                      />
+                    )}
+                  </Show>
+                }
+              >
+                <Menu gutter={6} modal={false} placement="bottom-end">
+                  <Menu.Trigger
+                    as={IconButton}
                     icon={<Icon name="plus" size="small" />}
                     variant="ghost-muted"
                     size="small"
                     aria-label={tr("添加项目", "Add project")}
                     title={tr("添加项目", "Add project")}
-                    onClick={() => {
-                      const ctx = global.serverCtx(ServerConnection.key(conn()))
-
-                      if (!ctx) return
-                      pickDirectory({
-                        server: conn(),
-                        title: language.t("command.project.open"),
-                        multiple: true,
-                        onSelect: (result) => {
-                          const directories = homeProjectDirectories(result)
-                          void addProjects(ctx, directories).then((project) => {
-                            if (project) archive.setProjectArchived(project.worktree, false)
-                          })
-                        },
-                      })
-                    }}
                   />
-                )}
+                  <Menu.Portal>
+                    <Menu.Content>
+                      <For each={servers.visible}>
+                        {(conn) => (
+                          <Menu.Item onSelect={() => openAddProject(conn)}>
+                            {servers.local(conn)
+                              ? tr("添加本地项目", "Add local project")
+                              : tr(
+                                  `在 ${serverName(conn) || "远程服务器"} 上打开项目`,
+                                  `Open project on ${serverName(conn) || "remote server"}`,
+                                )}
+                          </Menu.Item>
+                        )}
+                      </For>
+                    </Menu.Content>
+                  </Menu.Portal>
+                </Menu>
               </Show>
             </div>
             <Show when={!state.projectsCollapsed}>
               <div class="flex min-w-0 flex-col gap-1">
-                <ProjectList
-                  currentTab={props.currentTab}
-                  lastActivity={activity.get}
-                  isOpenTab={isOpenTab}
-                  highlightActive={true}
-                  onSelect={(session) => setLocal("projectSession", session)}
-                  state={state}
-                  ready={ready()}
-                  onExpand={(key, next) => setState("expanded", key, next)}
-                  onReorder={(server, ids) => setState("order", server, ids)}
-                />
+                <For each={servers.visible}>
+                  {(conn) => (
+                    <ProjectList
+                      connection={() => conn}
+                      actions={actions}
+                      projectActions={projectActions}
+                      archive={archive}
+                      scopeStore={scopeStore}
+                      currentTab={props.currentTab}
+                      lastActivity={activity.get}
+                      isOpenTab={isOpenTab}
+                      highlightActive={true}
+                      onSelect={(session) => setLocal("projectSession", session)}
+                      state={state}
+                      ready={ready()}
+                      onExpand={(key, next) => setState("expanded", key, next)}
+                      onReorder={(server, ids) => setState("order", server, ids)}
+                    />
+                  )}
+                </For>
               </div>
             </Show>
           </section>
@@ -208,6 +261,11 @@ export function SidebarOrganized(props: {
 }
 
 function ProjectList(props: {
+  connection: Accessor<ServerConnection.Any>
+  actions: ReturnType<typeof createProjectSessionActions>
+  projectActions: ReturnType<typeof createProjectActions>
+  archive: ReturnType<typeof useArchiveState>
+  scopeStore: ReturnType<typeof useExtensionScopeStore>
   currentTab: Tab | undefined
   lastActivity: (server: ServerConnection.Key, sessionId: string) => number | undefined
   isOpenTab: (server: ServerConnection.Key, sessionId: string) => boolean
@@ -220,15 +278,13 @@ function ProjectList(props: {
 }) {
   const servers = useServers()
 
-  const layout = useLayout()
+  const actions = props.actions
 
-  const actions = createProjectSessionActions()
+  const projectActions = props.projectActions
 
-  const projectActions = createProjectActions()
+  const archive = props.archive
 
-  const archive = useArchiveState()
-
-  const scopeStore = useExtensionScopeStore()
+  const scopeStore = props.scopeStore
 
   const [local, setLocal] = createStore<{
     showAll: boolean
@@ -242,12 +298,7 @@ function ProjectList(props: {
     sessionLimits: {},
   })
 
-  const connection = createMemo(
-    () =>
-      servers.visible.find(
-        (conn) => ServerConnection.key(conn) === (props.currentTab?.server ?? layout.home.selection().server),
-      ) ?? servers.visible[0],
-  )
+  const connection = () => props.connection()
 
   const ctx = useServerCtx(connection)
 
@@ -483,39 +534,41 @@ function ProjectList(props: {
       <Show when={connection()}>
         {(conn) => (
           <>
-            <DragDropProvider
-              sensors={[
-                PointerSensor.configure({
-                  activationConstraints: [new PointerActivationConstraints.Distance({ value: 4 })],
-                  preventActivation: (event) =>
-                    event.target instanceof Element && !!event.target.closest("[data-project-action]"),
-                }),
-              ]}
-              modifiers={[RestrictToVerticalAxis]}
-              plugins={(defaults) => [
-                ...defaults.filter((plugin) => plugin !== Accessibility),
-                Feedback.configure({ dropAnimation: null }),
-              ]}
-              onDragEnd={(event) => {
-                const source = event.operation.source
+            <div class="order-1 flex flex-col gap-0.5">
+              <DragDropProvider
+                sensors={[
+                  PointerSensor.configure({
+                    activationConstraints: [new PointerActivationConstraints.Distance({ value: 4 })],
+                    preventActivation: (event) =>
+                      event.target instanceof Element && !!event.target.closest("[data-project-action]"),
+                  }),
+                ]}
+                modifiers={[RestrictToVerticalAxis]}
+                plugins={(defaults) => [
+                  ...defaults.filter((plugin) => plugin !== Accessibility),
+                  Feedback.configure({ dropAnimation: null }),
+                ]}
+                onDragEnd={(event) => {
+                  const source = event.operation.source
 
-                if (event.canceled || !isSortable(source) || source.initialIndex === source.index) return
-                props.onReorder(
-                  ServerConnection.key(conn()),
-                  arrayMove(
-                    projects().map((project) => project.id),
-                    source.initialIndex,
-                    source.index,
-                  ),
-                )
-              }}
-            >
-              <Key each={visible()} by={(project) => `${ServerConnection.key(conn())}:${project.id}`}>
-                {(project, index) => renderProjectItem(conn, project, index, false)}
-              </Key>
-            </DragDropProvider>
+                  if (event.canceled || !isSortable(source) || source.initialIndex === source.index) return
+                  props.onReorder(
+                    ServerConnection.key(conn()),
+                    arrayMove(
+                      projects().map((project) => project.id),
+                      source.initialIndex,
+                      source.index,
+                    ),
+                  )
+                }}
+              >
+                <Key each={visible()} by={(project) => `${ServerConnection.key(conn())}:${project.id}`}>
+                  {(project, index) => renderProjectItem(conn, project, index, false)}
+                </Key>
+              </DragDropProvider>
+            </div>
             <Show when={archivedProjects().length > 0}>
-              <div class="mt-1 flex flex-col gap-1 border-t border-v2-border-border-muted/60 pt-1.5">
+              <div class="order-2 mt-1 flex flex-col gap-1 border-t border-v2-border-border-muted/60 pt-1.5">
                 <div class="flex items-center px-1">
                   <button
                     type="button"
@@ -528,7 +581,15 @@ function ProjectList(props: {
                       class="shrink-0 text-v2-icon-icon-faint transition-transform"
                       classList={{ "-rotate-90 rtl:rotate-90": !local.showArchivedProjects }}
                     />
-                    <span>{tr("已收纳项目", "Archived projects")} ({archivedProjects().length})</span>
+                    <span>
+                      {servers.local(conn())
+                        ? tr("已收纳项目", "Archived projects")
+                        : tr(
+                            `已收纳远程项目 · ${serverName(conn())}`,
+                            `Archived remote projects · ${serverName(conn())}`,
+                          )}{" "}
+                      ({archivedProjects().length})
+                    </span>
                   </button>
                 </div>
                 <Show when={local.showArchivedProjects}>

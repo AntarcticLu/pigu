@@ -287,6 +287,9 @@ export const dict = {
 
   "dialog.directory.action.selectFile": "选择文件",
   "dialog.directory.action.selectFolder": "选择文件夹",
+  "dialog.directory.search.placeholder": "搜索项目或输入 ~/路径…",
+  "dialog.directory.recent": "最近使用",
+  "dialog.directory.gitRepo": "Git 仓库",
   "dialog.directory.root": "根目录",
   "dialog.directory.parent": "上级目录",
   "dialog.directory.readError": "无法读取此文件夹",
