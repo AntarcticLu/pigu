@@ -39,7 +39,7 @@ export function resolveSessionSource(session: SessionInfo) {
 
   if (raw === "agy") {
     return {
-      label: "AGY",
+      label: "Antigravity",
       class: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
     }
   }

@@ -58,6 +58,7 @@ type PluginDisplayRow = {
   description: string
   enabled: boolean
   custom: boolean
+  detected?: boolean
 }
 
 export const SettingsExtensions: Component<{
@@ -292,12 +293,9 @@ export const SettingsExtensions: Component<{
     const builtinSet = new Set(builtins.map((item) => item.id))
     const localOrder = new Map(BUILTIN_LOCAL_AGENT_PLUGINS.map((item, idx) => [item.id, idx]))
     const localModels = providers.all().get("local")?.models
-    const hasCatalog = providers.all().size > 0
 
     for (const localItem of BUILTIN_LOCAL_AGENT_PLUGINS) {
       if (scopeStore.isPluginRemoved(localItem.id)) continue
-
-      if (hasCatalog && !localModels?.[localItem.modelID]) continue
       byID.set(localItem.id, {
         id: localItem.id,
         name: localItem.name,
@@ -305,6 +303,7 @@ export const SettingsExtensions: Component<{
         description: localItem.description,
         enabled: true,
         custom: true,
+        detected: Boolean(localModels?.[localItem.modelID]),
       })
     }
 
@@ -348,10 +347,9 @@ export const SettingsExtensions: Component<{
     for (const custom of scopeStore.customPlugins()) {
       if (scopeStore.isPluginRemoved(custom.id)) continue
       const builtinLocal = BUILTIN_LOCAL_AGENT_PLUGINS.find((item) => item.id === custom.id)
-
-      if (builtinLocal && hasCatalog && !localModels?.[builtinLocal.modelID]) continue
       const cleanedName = builtinLocal ? stripLegacyLocalPluginSuffix(custom.name) : custom.name
-      const isOldDefaultDesc = custom.description?.includes("桥接")
+      const isOldDefaultDesc =
+        custom.description?.includes("桥接") || custom.description?.includes("调用 agy 模型")
       byID.set(custom.id, {
         id: custom.id,
         name: cleanedName,
@@ -360,6 +358,7 @@ export const SettingsExtensions: Component<{
           (!isOldDefaultDesc && custom.description) || builtinLocal?.description || custom.target,
         enabled: custom.enabled,
         custom: true,
+        detected: builtinLocal ? Boolean(localModels?.[builtinLocal.modelID]) : undefined,
       })
     }
 
@@ -827,9 +826,18 @@ export const SettingsExtensions: Component<{
                           <div class="flex items-center gap-1.5">
                             <span class="settings-extension-name truncate">{item.name}</span>
                             <Show when={item.id.startsWith("local:")}>
-                              <span class="shrink-0 rounded bg-indigo-500/15 px-1.5 py-0.5 text-[10px] leading-none font-medium text-indigo-600 dark:text-indigo-400">
-                                本地模型 + 会话识别
-                              </span>
+                              <Show
+                                when={item.detected}
+                                fallback={
+                                  <span class="shrink-0 rounded bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[10px] leading-none font-medium text-v2-text-text-faint">
+                                    未检测到本机环境
+                                  </span>
+                                }
+                              >
+                                <span class="shrink-0 rounded bg-emerald-500/15 px-1.5 py-0.5 text-[10px] leading-none font-medium text-emerald-600 dark:text-emerald-400">
+                                  已识别
+                                </span>
+                              </Show>
                             </Show>
                           </div>
                           <Show when={item.description}>

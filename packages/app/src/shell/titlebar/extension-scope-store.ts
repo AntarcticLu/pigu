@@ -58,9 +58,9 @@ export const BUILTIN_LOCAL_AGENT_PLUGINS: ReadonlyArray<BuiltinLocalAgentPlugin>
   {
     id: "local:agy",
     modelID: "agy",
-    name: "agy",
-    target: "agy",
-    description: "支持本地调用 agy 模型，并自动识别与加载项目下的 Antigravity 会话 JSON",
+    name: "antigravity",
+    target: "antigravity",
+    description: "支持本地调用 antigravity 模型，并自动识别与加载项目下的 Antigravity 会话 JSON",
   },
   {
     id: "local:pi",
@@ -107,7 +107,11 @@ export const BUILTIN_LOCAL_AGENT_PLUGINS: ReadonlyArray<BuiltinLocalAgentPlugin>
 ]
 
 export function stripLegacyLocalPluginSuffix(name: string) {
-  return name.replace(/\s*\((?:CLI|桌面端)\)\s*$/i, "").trim()
+  const stripped = name.replace(/\s*\((?:CLI|桌面端)\)\s*$/i, "").trim()
+
+  if (stripped.toLowerCase() === "agy") return "antigravity"
+
+  return stripped
 }
 
 export function localBaseEngineID(modelID: string) {
@@ -284,7 +288,7 @@ export function resolveSkillOrigin(skillPath: string, worktree?: string, fromIde
 
   if (lower.includes("/antigravity/") || lower.includes("/.gemini/")) {
     return {
-      label: `${prefix}AGY`,
+      label: `${prefix}Antigravity`,
       isLocal: false,
       class: "bg-blue-500/15 text-blue-600 dark:text-blue-400",
     }
