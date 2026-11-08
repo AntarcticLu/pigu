@@ -18,6 +18,90 @@ for file in "\${XDG_STATE_HOME:-$HOME/.local/state}"/pigu/service*.json "\${XDG_
 done
 `
 
+const LocalConfigFile = Schema.fromJsonString(
+  Schema.Struct({
+    model: Schema.optional(Schema.String),
+    provider: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+    providers: Schema.optional(Schema.Record(Schema.String, Schema.Json)),
+  }),
+)
+
+const decodeLocalConfig = Schema.decodeUnknownOption(LocalConfigFile)
+
+function readLocalCloudProviderConfigBase64() {
+  const home = homedir()
+  const candidates = [
+    path.join(home, ".config", "pigu", "opencode.json"),
+    path.join(home, ".config", "opencode", "opencode.json"),
+  ]
+  const parsed = candidates.flatMap((file) => {
+    if (!existsSync(file)) return []
+    const decoded = Option.getOrUndefined(decodeLocalConfig(readFileSync(file, "utf8")))
+
+    return decoded ? [decoded] : []
+  })
+  const providerEntries = parsed.flatMap((item) =>
+    Object.entries(item.provider ?? item.providers ?? {}).filter(([key]) => key !== "local"),
+  )
+
+  if (providerEntries.length === 0) return ""
+  const defaultModel = parsed
+    .map((item) => item.model)
+    .find((model): model is string => Boolean(model && !model.startsWith("local/")))
+  const payload = JSON.stringify(
+    {
+      $schema: "https://opencode.ai/config.json",
+      provider: Object.fromEntries(providerEntries),
+      ...(defaultModel ? { model: defaultModel } : {}),
+    },
+    null,
+    2,
+  )
+
+  return Buffer.from(`${payload}\n`, "utf8").toString("base64")
+}
+
+function remoteConfigSyncScript() {
+  const b64 = readLocalCloudProviderConfigBase64()
+  const wrapperCheck = `if [ -f "$HOME/.pigu/bin/pigu" ] && ! grep -q 'OPENCODE_CONFIG_DIR=' "$HOME/.pigu/bin/pigu" 2>/dev/null; then
+  printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexport OPENCODE_DB="opencode-local.db"\\nexport OPENCODE_CONFIG_DIR="$HOME/.config/pigu"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
+  chmod 755 "$HOME/.pigu/bin/pigu"
+  cp "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu" 2>/dev/null || true
+  pigu_config_changed=1
+fi`
+  if (!b64) {
+    return `pigu_config_changed=0\n${wrapperCheck}`
+  }
+  return `pigu_config_changed=0
+${wrapperCheck}
+mkdir -p "$HOME/.config/pigu"
+if [ -x "$HOME/.pigu/bun/bin/bun" ]; then
+  if "$HOME/.pigu/bun/bin/bun" -e '
+    import fs from "node:fs";
+    const target = process.env.HOME + "/.config/pigu/opencode.json";
+    const incoming = JSON.parse(Buffer.from("${b64}", "base64").toString("utf8"));
+    const prevRaw = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
+    let current = {};
+    try { current = prevRaw ? JSON.parse(prevRaw) : {}; } catch {}
+    const merged = {
+      ...incoming,
+      ...current,
+      provider: { ...(current.provider ?? {}), ...(incoming.provider ?? {}) },
+      model: current.model ?? incoming.model,
+    };
+    const nextRaw = JSON.stringify(merged, null, 2) + "\\n";
+    if (nextRaw !== prevRaw) {
+      fs.writeFileSync(target, nextRaw, { mode: 0o600 });
+      process.exit(10);
+    }
+  '; then
+    :
+  elif [ $? -eq 10 ]; then
+    pigu_config_changed=1
+  fi
+fi`
+}
+
 export const discoverScript = `set -eu
 ${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
 if [ -z "$cli" ]; then
@@ -39,7 +123,25 @@ if [ -z "$cli" ]; then
   printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
   exit 0
 fi
+${remoteConfigSyncScript()}
 "$cli" service ${replace ? "restart" : "start"}
+${registrationScript}`
+}
+
+function discoverWithSyncScript() {
+  return `set -eu
+${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
+if [ -z "$cli" ]; then
+  printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
+  exit 0
+fi
+${remoteConfigSyncScript()}
+status=$("$cli" service status 2>/dev/null || printf 'stopped\\n')
+if [ "$status" = stopped ]; then
+  "$cli" service start
+elif [ "$pigu_config_changed" = 1 ]; then
+  "$cli" service restart
+fi
 ${registrationScript}`
 }
 
@@ -100,7 +202,7 @@ fi
 tar -xzf "$HOME/.pigu/bundle.tar.gz" -C "$HOME/.pigu/app"
 rm -f "$HOME/.pigu/bundle.tar.gz"
 chmod +x "$HOME/.pigu/app/opencode-pty" 2>/dev/null || true
-printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexport OPENCODE_DB="opencode-local.db"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
+printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexport OPENCODE_DB="opencode-local.db"\\nexport OPENCODE_CONFIG_DIR="$HOME/.config/pigu"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
 chmod 755 "$HOME/.pigu/bin/pigu"
 cp "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu"
 `
@@ -119,7 +221,7 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
       stdin: script,
     })
 
-  const firstOutput = yield* run(input.replace ? startScript(input.version, true) : discoverScript)
+  const firstOutput = yield* run(input.replace ? startScript(input.version, true) : discoverWithSyncScript())
 
   const resolveOutput = Effect.fnUntraced(function* () {
     if (!firstOutput.includes("OPENCODE_SSH_CLI_MISSING=1")) return firstOutput
