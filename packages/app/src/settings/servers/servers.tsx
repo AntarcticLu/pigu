@@ -138,15 +138,43 @@ export function ServerConnectionRow(props: {
       when={props.entry.source?.entry.row ? props.entry.key : undefined}
       keyed
       fallback={
-        <Show when={props.entry.connection}>
-          {(server) => (
+        <Show
+          when={props.entry.connection}
+          fallback={
             <div class="settings-servers-row">
-              <div class="settings-servers-lead">
+              <div class="settings-servers-lead !items-center">
                 <ServerHealthIndicator health={health()} />
                 <div class="settings-servers-copy">
                   <span class="flex min-w-0 items-center gap-1.5">
                     <bdi class="settings-servers-name truncate" dir="auto">
                       {props.entry.name}
+                    </bdi>
+                    <Show when={props.entry.source?.entry.label}>
+                      {(label) => (
+                        <span class="shrink-0 rounded-[3px] border border-v2-border-border-base px-1 py-0.5 text-[9px] leading-none text-v2-text-text-muted">
+                          {label()}
+                        </span>
+                      )}
+                    </Show>
+                  </span>
+                </div>
+              </div>
+            </div>
+          }
+        >
+          {(server) => (
+            <div class="settings-servers-row">
+              <div class="settings-servers-lead !items-center">
+                <ServerHealthIndicator health={health()} />
+                <div class="settings-servers-copy">
+                  <span class="flex min-w-0 items-center gap-1.5">
+                    <bdi class="settings-servers-name truncate" dir="auto">
+                      {servers.local(server()) &&
+                      (!props.entry.name ||
+                        props.entry.name === "This computer" ||
+                        props.entry.name.toLowerCase() === "bogon")
+                        ? language.tr("本机", "This Computer")
+                        : props.entry.name}
                     </bdi>
                     <Show when={servers.local(server())}>
                       <span class="shrink-0 rounded-[3px] border border-v2-border-border-base px-1 py-0.5 text-[9px] leading-none text-v2-text-text-muted">
@@ -154,9 +182,11 @@ export function ServerConnectionRow(props: {
                       </span>
                     </Show>
                   </span>
-                  <bdi class="settings-servers-meta" dir="ltr">
-                    {ServerConnection.http(server())?.url}
-                  </bdi>
+                  <Show when={!servers.local(server())}>
+                    <bdi class="settings-servers-meta" dir="ltr">
+                      {ServerConnection.http(server())?.url}
+                    </bdi>
+                  </Show>
                 </div>
               </div>
               <div class="settings-servers-actions">

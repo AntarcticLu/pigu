@@ -1,3 +1,4 @@
+import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { useFilteredList } from "@opencode/ui/hooks"
 import { Icon } from "@opencode/ui/icon"
@@ -14,14 +15,13 @@ import { popularProviders } from "@/providers/catalog/providers"
 import { DialogServer } from "@/servers/connect/dialog"
 import { AddServerMenu } from "@/servers/registry/add-menu"
 import { SettingsList } from "@/settings/list"
-import { SettingsRow } from "@/settings/row"
 import { ModelProtocolSelect } from "@/providers/models/protocol"
 import { providerGroupKey } from "@/providers/models/select-dialog"
 import { SettingsProviders } from "@/settings/providers/providers"
 import { SettingsSearchField } from "@/settings/search-field"
 import { SettingsServerDataScope } from "@/settings/server-scope"
 import { settingsServerReachable, useSettingsServers, type SettingsServer } from "@/settings/servers/inventory"
-import { ServerConnectionRow, ServerShell } from "@/settings/servers/servers"
+import { ServerConnectionRow } from "@/settings/servers/servers"
 import { useSettingsSurface } from "@/settings/surface"
 
 import "@/settings/settings.css"
@@ -36,6 +36,7 @@ function DeviceProvidersSection(props: {
   server: ServerConnection.Any
   query: string
   deviceMatched: boolean
+  onRegisterAdd: (open: () => void) => void
 }) {
   const models = useModels()
   const effectiveFilter = createMemo(() => {
@@ -106,14 +107,18 @@ function DeviceProvidersSection(props: {
 
     return (
       <Show when={items().length > 0}>
-        <div data-component="provider-inline-models" class="border-t border-v2-border-border-muted/60 pl-4">
+        <div
+          data-component="provider-inline-models"
+          class="ms-2.5 mb-1 flex flex-col divide-y divide-v2-border-border-muted/30 border-l border-v2-border-border-muted/60 ps-4"
+        >
           <For each={items()}>
             {(item) => {
               const key = { providerID: item.provider.id, modelID: item.id }
 
               return (
-                <SettingsRow title={item.name} description="">
-                  <div class="flex items-center gap-2.5">
+                <div class="flex min-h-9 items-center justify-between gap-3 py-1.5">
+                  <span class="min-w-0 truncate text-[13px] text-v2-text-text-base">{item.name}</span>
+                  <div class="flex shrink-0 items-center gap-2.5">
                     <Show when={item.provider.id !== "local"}>
                       <ModelProtocolSelect providerID={item.provider.id} modelID={item.id} />
                     </Show>
@@ -125,7 +130,7 @@ function DeviceProvidersSection(props: {
                       {item.name}
                     </Switch>
                   </div>
-                </SettingsRow>
+                </div>
               )
             }}
           </For>
@@ -135,21 +140,17 @@ function DeviceProvidersSection(props: {
   }
 
   return (
-    <div class="flex flex-col gap-3">
+    <div class="ms-2.5 border-l border-v2-border-border-muted/70 ps-4">
       <SettingsProviders
         directory={undefined}
         embedded
         filter={effectiveFilter()}
+        onRegisterAdd={props.onRegisterAdd}
         hasMatchingModels={(providerID) =>
           list.grouped.latest.some((group) => group.category === providerID && group.items.length > 0)
         }
         renderModels={(providerID) => <ProviderModelsInline providerID={providerID} />}
       />
-      <div class="border-t border-v2-border-border-muted/50 pt-2">
-        <SettingsList>
-          <ServerShell server={props.server} />
-        </SettingsList>
-      </div>
     </div>
   )
 }
@@ -168,6 +169,7 @@ export const SettingsModels: Component<{
 
   const [query, setQuery] = createSignal("")
   const [expandedDevices, setExpandedDevices] = createStore<Record<string, boolean>>({})
+  const [addProviderHandlers, setAddProviderHandlers] = createStore<Record<string, (() => void) | undefined>>({})
 
   const selectServer = (server: ServerConnection.Any) => {
     const key = ServerConnection.key(server)
@@ -199,14 +201,8 @@ export const SettingsModels: Component<{
     <>
       <div class="settings-tab-header settings-tab-header--stacked">
         <div class="settings-tab-header-row">
-          <div class="flex min-w-0 flex-col gap-0.5">
+          <div class="flex min-w-0 items-center">
             <h2 class="settings-tab-title">{language.tr("模型", "Models")}</h2>
-            <span class="text-11-regular text-v2-text-text-muted">
-              {language.tr(
-                "设备 → 供应商 → 模型（点击设备展开对应供应商，再点击供应商展开模型）",
-                "Device → Provider → Model (click a device to expand its providers, then click a provider to expand models)",
-              )}
-            </span>
           </div>
           <div class="settings-tab-header-actions">
             <AddServerMenu onAddServer={addServer} />
@@ -220,74 +216,88 @@ export const SettingsModels: Component<{
         />
       </div>
 
-      <div class="settings-tab-body settings-models flex flex-col gap-3">
-        <For each={inventory()}>
-          {(entry) => (
-            <section
-              class="settings-section overflow-hidden rounded-lg border border-v2-border-border-base bg-v2-background-bg-surface/30"
-              data-component="settings-device-model-group"
-              aria-label={entry.name}
-            >
-              <div
-                class="flex cursor-pointer select-none items-center gap-2 px-3 py-1.5 transition-colors hover:bg-v2-overlay-simple-overlay-hover/50"
-                onClick={(event) => {
-                  if (
-                    event.target instanceof Element &&
-                    event.target.closest(".settings-servers-actions, button, [role='button'], [role='menuitem']")
-                  ) {
-                    return
-                  }
-                  toggleDevice(entry.key)
-                }}
-              >
-                <button
-                  type="button"
-                  data-action={`device-toggle-${entry.key}`}
-                  aria-expanded={isDeviceExpanded(entry)}
-                  class="flex size-6 shrink-0 items-center justify-center rounded text-v2-icon-icon-muted hover:text-v2-icon-icon-base focus-visible:outline-none"
-                  onClick={() => toggleDevice(entry.key)}
-                >
-                  <Icon
-                    name="chevron-down"
-                    size="small"
-                    class="shrink-0 transition-transform duration-150"
-                    classList={{ "-rotate-90": !isDeviceExpanded(entry) }}
-                  />
-                </button>
-                <div class="min-w-0 flex-1">
-                  <ServerConnectionRow entry={entry} onServerChange={selectServer} />
-                </div>
-              </div>
-
-              <Show when={isDeviceExpanded(entry)}>
-                <div class="border-t border-v2-border-border-muted/60 bg-v2-background-bg-base/40 py-3 pe-3 ps-7">
-                  <Show
-                    when={isReachable(entry) ? entry.connection : undefined}
-                    keyed
-                    fallback={
-                      <div class="py-3 text-12-regular text-v2-text-text-muted">
-                        {language.tr(
-                          "该设备当前未连接，请先在上方点击连接或检查 SSH 配置。",
-                          "This device is currently disconnected. Please connect above or check your SSH configuration.",
-                        )}
-                      </div>
-                    }
+      <div class="settings-tab-body settings-models">
+        <SettingsList variant="catalog">
+          <div class="flex flex-col divide-y divide-v2-border-border-base">
+            <For each={inventory()}>
+              {(entry) => (
+                <div class="flex flex-col py-1" data-component="settings-device-model-group" aria-label={entry.name}>
+                  <div
+                    class="flex min-h-11 cursor-pointer select-none items-center gap-2 rounded-md px-1 transition-colors hover:bg-v2-overlay-simple-overlay-hover/40"
+                    onClick={(event) => {
+                      if (
+                        event.target instanceof Element &&
+                        event.target.closest(".settings-servers-actions, button, [role='button'], [role='menuitem']")
+                      ) {
+                        return
+                      }
+                      toggleDevice(entry.key)
+                    }}
                   >
-                    {(conn) => (
-                      <SettingsServerDataScope server={conn}>
-                        <DeviceProvidersSection
-                          server={conn}
-                          query={query()}
-                          deviceMatched={deviceMatches(entry)}
-                        />
-                      </SettingsServerDataScope>
-                    )}
+                    <button
+                      type="button"
+                      data-action={`device-toggle-${entry.key}`}
+                      aria-expanded={isDeviceExpanded(entry)}
+                      class="flex size-5 shrink-0 items-center justify-center rounded text-v2-icon-icon-muted hover:text-v2-icon-icon-base focus-visible:outline-none"
+                      onClick={() => toggleDevice(entry.key)}
+                    >
+                      <Icon
+                        name="chevron-down"
+                        size="small"
+                        class="shrink-0 transition-transform duration-150"
+                        classList={{ "-rotate-90": !isDeviceExpanded(entry) }}
+                      />
+                    </button>
+                    <div class="min-w-0 flex-1">
+                      <ServerConnectionRow entry={entry} onServerChange={selectServer} />
+                    </div>
+                    <Show when={isDeviceExpanded(entry) && isReachable(entry) && addProviderHandlers[entry.key]}>
+                      {(openAdd) => (
+                        <Button
+                          size="small"
+                          variant="ghost-muted"
+                          icon="plus"
+                          data-action={`device-provider-add-${entry.key}`}
+                          onClick={() => openAdd()()}
+                        >
+                          {language.tr("新增供应商", "Add Provider")}
+                        </Button>
+                      )}
+                    </Show>
+                  </div>
+
+                  <Show when={isDeviceExpanded(entry)}>
+                    <div class="pb-1.5 ps-3">
+                      <Show
+                        when={isReachable(entry) ? entry.connection : undefined}
+                        keyed
+                        fallback={
+                          <div class="ms-2.5 border-l border-v2-border-border-muted/70 py-2 ps-4 text-12-regular text-v2-text-text-muted">
+                            {language.tr(
+                              "当前设备未连接，请先在上方连接或检查 SSH 配置。",
+                              "This device is currently disconnected. Please connect above or check SSH settings.",
+                            )}
+                          </div>
+                        }
+                      >
+                        {(conn) => (
+                          <SettingsServerDataScope server={conn}>
+                            <DeviceProvidersSection
+                              server={conn}
+                              query={query()}
+                              deviceMatched={deviceMatches(entry)}
+                              onRegisterAdd={(fn) => setAddProviderHandlers(entry.key, () => fn)}
+                            />
+                          </SettingsServerDataScope>
+                        )}
+                      </Show>
+                    </div>
                   </Show>
                 </div>
-              </Show>
-            </section>
-          )}
-        </For>
+              )}
+            </For>
+          </div>
+        </SettingsList>
       </div>
     </>
   )

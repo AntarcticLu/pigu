@@ -76,6 +76,7 @@ export const SettingsProviders: Component<{
   filter?: string
   hasMatchingModels?: (providerID: string) => boolean
   renderModels?: (providerID: string) => JSX.Element
+  onRegisterAdd?: (open: () => void) => void
 }> = (props) => {
   const dialog = useDialog()
   const language = useLanguage()
@@ -112,6 +113,7 @@ export const SettingsProviders: Component<{
 
   onMount(() => {
     void refetchConfigured()
+    props.onRegisterAdd?.(() => openManageProvider())
   })
 
   const refreshProviderData = async () => {
@@ -792,23 +794,14 @@ export const SettingsProviders: Component<{
         </div>
       </Show>
 
-      <div class={props.embedded ? "settings-providers mb-6" : "settings-tab-body settings-tab-body--sectioned settings-providers"}>
-        <div class="settings-section" data-component="connected-providers-section">
-          <div class="flex items-center justify-between">
-            <h3 class="settings-section-title">{language.t("settings.providers.section.connected")}</h3>
-            <Show when={props.embedded}>
-              <Button
-                size="small"
-                variant="neutral"
-                icon="plus"
-                data-action="provider-add"
-                onClick={() => openManageProvider()}
-              >
-                {language.tr("新增供应商", "Add Provider")}
-              </Button>
-            </Show>
-          </div>
-          <SettingsList variant="catalog">
+      <div class={props.embedded ? "settings-providers" : "settings-tab-body settings-tab-body--sectioned settings-providers"}>
+        <div class={props.embedded ? "flex flex-col" : "settings-section"} data-component="connected-providers-section">
+          <Show when={!props.embedded}>
+            <div class="flex items-center justify-between">
+              <h3 class="settings-section-title">{language.t("settings.providers.section.connected")}</h3>
+            </div>
+          </Show>
+          <div class={props.embedded ? "flex flex-col divide-y divide-v2-border-border-muted/40" : ""}>
             <Show
               when={displayed().length > 0}
               fallback={<div class="settings-provider-empty">{language.t("settings.providers.connected.empty")}</div>}
@@ -825,7 +818,7 @@ export const SettingsProviders: Component<{
                       when={managedGroup()}
                       fallback={
                         <div class="flex flex-col">
-                          <div class="settings-provider-row group">
+                          <div class="settings-provider-row !border-b-0 !py-2 group">
                             <button
                               type="button"
                               data-action={`provider-toggle-${item.id}`}
@@ -996,7 +989,7 @@ export const SettingsProviders: Component<{
                 }}
               </For>
             </Show>
-          </SettingsList>
+          </div>
         </div>
 
         <Show when={!props.embedded}>

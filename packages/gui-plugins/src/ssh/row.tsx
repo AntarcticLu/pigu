@@ -27,14 +27,14 @@ export default function SshRow(props: { row: ServerRow; id: string; ssh: SshCont
 
         return (
           <div class="settings-servers-row">
-            <div class="settings-servers-lead">
+            <div class="settings-servers-lead !items-center">
               <props.row.Indicator
                 health={indicator()}
                 connecting={item().stage === "connecting"}
                 auth={item().stage === "authentication"}
               />
               <div class="settings-servers-copy">
-                <span class="flex min-w-0 items-center gap-1">
+                <span class="flex min-w-0 items-center gap-1.5">
                   <bdi class="settings-servers-name truncate" dir={item().config.name ? "auto" : "ltr"}>
                     {sshName(item().config)}
                   </bdi>
@@ -42,14 +42,7 @@ export default function SshRow(props: { row: ServerRow; id: string; ssh: SshCont
                     {plugin.t("label")}
                   </span>
                 </span>
-                <Show
-                  when={item().stage === "authentication"}
-                  fallback={
-                    <Show when={props.row.health()?.version}>
-                      {(version) => <span class="settings-servers-meta">v{version()}</span>}
-                    </Show>
-                  }
-                >
+                <Show when={item().stage === "authentication"}>
                   <span class="settings-servers-meta">{plugin.t("stage.authentication")}</span>
                 </Show>
               </div>
