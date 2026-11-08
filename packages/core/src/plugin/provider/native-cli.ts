@@ -1359,18 +1359,11 @@ class LocalLanguageModel implements LanguageModelV3 {
           const contextFileToRead = (() => {
             if (isSameEngineWithoutGap) return undefined
 
-            if (effectiveLastEngine) {
-              const prevRecord = getEngineRecord(saved, effectiveLastEngine, initialExternalSource, parsedMetadata, home)
-
-              if (prevRecord.filePath && fs.existsSync(prevRecord.filePath)) {
-                return prevRecord.filePath
-              }
-            }
-
             if (
               saved.lastPromptCount === undefined &&
               parsedMetadata?.filePath &&
-              fs.existsSync(parsedMetadata.filePath)
+              fs.existsSync(parsedMetadata.filePath) &&
+              priorTurns.length === 0
             ) {
               return parsedMetadata.filePath
             }
@@ -1378,8 +1371,25 @@ class LocalLanguageModel implements LanguageModelV3 {
             return writeFallbackContextJsonl(home, sessionID || "temp", priorTurns)
           })()
 
+          const inlineContext = (() => {
+            if (isSameEngineWithoutGap || priorTurns.length === 0) return ""
+            const recent = priorTurns.slice(-12)
+            const formatted = recent
+              .map((turn) => `[${turn.role === "user" ? "用户" : "助手"}]: ${turn.text}`)
+              .join("\n\n")
+
+            return formatted.length > 8000 ? formatted.slice(-8000) : formatted
+          })()
+
           const finalPrompt = contextFileToRead
-            ? `请先使用文件读取工具读取会话记录文件 ${contextFileToRead} 以了解此前的对话上下文，然后继续处理以下请求：\n\n${userText}`
+            ? [
+                "<conversation_context>",
+                `以下是此前由其他模型或会话产生的对话上下文（完整记录位于 ${contextFileToRead}）：`,
+                inlineContext,
+                "</conversation_context>",
+                "",
+                userText,
+              ].join("\n")
             : userText
 
           const canResume = Boolean(
