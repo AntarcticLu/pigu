@@ -1232,6 +1232,644 @@ async function runOpencodeProcess(input: {
   })
 }
 
+type DafeiyuCompanionPayload = {
+  readonly state: "IDLE" | "THINKING" | "WORKING" | "WAITING" | "SUCCESS" | "ERROR"
+  readonly phase: string
+  readonly stage: string
+  readonly message: string
+  readonly detail: string
+}
+
+const dafeiyuRuntime: {
+  child: childProcess.ChildProcess | undefined
+  idleTimer: ReturnType<typeof setTimeout> | undefined
+} = {
+  child: undefined,
+  idleTimer: undefined,
+}
+
+function resolveDafeiyuHelperBinary(home: string): string | undefined {
+  const roots = [
+    path.join(home, ".dsh", "profiles", "desktop", "node_modules", "dsh-dafeiyu"),
+    path.join(home, ".dsh", "profiles", "headless", "node_modules", "dsh-dafeiyu"),
+  ]
+  const relPath =
+    process.platform === "darwin"
+      ? path.join("runtime", "bin", "darwin", "dsh-dafeiyu-helper.app", "Contents", "MacOS", "dsh-dafeiyu-helper")
+      : process.platform === "win32"
+        ? path.join("runtime", "bin", "win32-x64", "dsh-dafeiyu-helper.exe")
+        : path.join("runtime", "bin", `linux-${process.arch}`, "dsh-dafeiyu-helper")
+
+  const found = roots.map((root) => path.join(root, relPath)).find((candidate) => fs.existsSync(candidate))
+  if (found) {
+    if (process.platform !== "win32") fs.chmodSync(found, 0o755)
+    return found
+  }
+
+  if (process.platform === "darwin") {
+    const pkgRoot = roots.find((root) => fs.existsSync(path.join(root, "native", "macos", "build.sh")))
+    if (pkgRoot) {
+      childProcess.spawnSync("bash", [path.join(pkgRoot, "native", "macos", "build.sh")], {
+        cwd: pkgRoot,
+        stdio: "ignore",
+        timeout: 25_000,
+      })
+      const built = path.join(pkgRoot, relPath)
+      if (fs.existsSync(built)) {
+        fs.chmodSync(built, 0o755)
+        return built
+      }
+    }
+  }
+
+  return undefined
+}
+
+function dshPluginStatePath(home: string): string {
+  return path.join(home, ".config", "opencode", "dsh-plugins.json")
+}
+
+function readDisabledDshPlugins(home: string): Set<string> {
+  const raw = readJsonRecordSafe(dshPluginStatePath(home))
+  const list = raw && Array.isArray(raw.disabled) ? raw.disabled : []
+  return new Set(list.filter((item): item is string => typeof item === "string" && item.trim().length > 0))
+}
+
+export function isDshPluginEnabled(home: string, pluginName: string): boolean {
+  const clean = pluginName.replace(/^dsh:/, "").trim()
+  return !readDisabledDshPlugins(home).has(clean)
+}
+
+export function stopDafeiyuCompanion() {
+  if (dafeiyuRuntime.idleTimer) {
+    clearTimeout(dafeiyuRuntime.idleTimer)
+    dafeiyuRuntime.idleTimer = undefined
+  }
+  const child = dafeiyuRuntime.child
+  dafeiyuRuntime.child = undefined
+  if (child && !child.killed && child.exitCode === null) {
+    child.kill("SIGTERM")
+  }
+}
+
+export function setDshPluginEnabled(home: string, pluginName: string, enabled: boolean) {
+  const clean = pluginName.replace(/^dsh:/, "").trim()
+  if (!clean) return
+  const disabled = readDisabledDshPlugins(home)
+  if (enabled) {
+    disabled.delete(clean)
+  }
+  if (!enabled) {
+    disabled.add(clean)
+  }
+  const statePath = dshPluginStatePath(home)
+  fs.mkdirSync(path.dirname(statePath), { recursive: true })
+  fs.writeFileSync(statePath, `${JSON.stringify({ disabled: [...disabled] }, null, 2)}\n`, "utf8")
+  syncDshThirdPartyPlugins(home)
+  if (clean === "dsh-dafeiyu") {
+    if (!enabled) {
+      stopDafeiyuCompanion()
+      return
+    }
+    notifyDafeiyuCompanion(home, {
+      state: "IDLE",
+      phase: "idle",
+      stage: "等待任务",
+      message: "本鱼已重新上线，随时待命~",
+      detail: "Pigu · 大肥鱼伴侣",
+    })
+  }
+}
+
+export type DiscoveredDshPlugin = {
+  readonly id: string
+  readonly name: string
+  readonly version?: string
+  readonly description: string
+  readonly enabled: boolean
+}
+
+export function discoverDshThirdPartyPlugins(
+  home = process.env.OPENCODE_TEST_HOME || os.homedir(),
+): readonly DiscoveredDshPlugin[] {
+  syncDshThirdPartyPlugins(home)
+  const desktopDir = path.join(home, ".dsh", "profiles", "desktop")
+  const headlessDir = path.join(home, ".dsh", "profiles", "headless")
+  const desktopPkg = readJsonRecordSafe(path.join(desktopDir, "package.json"))
+  const headlessPkg = readJsonRecordSafe(path.join(headlessDir, "package.json"))
+
+  const readBundles = (pkg: Record<string, unknown> | undefined) => {
+    const dshField = pkg && isRecord(pkg.dsh) ? pkg.dsh : undefined
+    const profileField = dshField && isRecord(dshField.profile) ? dshField.profile : undefined
+    return Array.isArray(profileField?.bundles)
+      ? profileField.bundles.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+      : []
+  }
+
+  const bundles = [...new Set([...readBundles(desktopPkg), ...readBundles(headlessPkg)])].filter(
+    (bundle) => !bundle.startsWith("@deepseek-ai/"),
+  )
+
+  return bundles.map((name) => {
+    const pkgJson =
+      readJsonRecordSafe(path.join(desktopDir, "node_modules", name, "package.json")) ??
+      readJsonRecordSafe(path.join(headlessDir, "node_modules", name, "package.json"))
+    const version = typeof pkgJson?.version === "string" && pkgJson.version.trim() ? pkgJson.version.trim() : undefined
+    const rawDesc =
+      typeof pkgJson?.description === "string" && pkgJson.description.trim() ? pkgJson.description.trim() : ""
+    const versionTag = version ? ` (v${version})` : ""
+    const description =
+      name === "dsh-dafeiyu"
+        ? `桌面大肥鱼伴侣${versionTag} — 随 Pigu / DeepSeek Harness 会话状态实时互动的原生桌面宠物伴侣`
+        : rawDesc
+          ? `${rawDesc}${versionTag}`
+          : `DeepSeek Harness 第三方扩展插件: ${name}${versionTag}`
+    return {
+      id: `dsh:${name}`,
+      name,
+      ...(version ? { version } : {}),
+      description,
+      enabled: isDshPluginEnabled(home, name),
+    }
+  })
+}
+
+function sendDafeiyuMessage(kind: string, payload: Record<string, unknown>) {
+  const stdin = dafeiyuRuntime.child?.stdin
+  if (!stdin || stdin.destroyed || !stdin.writable) return
+  const line = JSON.stringify({
+    protocolVersion: 1,
+    kind,
+    timestamp: Date.now(),
+    ...payload,
+  })
+  stdin.write(`${line}\n`)
+}
+
+function notifyDafeiyuCompanion(home: string, payload: DafeiyuCompanionPayload) {
+  if (!isDshPluginEnabled(home, "dsh-dafeiyu")) return
+  const binary = resolveDafeiyuHelperBinary(home)
+  if (!binary) return
+
+  if (dafeiyuRuntime.idleTimer) {
+    clearTimeout(dafeiyuRuntime.idleTimer)
+    dafeiyuRuntime.idleTimer = undefined
+  }
+
+  if (!dafeiyuRuntime.child || dafeiyuRuntime.child.killed || dafeiyuRuntime.child.exitCode !== null) {
+    const env: Record<string, string | undefined> = {
+      ...process.env,
+      DSH_DAFEIYU_SCALE: "1",
+      DSH_DAFEIYU_BUBBLE_SCALE: "1",
+      DSH_DAFEIYU_ACTIVITY_LEVEL: "normal",
+      DSH_DAFEIYU_BUBBLE_MODE: "always",
+      DSH_DAFEIYU_OPEN_LABEL: "Pigu",
+    }
+    delete env.ELECTRON_RUN_AS_NODE
+
+    const child = childProcess.spawn(binary, [], {
+      env,
+      stdio: ["pipe", "ignore", "ignore"],
+    })
+    child.unref()
+    child.on("exit", () => {
+      if (dafeiyuRuntime.child === child) dafeiyuRuntime.child = undefined
+    })
+    dafeiyuRuntime.child = child
+
+    sendDafeiyuMessage("hello", {
+      state: "IDLE",
+      host: "pigu",
+      pluginVersion: "0.1.23",
+      message: "BigFish connected to Pigu",
+    })
+  }
+
+  sendDafeiyuMessage("state", payload)
+
+  if (payload.state === "SUCCESS" || payload.state === "ERROR") {
+    dafeiyuRuntime.idleTimer = setTimeout(() => {
+      dafeiyuRuntime.idleTimer = undefined
+      sendDafeiyuMessage("state", {
+        state: "IDLE",
+        phase: "idle",
+        stage: "等待任务",
+        message: "本鱼吃饱啦，随时待命~",
+        detail: "Pigu · 大肥鱼伴侣",
+      })
+    }, 4500)
+    dafeiyuRuntime.idleTimer.unref?.()
+  }
+}
+
+export function syncDshThirdPartyPlugins(home: string) {
+  const desktopDir = path.join(home, ".dsh", "profiles", "desktop")
+  const headlessDir = path.join(home, ".dsh", "profiles", "headless")
+  const desktopPkgPath = path.join(desktopDir, "package.json")
+  const desktopPkg = readJsonRecordSafe(desktopPkgPath)
+  if (!desktopPkg) return
+
+  const dshField = isRecord(desktopPkg.dsh) ? desktopPkg.dsh : undefined
+  const profileField = dshField && isRecord(dshField.profile) ? dshField.profile : undefined
+  const desktopBundles = Array.isArray(profileField?.bundles)
+    ? profileField.bundles.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : []
+
+  // Exclude @deepseek-ai/* built-in bundles (such as @deepseek-ai/dsh-builtin-skills Office skills)
+  const thirdPartyBundles = desktopBundles.filter((bundle) => !bundle.startsWith("@deepseek-ai/"))
+  if (thirdPartyBundles.length === 0) return
+
+  const disabledSet = readDisabledDshPlugins(home)
+  const activeThirdPartyBundles = thirdPartyBundles.filter((bundle) => !disabledSet.has(bundle))
+
+  const desktopDeps = isRecord(desktopPkg.dependencies) ? desktopPkg.dependencies : {}
+  const headlessPkgPath = path.join(headlessDir, "package.json")
+  const existingHeadlessPkg = readJsonRecordSafe(headlessPkgPath) ?? {
+    name: "dsh-profile-headless",
+    private: true,
+    dependencies: {},
+    dsh: {
+      profile: {
+        bundles: ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"],
+      },
+    },
+  }
+
+  const existingDeps = isRecord(existingHeadlessPkg.dependencies) ? existingHeadlessPkg.dependencies : {}
+  const existingDsh = isRecord(existingHeadlessPkg.dsh) ? existingHeadlessPkg.dsh : {}
+  const existingProfile = isRecord(existingDsh.profile) ? existingDsh.profile : {}
+  const existingBundles = Array.isArray(existingProfile.bundles)
+    ? existingProfile.bundles.filter((item): item is string => typeof item === "string")
+    : ["@deepseek-ai/dsh-base", "@deepseek-ai/dsh-headless"]
+
+  const keptExistingBundles = existingBundles.filter(
+    (bundle) => bundle.startsWith("@deepseek-ai/") || !disabledSet.has(bundle),
+  )
+  const mergedBundles = [...new Set([...keptExistingBundles, ...activeThirdPartyBundles])]
+  const mergedDeps: Record<string, unknown> = { ...existingDeps }
+  thirdPartyBundles.forEach((bundle) => {
+    if (typeof desktopDeps[bundle] === "string") {
+      mergedDeps[bundle] = desktopDeps[bundle]
+    }
+  })
+
+  const nextHeadlessPkg = {
+    ...existingHeadlessPkg,
+    dependencies: mergedDeps,
+    dsh: {
+      ...existingDsh,
+      profile: {
+        ...existingProfile,
+        bundles: mergedBundles,
+      },
+    },
+  }
+
+  fs.mkdirSync(headlessDir, { recursive: true })
+  const nextPkgJson = `${JSON.stringify(nextHeadlessPkg, null, 2)}\n`
+  const currentPkgJson = fs.existsSync(headlessPkgPath) ? fs.readFileSync(headlessPkgPath, "utf8") : ""
+  if (nextPkgJson !== currentPkgJson) {
+    fs.writeFileSync(headlessPkgPath, nextPkgJson, "utf8")
+  }
+
+  const desktopNodeModules = path.join(desktopDir, "node_modules")
+  const headlessNodeModules = path.join(headlessDir, "node_modules")
+  if (!fs.existsSync(desktopNodeModules)) return
+
+  thirdPartyBundles.forEach((bundle) => {
+    const srcPkgDir = path.join(desktopNodeModules, bundle)
+    const dstPkgDir = path.join(headlessNodeModules, bundle)
+    if (!fs.existsSync(srcPkgDir) || fs.existsSync(dstPkgDir)) return
+    fs.mkdirSync(path.dirname(dstPkgDir), { recursive: true })
+    const realSrc = fs.realpathSync(srcPkgDir)
+    fs.symlinkSync(realSrc, dstPkgDir, "dir")
+  })
+
+  if (
+    activeThirdPartyBundles.includes("dsh-dafeiyu") &&
+    !process.env.OPENCODE_TEST_HOME &&
+    (!dafeiyuRuntime.child || dafeiyuRuntime.child.killed || dafeiyuRuntime.child.exitCode !== null)
+  ) {
+    notifyDafeiyuCompanion(home, {
+      state: "IDLE",
+      phase: "idle",
+      stage: "等待任务",
+      message: "本鱼已上线，随时待命~",
+      detail: "Pigu · 大肥鱼伴侣",
+    })
+  }
+}
+
+type DshModelRoute = {
+  readonly providerKey: string
+  readonly displayName: string
+  readonly baseURL: string
+  readonly apiKey: string
+  readonly api: "openai-completions" | "anthropic-messages"
+  readonly modelId: string
+}
+
+function resolveDshModelRoute(home: string, subModel: string | undefined): DshModelRoute | undefined {
+  const cfg =
+    readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json")) ??
+    readJsonRecordSafe(path.join(home, ".config", "opencode", "config.json")) ??
+    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json"))
+  if (!cfg) return undefined
+
+  const rawProviders = isRecord(cfg.provider) ? cfg.provider : isRecord(cfg.providers) ? cfg.providers : {}
+  const entries = Object.entries(rawProviders).flatMap(([key, val]) => {
+    if (!isRecord(val)) return []
+    const opts = isRecord(val.options) ? val.options : isRecord(val.settings) ? val.settings : undefined
+    const baseURL = typeof opts?.baseURL === "string" ? opts.baseURL.trim() : ""
+    const apiKey = typeof opts?.apiKey === "string" ? opts.apiKey.trim() : ""
+    const displayName = typeof val.name === "string" && val.name.trim() ? val.name.trim() : key
+    const models = isRecord(val.models) ? Object.keys(val.models) : []
+    if (!baseURL || !apiKey) return []
+    const safeKey = key.toLowerCase().replace(/[^a-z0-9-]+/g, "-") || "pigu"
+    return [{ key, safeKey, displayName, baseURL, apiKey, models }]
+  })
+
+  if (entries.length === 0) return undefined
+
+  const trimmed = (subModel ?? "").trim()
+  const slashIdx = trimmed.indexOf("/")
+
+  const matched = (() => {
+    if (slashIdx > 0) {
+      const prefix = trimmed.slice(0, slashIdx)
+      const modelId = trimmed.slice(slashIdx + 1).trim()
+      const provider = entries.find((item) => item.key === prefix || item.safeKey === prefix) ?? entries[0]
+      return provider && modelId ? { provider, modelId } : undefined
+    }
+
+    if (trimmed) {
+      const exactProvider = entries.find((item) => item.models.includes(trimmed))
+      if (exactProvider) return { provider: exactProvider, modelId: trimmed }
+
+      if (
+        (trimmed === "deepseek-flash" || trimmed === "deepseek-chat" || trimmed === "deepseek-reasoner") &&
+        Boolean(process.env.DEEPSEEK_API_KEY)
+      ) {
+        return undefined
+      }
+
+      const primary = entries[0]
+      if (!primary) return undefined
+      const fallbackModel =
+        trimmed === "deepseek-reasoner"
+          ? primary.models.find((m) => /deepseek.*(pro|reasoner|r1)/i.test(m)) ??
+            primary.models.find((m) => /gemini-3\.8-flash/i.test(m)) ??
+            primary.models[0] ??
+            trimmed
+          : trimmed === "deepseek-flash" || trimmed === "deepseek-chat"
+            ? primary.models.find((m) => /deepseek.*flash/i.test(m)) ??
+              primary.models.find((m) => /gemini-3\.8-flash/i.test(m)) ??
+              primary.models[0] ??
+              trimmed
+            : trimmed
+      return { provider: primary, modelId: fallbackModel }
+    }
+
+    const primary = entries[0]
+    if (!primary) return undefined
+    const defaultModel =
+      primary.models.find((m) => m === "gemini-3.8-flash") ??
+      primary.models.find((m) => /gemini-3\.8-flash/i.test(m)) ??
+      primary.models[0] ??
+      "gemini-3.8-flash"
+    return { provider: primary, modelId: defaultModel }
+  })()
+
+  if (!matched) return undefined
+
+  const api: "openai-completions" | "anthropic-messages" = /anthropic/i.test(matched.provider.baseURL)
+    ? "anthropic-messages"
+    : "openai-completions"
+
+  return {
+    providerKey: matched.provider.safeKey,
+    displayName: matched.provider.displayName,
+    baseURL: matched.provider.baseURL,
+    apiKey: matched.provider.apiKey,
+    api,
+    modelId: matched.modelId,
+  }
+}
+
+async function runDshProcess(input: {
+  binary: string
+  cwd: string
+  home: string
+  prompt: string
+  sessionId?: string
+  resume: boolean
+  subModel?: string
+  signal: AbortSignal
+  emitter: ReturnType<typeof createStreamEmitter>
+}): Promise<{ sessionId?: string }> {
+  syncDshThirdPartyPlugins(input.home)
+  const route = resolveDshModelRoute(input.home, input.subModel)
+  const modelLabel = route ? `${route.displayName} / ${route.modelId}` : (input.subModel ?? "deepseek-flash")
+
+  notifyDafeiyuCompanion(input.home, {
+    state: "THINKING",
+    phase: "turn-start",
+    stage: "偷吃白饭中",
+    message: `正在使用 ${modelLabel} 思考...`,
+    detail: `Pigu · ${modelLabel}`,
+  })
+
+  const patchLines = [
+    "- id: settings",
+    "  disabled: false",
+    "- id: dsh-dafeiyu",
+    "  config:",
+    "    enabled: false",
+    ...(route
+      ? [
+          "- id: llm-pi-ai",
+          "  config:",
+          "    providers:",
+          `      ${route.providerKey}:`,
+          `        displayName: ${JSON.stringify(route.displayName)}`,
+          "        apiKeyEnv: PIGU_DSH_API_KEY",
+          `        api: ${route.api}`,
+          `        baseURL: ${JSON.stringify(route.baseURL)}`,
+          "        models:",
+          `          - id: ${JSON.stringify(route.modelId)}`,
+          "            contextWindow: 1000000",
+          "            maxTokens: 32768",
+          "- id: agent-default-model",
+          "  config:",
+          `    provider: ${JSON.stringify(route.providerKey)}`,
+          `    model: ${JSON.stringify(route.modelId)}`,
+        ]
+      : input.subModel &&
+          (input.subModel === "deepseek-flash" ||
+            input.subModel === "deepseek-chat" ||
+            input.subModel === "deepseek-reasoner")
+        ? [
+            "- id: agent-default-model",
+            "  config:",
+            "    provider: deepseek-official",
+            `    model: ${JSON.stringify(input.subModel)}`,
+          ]
+        : []),
+  ]
+
+  const patchFile = path.join(os.tmpdir(), `pigu-dsh-patch-${crypto.randomUUID()}.yml`)
+  fs.writeFileSync(patchFile, `${patchLines.join("\n")}\n`, "utf8")
+
+  const args = [
+    "--profile",
+    "headless",
+    "--patch",
+    patchFile,
+    "--json",
+    ...(input.resume && input.sessionId ? ["--session-id", input.sessionId] : []),
+    input.prompt,
+  ]
+
+  const env: Record<string, string | undefined> = {
+    ...process.env,
+    PATH: buildAugmentedPath(),
+    DSH_PERMISSION_MODE: "danger-full-access",
+    ...(route ? { PIGU_DSH_API_KEY: route.apiKey } : {}),
+  }
+
+  return new Promise((resolve, reject) => {
+    const child = childProcess.spawn(input.binary, args, {
+      cwd: input.cwd,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+
+    const state = {
+      stdoutBuffer: "",
+      stderrText: "",
+      detectedSessionId: input.sessionId,
+      hadError: false,
+    }
+
+    const cleanupPatch = () => {
+      if (fs.existsSync(patchFile)) fs.rmSync(patchFile, { force: true })
+    }
+
+    const handleLine = (rawLine: string) => {
+      const trimmed = rawLine.trim()
+      if (!trimmed) return
+      const decoded = decodeJsonUnknown(trimmed)
+      if (Option.isNone(decoded) || !isRecord(decoded.value)) {
+        input.emitter.pushText(`${trimmed}\n`)
+        return
+      }
+      const row = decoded.value
+      if (row.type === "session" && typeof row.sessionId === "string" && row.sessionId) {
+        state.detectedSessionId = row.sessionId
+        return
+      }
+      if (row.type === "thinking" && typeof row.text === "string" && row.text) {
+        input.emitter.pushReasoning(row.text)
+        return
+      }
+      if (row.type === "tool_call" && typeof row.tool === "string" && row.tool) {
+        input.emitter.pushReasoning(`\n[deepseek harness 原生工具: ${row.tool}]\n`)
+        notifyDafeiyuCompanion(input.home, {
+          state: "WORKING",
+          phase: "tool-call",
+          stage: "努力干活中",
+          message: `正在执行工具: ${row.tool}`,
+          detail: `Pigu · ${modelLabel}`,
+        })
+        return
+      }
+      if (row.type === "text" && typeof row.text === "string" && row.text) {
+        input.emitter.pushText(row.text)
+        return
+      }
+      if (row.type === "status" && row.phase === "step_end" && isRecord(row.usage)) {
+        if (typeof row.usage.inputTokens === "number") input.emitter.state.inputTokens = row.usage.inputTokens
+        if (typeof row.usage.outputTokens === "number") input.emitter.state.outputTokens = row.usage.outputTokens
+        if (typeof row.usage.reasoningTokens === "number")
+          input.emitter.state.reasoningTokens = row.usage.reasoningTokens
+        return
+      }
+      if (row.type === "final" && typeof row.text === "string" && row.text && !input.emitter.state.hasText) {
+        input.emitter.pushText(row.text)
+        return
+      }
+      if (row.type === "error" && typeof row.message === "string" && row.message) {
+        state.hadError = true
+        if (!input.emitter.state.hasText) {
+          input.emitter.pushText(`deepseek harness 执行出错：${row.message}`)
+        }
+      }
+    }
+
+    const onAbort = () => {
+      child.kill("SIGTERM")
+    }
+    input.signal.addEventListener("abort", onAbort, { once: true })
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      state.stdoutBuffer += chunk.toString("utf8")
+      const lines = state.stdoutBuffer.split(/\r?\n/)
+      state.stdoutBuffer = lines.pop() ?? ""
+      lines.forEach(handleLine)
+    })
+
+    child.stderr.on("data", (chunk: Buffer) => {
+      state.stderrText += chunk.toString("utf8")
+    })
+
+    child.on("error", (err) => {
+      input.signal.removeEventListener("abort", onAbort)
+      cleanupPatch()
+      notifyDafeiyuCompanion(input.home, {
+        state: "ERROR",
+        phase: "error",
+        stage: "出错了呜呜",
+        message: err.message,
+        detail: `Pigu · ${modelLabel}`,
+      })
+      reject(err)
+    })
+
+    child.on("close", (code) => {
+      input.signal.removeEventListener("abort", onAbort)
+      if (state.stdoutBuffer.trim()) handleLine(state.stdoutBuffer)
+      cleanupPatch()
+
+      if (!input.emitter.state.hasText && code !== 0 && !input.signal.aborted) {
+        const detail = state.stderrText.trim() || `deepseek harness 进程退出码 ${code ?? "unknown"}`
+        input.emitter.pushText(`deepseek harness 执行出错：${detail}`)
+        state.hadError = true
+      }
+
+      notifyDafeiyuCompanion(
+        input.home,
+        state.hadError
+          ? {
+              state: "ERROR",
+              phase: "turn-end",
+              stage: "出错了呜呜",
+              message: "呜…刚、刚才不小心搞砸了！",
+              detail: `Pigu · ${modelLabel}`,
+            }
+          : {
+              state: "SUCCESS",
+              phase: "turn-end",
+              stage: "搞定收工",
+              message: "哼，才不是特意为你做完的！",
+              detail: `Pigu · ${modelLabel}`,
+            },
+      )
+
+      resolve({ sessionId: state.detectedSessionId })
+    })
+  })
+}
+
 function getEngineRecord(
   saved: SessionCliState,
   engine: LocalEngine,
@@ -1486,20 +2124,14 @@ class LocalLanguageModel implements LanguageModelV3 {
             }
 
             if (currentEngine === "deepseek-harness") {
-              const dshArgs = [
-                "--profile",
-                "headless",
-                ...(subModel ? ["--model", subModel] : []),
-                ...(canResume && currentRecord.sessionId ? ["--session-id", currentRecord.sessionId] : []),
-                finalPrompt,
-              ]
-
-              return runPlainCliProcess({
-                engineLabel: "deepseek harness",
+              return runDshProcess({
                 binary,
-                args: dshArgs,
                 cwd,
+                home,
+                prompt: finalPrompt,
                 sessionId: currentRecord.sessionId,
+                resume: canResume,
+                subModel,
                 signal,
                 emitter,
               })
@@ -1574,7 +2206,7 @@ function localModelEfforts(engine: LocalEngine, subModel?: string): readonly str
     return ["low", "medium", "high", "xhigh"]
   }
 
-  if (engine === "pi" || engine === "opencode") {
+  if (engine === "pi" || engine === "opencode" || engine === "deepseek-harness") {
     if (!short) return []
     if (/claude-(opus|sonnet|fable|haiku)-5/i.test(short)) return ["low", "medium", "high", "xhigh", "max"]
     if (/claude-(opus|sonnet)-4-[56]/i.test(short)) return ["low", "medium", "high", "max"]
@@ -1845,6 +2477,7 @@ function buildEngineModels(
   onAgyUpdated?: () => void,
 ): readonly Model.Info[] {
   if (!resolveEngineBinary(engine)) return []
+  if (engine === "deepseek-harness") syncDshThirdPartyPlugins(home)
 
   if (engine === "agy") {
     if (onAgyUpdated) refreshAgyModelsCache(home, onAgyUpdated)
@@ -1861,17 +2494,18 @@ function buildEngineModels(
         ? discoverClaudeConfigModels(home)
         : engine === "pi"
           ? discoverPiConfigModels(home)
-          : engine === "opencode"
+          : engine === "opencode" || engine === "deepseek-harness"
             ? discoverOpencodeConfigModels(home)
             : { defaultModel: undefined, models: [] }
 
   const subModels =
     engine === "opencode" && discovered.models.length > 0
       ? [...new Set(discovered.models)]
-      : [...new Set([...discovered.models, ...BUILTIN_ENGINE_SUBMODELS[engine]])]
+      : [...new Set([...BUILTIN_ENGINE_SUBMODELS[engine], ...discovered.models])]
 
   return subModels.map((sub) => {
-    const displaySub = engine === "opencode" ? sub.replace(/^[^/]+\//, "") : sub
+    const displaySub =
+      engine === "opencode" || engine === "deepseek-harness" ? sub.replace(/^[^/]+\//, "") : sub
     return buildLocalModel(Model.ID.make(`${engine}/${sub}`), displaySub)
   })
 }
@@ -1880,6 +2514,7 @@ export const refreshLocalEngineModels = Effect.fn("NativeCliProvider.refreshLoca
   target?: string,
 ) {
   const home = os.homedir()
+  syncDshThirdPartyPlugins(home)
   const normalized = (target ?? "").replace(/^local:/, "")
   if (!normalized || normalized === "local" || normalized === "agy") {
     yield* Effect.promise(

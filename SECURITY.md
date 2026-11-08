@@ -1,47 +1,16 @@
-# Security
+# Security Policy
 
-## IMPORTANT
+## Supported Versions
 
-We do not accept AI generated security reports. We receive a large number of
-these and we absolutely do not have the resources to review them all. If you
-submit one that will be an automatic ban from the project.
+| Version | Supported          |
+| ------- | ------------------ |
+| 0.0.x   | :white_check_mark: |
 
-## Threat Model
+## Credential & Data Isolation
 
-### Overview
+- **Pigu** stores all user API keys, OAuth tokens, SSH server configurations, and session history strictly in your local OS user directories (`~/.config/opencode` and `~/.local/share/opencode` on macOS/Linux, `%APPDATA%\opencode` and `%LOCALAPPDATA%\opencode` on Windows).
+- Application packages and release builds never bundle user credentials or session databases.
 
-OpenCode is an AI-powered coding assistant that runs locally on your machine. It provides an agent system with access to powerful tools including shell execution, file operations, and web access.
+## Reporting a Vulnerability
 
-### No Sandbox
-
-OpenCode does **not** sandbox the agent. The permission system exists as a UX feature to help users stay aware of what actions the agent is taking - it prompts for confirmation before executing commands, writing files, etc. However, it is not designed to provide security isolation.
-
-If you need true isolation, run OpenCode inside a Docker container or VM.
-
-### Server Mode
-
-Server mode is opt-in only. When enabled, set `OPENCODE_SERVER_PASSWORD` to require HTTP Basic Auth. Without this, the server runs unauthenticated (with a warning). It is the end user's responsibility to secure the server - any functionality it provides is not a vulnerability.
-
-### Out of Scope
-
-| Category                        | Rationale                                                               |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| **Server access when opted-in** | If you enable server mode, API access is expected behavior              |
-| **Sandbox escapes**             | The permission system is not a sandbox (see above)                      |
-| **LLM provider data handling**  | Data sent to your configured LLM provider is governed by their policies |
-| **MCP server behavior**         | External MCP servers you configure are outside our trust boundary       |
-| **Malicious config files**      | Users control their own config; modifying it is not an attack vector    |
-
----
-
-# Reporting Security Issues
-
-We appreciate your efforts to responsibly disclose your findings, and will make every effort to acknowledge your contributions.
-
-To report a security issue, please use the GitHub Security Advisory ["Report a Vulnerability"](https://github.com/anomalyco/opencode/security/advisories/new) tab.
-
-The team will send a response indicating the next steps in handling your report. After the initial reply to your report, the security team will keep you informed of the progress towards a fix and full announcement, and may ask for additional information or guidance.
-
-## Escalation
-
-If you do not receive an acknowledgement of your report within 6 business days, you may send an email to security@anoma.ly
+If you discover a security vulnerability in Pigu, please report it via [GitHub Security Advisories](https://github.com/AntarcticLu/pigu/security/advisories) or open a private issue on [GitHub](https://github.com/AntarcticLu/pigu/issues).

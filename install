@@ -10,20 +10,20 @@ NC='\033[0m' # No Color
 
 usage() {
     cat <<EOF
-OpenCode Installer
+Pigu Installer
 
 Usage: install.sh [options]
 
 Options:
     -h, --help              Display this help message
-    -v, --version <version> Install a specific version (e.g., 0.0.0-beta-17236)
+    -v, --version <version> Install a specific version (e.g., 0.0.1)
     -b, --binary <path>     Install from a local binary instead of downloading
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
 
 Examples:
-    curl -fsSL https://opencode.ai/v2/install | bash
-    curl -fsSL https://opencode.ai/v2/install | bash -s -- --version 0.0.0-beta-17236
-    ./install --binary /path/to/opencode
+    curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
+    curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash -s -- --version 0.0.1
+    ./install --binary /path/to/pigu
 EOF
 }
 
@@ -174,42 +174,23 @@ else
         exit 1
     fi
 
-    package_scope="@opencode"
+    GITHUB_REPO=${PIGU_GITHUB_REPO:-AntarcticLu/pigu}
     if [ -z "$requested_version" ]; then
-        metadata=$(curl -fsSL https://opencode.ai/update/api/latest/cli/npm || true)
-        specific_version=$(echo "$metadata" | sed -n 's/.*"version":"\([^"]*\)".*/\1/p')
-        package=$(echo "$metadata" | sed -n 's/.*"package":"\([^"]*\)".*/\1/p')
-
-        if [ -z "$specific_version" ] || [ -z "$package" ]; then
-            echo -e "${RED}Failed to fetch version information${NC}"
-            exit 1
+        release_json=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/releases/latest" 2>/dev/null || true)
+        specific_version=$(echo "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
+        specific_version="${specific_version#v}"
+        if [ -z "$specific_version" ]; then
+            specific_version="0.0.1"
         fi
-        package_scope="${package%/cli}"
+        release_base="https://github.com/$GITHUB_REPO/releases/latest/download"
     else
-        # Strip leading 'v' if present
         requested_version="${requested_version#v}"
         specific_version=$requested_version
+        release_base="https://github.com/$GITHUB_REPO/releases/download/v$specific_version"
     fi
 
-    package_name="$package_scope/cli-$target"
-    http_status=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/$package_scope%2fcli-$target/$specific_version" || true)
-    # Older clients install the minimum release before they can migrate package names.
-    if [ "$http_status" = "404" ] && [ -n "$requested_version" ]; then
-        package_name="@opencode-ai/cli-$target"
-        http_status=$(curl -s -o /dev/null -w "%{http_code}" "https://registry.npmjs.org/@opencode-ai%2fcli-$target/$specific_version" || true)
-    fi
-    if [ "$http_status" = "404" ]; then
-        echo -e "${RED}Error: Version ${specific_version} is not available for $target${NC}"
-        echo -e "${MUTED}Available versions: https://www.npmjs.com/package/$package_name?activeTab=versions${NC}"
-        exit 1
-    fi
-    if [ "$http_status" != "200" ]; then
-        echo -e "${RED}Failed to fetch package information${NC}"
-        exit 1
-    fi
-
-    filename="cli-$target-$specific_version.tgz"
-    url="https://registry.npmjs.org/$package_name/-/$filename"
+    filename="pigu-$os-$arch.tar.gz"
+    url="$release_base/$filename"
     binary_name="$SOURCE_APP"
     if [ "$os" = "windows" ]; then
         binary_name="$SOURCE_APP.exe"
@@ -327,8 +308,28 @@ download_and_install() {
     if [ "$os" = "windows" ]; then
         installed_binary="$APP.exe"
     fi
-    mv "$tmp_dir/package/bin/$binary_name" "$INSTALL_DIR/$installed_binary"
+    if [ -f "$tmp_dir/package/bin/$binary_name" ]; then
+        mv "$tmp_dir/package/bin/$binary_name" "$INSTALL_DIR/$installed_binary"
+    elif [ -f "$tmp_dir/bin/$binary_name" ]; then
+        mv "$tmp_dir/bin/$binary_name" "$INSTALL_DIR/$installed_binary"
+    elif [ -f "$tmp_dir/$binary_name" ]; then
+        mv "$tmp_dir/$binary_name" "$INSTALL_DIR/$installed_binary"
+    elif [ -f "$tmp_dir/pigu" ]; then
+        mv "$tmp_dir/pigu" "$INSTALL_DIR/$installed_binary"
+    fi
     chmod 755 "$INSTALL_DIR/$installed_binary"
+    # If the macOS archive also includes Pigu.app, install/overwrite it in /Applications
+    if [ "$os" = "darwin" ] && [ -d "$tmp_dir/Pigu.app" ]; then
+        local app_dest="/Applications/Pigu.app"
+        if [ ! -w "/Applications" ]; then
+            app_dest="$HOME/Applications/Pigu.app"
+            mkdir -p "$HOME/Applications"
+        fi
+        rm -rf "$app_dest"
+        mv "$tmp_dir/Pigu.app" "$app_dest"
+        xattr -cr "$app_dest" 2>/dev/null || true
+        print_message info "${MUTED}Installed Desktop App to: ${NC}$app_dest"
+    fi
     rm -rf "$tmp_dir"
 }
 
@@ -351,6 +352,7 @@ install_legacy_shim() {
     fi
     rm -f "$INSTALL_DIR/opencode2" "$INSTALL_DIR/opencode2.exe" "$INSTALL_DIR/opencode2.cmd"
     if [[ "$shim_os" == "windows" ]]; then
+        cp -f "$INSTALL_DIR/opencode.exe" "$INSTALL_DIR/pigu.exe" 2>/dev/null || true
         cat > "$INSTALL_DIR/opencode2.cmd" <<'EOF'
 @echo off
 "%~dp0opencode.exe" %*
@@ -358,6 +360,8 @@ exit /b %errorlevel%
 EOF
         return
     fi
+    ln -sf "$INSTALL_DIR/opencode" "$INSTALL_DIR/pigu" 2>/dev/null || cp -f "$INSTALL_DIR/opencode" "$INSTALL_DIR/pigu"
+    chmod 755 "$INSTALL_DIR/pigu" 2>/dev/null || true
     cat > "$INSTALL_DIR/opencode2" <<'EOF'
 #!/bin/sh
 exec "$(dirname "$0")/opencode" "$@"
@@ -473,20 +477,15 @@ if [ -n "${GITHUB_ACTIONS-}" ] && [ "${GITHUB_ACTIONS}" == "true" ]; then
 fi
 
 echo -e ""
-echo -e "${MUTED}                    ${NC}             ▄     "
-echo -e "${MUTED}█▀▀█ █▀▀█ █▀▀█ █▀▀▄ ${NC}█▀▀▀ █▀▀█ █▀▀█ █▀▀█"
-echo -e "${MUTED}█░░█ █░░█ █▀▀▀ █░░█ ${NC}█░░░ █░░█ █░░█ █▀▀▀"
-echo -e "${MUTED}▀▀▀▀ █▀▀▀ ▀▀▀▀ ▀  ▀ ${NC}▀▀▀▀ ▀▀▀▀ ▀▀▀▀ ▀▀▀▀"
+echo -e "${ORANGE}🍑 Pigu (屁股) — 新一代多引擎 AI 编程工作台${NC}"
 echo -e ""
-echo -e ""
-echo -e "${MUTED}OpenCode includes free models, to start:${NC}"
+echo -e "${MUTED}To get started:${NC}"
 echo -e ""
 if [[ $path_added == "true" ]]; then
     echo -e "exec \$SHELL   ${MUTED}# Reload PATH (or open a new terminal)${NC}"
 fi
-echo -e "cd <project>  ${MUTED}# Open directory${NC}"
-echo -e "opencode      ${MUTED}# Run command${NC}"
+echo -e "cd <project>  ${MUTED}# Open project directory${NC}"
+echo -e "pigu --help   ${MUTED}# View Pigu CLI commands${NC}"
 echo -e ""
-echo -e "${MUTED}For more information visit ${NC}https://opencode.ai/v2/docs"
-echo -e ""
+echo -e "${MUTED}GitHub Repository: ${NC}https://github.com/AntarcticLu/pigu"
 echo -e ""

@@ -47,7 +47,9 @@ export const CredentialHandler = HttpApiBuilder.group(Api, "server.credential", 
                   ? "delete"
                   : meta.piguAction === "refresh"
                     ? "refresh"
-                    : "upsert",
+                    : meta.piguAction === "toggle-dsh-plugin"
+                      ? "toggle-dsh-plugin"
+                      : "upsert",
               providerID: Predicate.isString(meta.providerID) ? meta.providerID : undefined,
               name: Predicate.isString(meta.name) ? meta.name : ctx.payload.label,
               baseURL: Predicate.isString(meta.baseURL) ? meta.baseURL : undefined,

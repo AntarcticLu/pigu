@@ -1,5 +1,6 @@
 export * as PiguProvider from "./pigu.js"
 
+import os from "os"
 import path from "path"
 import { applyEdits, modify, parse } from "jsonc-parser"
 import { define } from "@opencode/plugin/effect/plugin"
@@ -23,7 +24,7 @@ import { Variant } from "../../variant.js"
 import type { PluginInternal } from "../internal.js"
 import { configuredSettings } from "./configured.js"
 import { activeCredential } from "./credential-settings.js"
-import { LOCAL_PROVIDER_ID, refreshLocalEngineModels } from "./native-cli.js"
+import { LOCAL_PROVIDER_ID, refreshLocalEngineModels, setDshPluginEnabled } from "./native-cli.js"
 import { ProviderRefresh } from "./refresh.js"
 
 const providerID = Provider.ID.make("pigu")
@@ -415,7 +416,7 @@ function deriveProviderID(name: string, baseURL: string): string {
 }
 
 export const manageCustomProvider = Effect.fn("PiguProvider.manageCustomProvider")(function* (input: {
-  readonly action: "upsert" | "delete" | "refresh"
+  readonly action: "upsert" | "delete" | "refresh" | "toggle-dsh-plugin"
   readonly providerID?: string
   readonly name?: string
   readonly baseURL?: string
@@ -426,6 +427,14 @@ export const manageCustomProvider = Effect.fn("PiguProvider.manageCustomProvider
   const http = HttpClient.filterStatusOk(yield* HttpClient.HttpClient)
   const credential = yield* Credential.Service
   const bus = yield* Bus.Service
+
+  if (input.action === "toggle-dsh-plugin") {
+    const pluginName = (input.providerID ?? input.name ?? "").trim()
+    if (pluginName) {
+      setDshPluginEnabled(os.homedir(), pluginName, input.apiKey !== "disabled")
+    }
+    return
+  }
 
   if (
     input.action === "refresh" &&

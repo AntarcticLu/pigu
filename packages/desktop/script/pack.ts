@@ -46,7 +46,9 @@ if (!app && os === "linux") {
 }
 
 if (!app && os === "mac") {
-  await $`bunx electron-builder ${flags} --dir -c.mac.identity=null`
+  const hasActool = (await $`actool --version`.quiet().nothrow()).exitCode === 0
+  const iconFlag = hasActool ? [] : ["-c.mac.icon=resources/icons/icon.icns"]
+  await $`bunx electron-builder ${flags} --dir -c.mac.identity=null ${iconFlag}`
   const parent = path.join("dist", cli.cpu === "arm64" ? "mac-arm64" : "mac")
   const bundles = (await readdir(parent)).filter((file) => file.endsWith(".app"))
 

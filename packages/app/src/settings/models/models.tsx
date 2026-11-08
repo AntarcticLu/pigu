@@ -191,10 +191,11 @@ export const SettingsModels: Component<{
   }
 
   const isDeviceExpanded = (entry: SettingsServer) =>
-    Boolean(query().trim()) || Boolean(expandedDevices[entry.key])
+    Boolean(query().trim()) || (expandedDevices[entry.key] ?? !entry.source)
 
-  const toggleDevice = (key: string) => {
-    setExpandedDevices(key, !expandedDevices[key])
+  const toggleDevice = (key: string, defaultExpanded = false) => {
+    const current = expandedDevices[key] ?? defaultExpanded
+    setExpandedDevices(key, !current)
   }
 
   return (
@@ -231,7 +232,7 @@ export const SettingsModels: Component<{
                       ) {
                         return
                       }
-                      toggleDevice(entry.key)
+                      toggleDevice(entry.key, !entry.source)
                     }}
                   >
                     <button
@@ -239,7 +240,7 @@ export const SettingsModels: Component<{
                       data-action={`device-toggle-${entry.key}`}
                       aria-expanded={isDeviceExpanded(entry)}
                       class="flex size-5 shrink-0 items-center justify-center rounded text-v2-icon-icon-muted hover:text-v2-icon-icon-base focus-visible:outline-none"
-                      onClick={() => toggleDevice(entry.key)}
+                      onClick={() => toggleDevice(entry.key, !entry.source)}
                     >
                       <Icon
                         name="chevron-down"

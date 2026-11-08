@@ -10,6 +10,7 @@ import type { PersistentPty } from "./persistent-pty.js"
 import { Cause, Context, Effect, Exit, Latch, Layer, Logger, Queue, References, Scope, Semaphore } from "effect"
 import { Bus } from "./bus.js"
 import { PluginHost } from "./plugin/host.js"
+import { discoverDshThirdPartyPlugins } from "./plugin/provider/native-cli.js"
 import { type Failure, type Generation, Service } from "./plugin/service.js"
 import { State } from "./state.js"
 
@@ -48,7 +49,17 @@ const layer = Layer.effect(
       () => bus.publish(Plugin.Event.Updated, {}).pipe(Effect.asVoid),
     )
     const list = Effect.fn("Plugin.list")(function* () {
-      return inventory
+      const dshPlugins: Plugin.Info[] = discoverDshThirdPartyPlugins().map((item) => ({
+        id: Plugin.ID.make(item.id),
+        source: {
+          type: "package" as const,
+          target: item.description,
+          ...(item.version ? { version: item.version } : {}),
+        },
+        features: { server: true as const },
+        state: { status: "active" as const },
+      }))
+      return [...inventory, ...dshPlugins]
     })
     const gui = Effect.fn("Plugin.gui")(function* (id: Plugin.ID) {
       const gui = active.get(id)?.plugin.gui

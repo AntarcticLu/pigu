@@ -318,10 +318,11 @@ export const SettingsExtensions: Component<{
       if (item.source.type === "builtin") continue
       const label = pluginLabel(item)
       const id = item.id ?? label
+      const isDsh = id.startsWith("dsh:")
 
       if (scopeStore.isPluginRemoved(id)) continue
       const installed = host.installed().find((inst) => inst.id === id && !inst.builtin)
-      const target =
+      const descFromSource =
         item.source.type === "package"
           ? item.source.target
           : item.source.type === "local"
@@ -330,10 +331,11 @@ export const SettingsExtensions: Component<{
       byID.set(id, {
         id,
         name: label,
-        target,
-        description: target,
+        target: isDsh ? label : descFromSource,
+        description: descFromSource,
         enabled: installed?.enabled ?? true,
         custom: false,
+        detected: isDsh ? true : undefined,
       })
     }
 
@@ -354,6 +356,8 @@ export const SettingsExtensions: Component<{
     for (const custom of scopeStore.customPlugins()) {
       if (scopeStore.isPluginRemoved(custom.id)) continue
       const builtinLocal = BUILTIN_LOCAL_AGENT_PLUGINS.find((item) => item.id === custom.id)
+      const existing = byID.get(custom.id)
+      const isDsh = custom.id.startsWith("dsh:")
       const cleanedName = builtinLocal ? stripLegacyLocalPluginSuffix(custom.name) : custom.name
 
       const isOldDefaultDesc =
@@ -367,10 +371,13 @@ export const SettingsExtensions: Component<{
         name: cleanedName,
         target: custom.target,
         description:
-          (!isOldDefaultDesc && custom.description) || builtinLocal?.description || custom.target,
+          (!isOldDefaultDesc && custom.description) ||
+          builtinLocal?.description ||
+          existing?.description ||
+          custom.target,
         enabled: custom.enabled,
         custom: true,
-        detected: builtinLocal ? hasLocalEngine(builtinLocal.modelID) : undefined,
+        detected: builtinLocal ? hasLocalEngine(builtinLocal.modelID) : isDsh ? true : existing?.detected,
       })
     }
 
@@ -382,12 +389,11 @@ export const SettingsExtensions: Component<{
           : item.enabled,
       }))
       .toSorted((a, b) => {
+        if (Boolean(a.detected) !== Boolean(b.detected)) return a.detected ? -1 : 1
         const aRank = localOrder.get(a.id)
         const bRank = localOrder.get(b.id)
 
         if (aRank !== undefined && bRank !== undefined) {
-          if (Boolean(a.detected) !== Boolean(b.detected)) return a.detected ? -1 : 1
-
           return aRank - bRank
         }
 
@@ -435,7 +441,9 @@ export const SettingsExtensions: Component<{
       Promise.resolve(refetchPlugins()).catch(() => undefined),
     ])
     setPluginForm("scanning", false)
-    const detectedCount = plugins().filter((item) => item.id.startsWith("local:") && item.detected).length
+    const detectedCount = plugins().filter(
+      (item) => (item.id.startsWith("local:") || item.id.startsWith("dsh:")) && item.detected,
+    ).length
     showToast({
       variant: "success",
       title: language.tr(
@@ -488,6 +496,23 @@ export const SettingsExtensions: Component<{
   const togglePlugin = (item: PluginDisplayRow, enabled: boolean) => {
     if (props.directory) {
       scopeStore.setProjectPluginEnabled(props.directory, item.id, enabled)
+    }
+
+    if (item.id.startsWith("dsh:")) {
+      void serverSdk.api.credential
+        .create({
+          integrationID: "pigu",
+          label: item.target || item.name,
+          value: {
+            type: "key",
+            key: enabled ? "enabled" : "disabled",
+            metadata: {
+              piguAction: "toggle-dsh-plugin",
+              providerID: item.target || item.name,
+            },
+          },
+        })
+        .catch(() => undefined)
     }
 
     if (item.custom) {
@@ -886,7 +911,12 @@ export const SettingsExtensions: Component<{
                         <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                           <div class="flex items-center gap-1.5">
                             <span class="settings-extension-name truncate">{item.name}</span>
-                            <Show when={item.id.startsWith("local:")}>
+                            <Show when={item.id.startsWith("dsh:")}>
+                              <span class="shrink-0 rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] leading-none font-medium text-sky-600 dark:text-sky-400">
+                                {language.tr("DSH 插件", "DSH Plugin")}
+                              </span>
+                            </Show>
+                            <Show when={item.id.startsWith("local:") || item.id.startsWith("dsh:")}>
                               <Show
                                 when={item.detected}
                                 fallback={
