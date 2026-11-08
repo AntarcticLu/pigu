@@ -667,7 +667,11 @@ function ProjectRow(props: {
           type="button"
           class="flex h-full min-w-0 flex-1 shrink-0 cursor-default items-center gap-1.5 rounded-[6px] bg-transparent px-2 text-start text-[13px] leading-[var(--line-height-compact)] text-v2-text-text-muted [font-weight:500] transition-colors duration-[120ms] ease-in-out group-hover/project:text-v2-text-text-base focus-visible:text-v2-text-text-base focus-visible:outline-none"
           aria-expanded={props.expanded}
-          title={props.project.worktree}
+          title={
+            props.isLocal
+              ? props.project.worktree
+              : `${tr("远程", "Remote")} · ${serverName(props.server) || tr("远程", "Remote")}: ${props.project.worktree}`
+          }
           onClick={props.onToggle}
         >
           <span class="flex size-4 shrink-0 items-center justify-center">
@@ -677,13 +681,13 @@ function ProjectRow(props: {
             {displayName(props.project)}
           </span>
           <span
-            class={`shrink-0 rounded px-1 py-0.5 text-[10px] leading-none font-medium ${
+            class={`max-w-[84px] shrink-0 truncate rounded px-1 py-0.5 text-[10px] leading-none font-medium ${
               props.isLocal
                 ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
                 : "bg-blue-500/10 text-blue-600 dark:text-blue-400"
             }`}
           >
-            {props.isLocal ? tr("本地", "Local") : tr("远程", "Remote")}
+            {props.isLocal ? tr("本地", "Local") : serverName(props.server) || tr("远程", "Remote")}
           </span>
           <Show when={props.sessionCount > 0}>
             <span class="shrink-0 text-[11px] text-v2-text-text-faint group-hover/project:hidden">

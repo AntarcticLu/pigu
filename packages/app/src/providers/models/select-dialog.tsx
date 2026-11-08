@@ -31,7 +31,8 @@ import { ModelTooltip } from "./tooltip"
 import { ModelDetails } from "./details"
 import { useLanguage } from "@/runtime/i18n/language"
 import { ExternalLink } from "@/runtime/platform/external-link"
-import { useData } from "@/runtime/server/current"
+import { useData, useServer } from "@/runtime/server/current"
+import { serverName } from "@/runtime/server/registry"
 import { useWorkspaceLocation } from "@/workspaces/location"
 import { createModelUsage, ModelUsageTag } from "@/usage/model"
 import { createSafeTriangle } from "@/shell/commands/safe-triangle"
@@ -628,6 +629,7 @@ function ChatgptPlanFooter() {
 export function DialogSelectModel(props: { provider?: string; model?: ModelState }) {
   const dialog = useDialog()
   const language = useLanguage()
+  const server = useServer()
 
   const controller = createModelSelectorController({
     model: props.model,
@@ -1077,8 +1079,19 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
                   />
                 </div>
                 <div data-slot="model-dialog-providers">
-                  <div data-slot="model-dialog-column-title">
-                    {language.locale().toLowerCase().startsWith("en") ? "Providers" : "供应商"}
+                  <div data-slot="model-dialog-column-title" class="flex items-center justify-between gap-1.5">
+                    <span>{language.locale().toLowerCase().startsWith("en") ? "Providers" : "供应商"}</span>
+                    <span
+                      class={`max-w-[96px] truncate rounded px-1.5 py-0.5 text-[10px] leading-none font-medium normal-case tracking-normal ${
+                        server.isLocal
+                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                          : "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                      }`}
+                    >
+                      {server.isLocal
+                        ? language.tr("本地", "Local")
+                        : serverName(server.conn) || language.tr("远程", "Remote")}
+                    </span>
                   </div>
                   <div data-slot="model-dialog-providers-scroll">
                     <For each={groups()}>
@@ -1112,6 +1125,16 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
                 <Show when={!row.group.title && labels.workspace(row.item.provider)}>
                   {(workspace) => <Badge class="shrink-0">{workspace()}</Badge>}
                 </Show>
+                <span class="shrink-0 rounded bg-v2-overlay-simple-overlay-hover px-1.5 py-0.5 text-[10px] leading-none text-v2-text-text-muted">
+                  {row.item.provider.id === "local"
+                    ? server.isLocal
+                      ? language.tr("本机 CLI", "Local CLI")
+                      : language.tr(
+                          `远程 CLI · ${serverName(server.conn) || "SSH"}`,
+                          `Remote CLI · ${serverName(server.conn) || "SSH"}`,
+                        )
+                    : language.tr("云端 API", "Cloud API")}
+                </span>
                 <span class="shrink-0 text-11-regular text-v2-text-text-faint">({row.group.items.length})</span>
               </span>
             )}

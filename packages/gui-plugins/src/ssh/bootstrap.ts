@@ -67,6 +67,7 @@ function remoteConfigSyncScript() {
   printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexport OPENCODE_DB="opencode-local.db"\\nexport OPENCODE_CONFIG_DIR="$HOME/.config/pigu"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
   chmod 755 "$HOME/.pigu/bin/pigu"
   cp "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu" 2>/dev/null || true
+  cp "$HOME/.pigu/bin/pigu" "/usr/local/bin/pigu" 2>/dev/null || true
   pigu_config_changed=1
 fi`
   if (!b64) {
