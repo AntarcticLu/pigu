@@ -644,6 +644,7 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
   const [store, setStore] = createStore({
     search: "",
     selectedGroup: "",
+    deviceCollapsed: false,
     flyout: "",
     keyboard: true,
     navigated: false,
@@ -1079,38 +1080,63 @@ export function DialogSelectModel(props: { provider?: string; model?: ModelState
                   />
                 </div>
                 <div data-slot="model-dialog-providers">
-                  <div data-slot="model-dialog-column-title" class="flex items-center justify-between gap-1.5">
-                    <span>{language.locale().toLowerCase().startsWith("en") ? "Providers" : "供应商"}</span>
-                    <span
-                      class={`max-w-[96px] truncate rounded px-1.5 py-0.5 text-[10px] leading-none font-medium normal-case tracking-normal ${
-                        server.isLocal
-                          ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
-                          : "bg-blue-500/10 text-blue-600 dark:text-blue-400"
-                      }`}
-                    >
-                      {server.isLocal
-                        ? language.tr("本地", "Local")
-                        : serverName(server.conn) || language.tr("远程", "Remote")}
-                    </span>
+                  <div data-slot="model-dialog-column-title">
+                    {language.tr("设备 → 供应商", "Device → Provider")}
                   </div>
                   <div data-slot="model-dialog-providers-scroll">
-                    <For each={groups()}>
-                      {(group) => (
-                        <button
-                          type="button"
-                          data-slot="model-dialog-provider-item"
-                          data-active={activeGroupKey() === group.category ? "" : undefined}
-                          data-current={currentGroupKey() === group.category ? "" : undefined}
-                          onClick={() => {
-                            setStore({ selectedGroup: group.category, flyout: "", keyboard: true })
-                          }}
-                        >
-                          <ProviderModelIcon provider={group.items[0].provider} class="size-4 shrink-0" />
-                          <span class="min-w-0 flex-1 truncate">{labels.name(group.items[0].provider)}</span>
-                          <span data-slot="model-dialog-provider-count">{group.items.length}</span>
-                        </button>
-                      )}
-                    </For>
+                    <button
+                      type="button"
+                      data-slot="model-dialog-provider-item"
+                      class="font-medium text-v2-text-text-base"
+                      aria-expanded={!store.deviceCollapsed}
+                      onClick={() => setStore("deviceCollapsed", (v) => !v)}
+                    >
+                      <Icon
+                        name="chevron-down"
+                        size="small"
+                        class="size-3.5 shrink-0 text-v2-icon-icon-muted transition-transform"
+                        classList={{ "-rotate-90": store.deviceCollapsed }}
+                      />
+                      <Icon
+                        name={server.isLocal ? "monitor" : "server"}
+                        size="small"
+                        class="size-3.5 shrink-0 text-v2-icon-icon-muted"
+                      />
+                      <span class="min-w-0 flex-1 truncate">
+                        {server.isLocal
+                          ? language.tr("本机", "This Computer")
+                          : serverName(server.conn) || language.tr("远程设备", "Remote")}
+                      </span>
+                      <span
+                        class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${
+                          server.isLocal
+                            ? "bg-emerald-500/10 text-emerald-600 dark:text-emerald-400"
+                            : "bg-blue-500/10 text-blue-600 dark:text-blue-400"
+                        }`}
+                      >
+                        {server.isLocal ? language.tr("本地", "Local") : "SSH"}
+                      </span>
+                    </button>
+                    <Show when={!store.deviceCollapsed}>
+                      <For each={groups()}>
+                        {(group) => (
+                          <button
+                            type="button"
+                            data-slot="model-dialog-provider-item"
+                            class="!ps-5"
+                            data-active={activeGroupKey() === group.category ? "" : undefined}
+                            data-current={currentGroupKey() === group.category ? "" : undefined}
+                            onClick={() => {
+                              setStore({ selectedGroup: group.category, flyout: "", keyboard: true })
+                            }}
+                          >
+                            <ProviderModelIcon provider={group.items[0].provider} class="size-4 shrink-0" />
+                            <span class="min-w-0 flex-1 truncate">{labels.name(group.items[0].provider)}</span>
+                            <span data-slot="model-dialog-provider-count">{group.items.length}</span>
+                          </button>
+                        )}
+                      </For>
+                    </Show>
                   </div>
                 </div>
               </>

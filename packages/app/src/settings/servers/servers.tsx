@@ -6,7 +6,7 @@ import { ServerHealthIndicator } from "@/servers/registry/row"
 import { PluginServerRow } from "@/servers/registry/plugin-row"
 import { AddServerMenu } from "@/servers/registry/add-menu"
 import { useLanguage } from "@/runtime/i18n/language"
-import { ServerConnection } from "@/runtime/server/registry"
+import { ServerConnection, useServers } from "@/runtime/server/registry"
 import { isServerFailed, isServerUnauthorized } from "@/runtime/server/health-machine"
 import { useServerCollectionController } from "@/servers/registry/controller"
 import { DialogServer } from "@/servers/connect/dialog"
@@ -116,9 +116,13 @@ function SettingsServersHeader(props: { title: string; onAddServer: () => void }
   )
 }
 
-function ServerConnectionRow(props: { entry: SettingsServer; onServerChange?: (server: ServerConnection.Any) => void }) {
+export function ServerConnectionRow(props: {
+  entry: SettingsServer
+  onServerChange?: (server: ServerConnection.Any) => void
+}) {
   const dialog = useDialog()
   const language = useLanguage()
+  const servers = useServers()
   const controller = useServerCollectionController()
   const health = createMemo(() => controller.collection.health()[props.entry.key])
 
@@ -140,9 +144,16 @@ function ServerConnectionRow(props: { entry: SettingsServer; onServerChange?: (s
               <div class="settings-servers-lead">
                 <ServerHealthIndicator health={health()} />
                 <div class="settings-servers-copy">
-                  <bdi class="settings-servers-name" dir="auto">
-                    {props.entry.name}
-                  </bdi>
+                  <span class="flex min-w-0 items-center gap-1.5">
+                    <bdi class="settings-servers-name truncate" dir="auto">
+                      {props.entry.name}
+                    </bdi>
+                    <Show when={servers.local(server())}>
+                      <span class="shrink-0 rounded-[3px] border border-v2-border-border-base px-1 py-0.5 text-[9px] leading-none text-v2-text-text-muted">
+                        {language.tr("本地", "Local")}
+                      </span>
+                    </Show>
+                  </span>
                   <bdi class="settings-servers-meta" dir="ltr">
                     {ServerConnection.http(server())?.url}
                   </bdi>
@@ -168,7 +179,7 @@ function ServerConnectionRow(props: { entry: SettingsServer; onServerChange?: (s
   )
 }
 
-function ServerShell(props: { server: ServerConnection.Any; action?: string }) {
+export function ServerShell(props: { server: ServerConnection.Any; action?: string }) {
   const controller = createServerShellController(() => props.server)
 
   return <ShellSetting controller={controller} action={props.action} />

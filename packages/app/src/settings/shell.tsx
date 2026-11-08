@@ -179,7 +179,7 @@ function RootSettings() {
 
     if (view.type !== "root") return
 
-    if (view.tab === "providers") {
+    if (view.tab === "providers" || view.tab === "servers") {
       surface.open("models")
 
       return
@@ -206,11 +206,6 @@ function RootSettings() {
       items: [
         ...serverTabs.map((item) => ({ value: item.value, icon: item.icon, label: language.tr(item.zh, item.en) })),
         ...rootClientTabs.map((item) => ({ value: item.value, icon: item.icon, label: language.tr(item.zh, item.en) })),
-        {
-          value: "servers",
-          icon: pageIcons.servers,
-          label: "SSH",
-        },
       ],
     },
   ])
@@ -226,6 +221,13 @@ function RootSettings() {
       groups={groups()}
       onChange={change}
     >
+      <Tabs.Content value="models" class="settings-panel">
+        <SettingsModels
+          active={activeTab() === "models"}
+          provider={state.modelProvider}
+          onReveal={() => setState("modelProvider", undefined)}
+        />
+      </Tabs.Content>
       <Tabs.Content value="general" class="settings-panel">
         <SettingsGeneral />
       </Tabs.Content>
@@ -251,7 +253,7 @@ function RootSettings() {
         fallback={
           <Show when={surface.server()}>
             {(entry) => (
-              <For each={serverTabs}>
+              <For each={serverTabs.filter((item) => item.value !== "models")}>
                 {(item) => (
                   <Tabs.Content value={item.value} class="settings-panel">
                     <SettingsServerUnavailable
@@ -259,7 +261,7 @@ function RootSettings() {
                       title={language.t(serverPages[item.value].title)}
                       description={language.t(serverPages[item.value].description)}
                       headerAction={<SettingsServerSwitcher />}
-                      onManage={() => surface.openServers(entry().key)}
+                      onManage={() => surface.open("models")}
                       onServerChange={selectServer}
                     />
                   </Tabs.Content>
@@ -279,14 +281,6 @@ function RootSettings() {
                   setState("modelProvider", providerID)
                   surface.select("models")
                 }}
-              />
-            </Tabs.Content>
-            <Tabs.Content value="models" class="settings-panel">
-              <SettingsModels
-                active={activeTab() === "models"}
-                provider={state.modelProvider}
-                headerAction={<SettingsServerSwitcher />}
-                onReveal={() => setState("modelProvider", undefined)}
               />
             </Tabs.Content>
             <Tabs.Content value="extensions" class="settings-panel">

@@ -33,7 +33,11 @@ export function serverName(conn?: ServerConnection.Any, ignoreDisplayName = fals
 export function serverLabel(conn: ServerConnection.Any, current?: { hostname?: string; fallback: string }) {
   if (conn.displayName) return conn.displayName
 
-  if (current) return current.hostname || current.fallback
+  if (current) {
+    const host = current.hostname?.trim()
+
+    return host && host.toLowerCase() !== "bogon" ? host : current.fallback
+  }
 
   return serverName(conn)
 }

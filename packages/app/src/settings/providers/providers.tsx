@@ -27,7 +27,7 @@ import { createStore } from "solid-js/store"
 import { Predicate } from "effect"
 import { useLanguage } from "@/runtime/i18n/language"
 import { useServerSDK } from "@/runtime/server/client"
-import { useData } from "@/runtime/server/current"
+import { useData, useServer } from "@/runtime/server/current"
 import { formatServerError } from "@/runtime/server/errors"
 import { CONSOLE_INTEGRATION } from "@/providers/connect/controller"
 import { DialogConnectProvider, useProviderConnectController } from "@/providers/connect/dialog"
@@ -79,6 +79,7 @@ export const SettingsProviders: Component<{
 }> = (props) => {
   const dialog = useDialog()
   const language = useLanguage()
+  const server = useServer()
   const serverSdk = useServerSDK()
   const data = useData()
   const providers = useProviders(() => props.directory)
@@ -609,7 +610,9 @@ export const SettingsProviders: Component<{
   }
 
   const type = (item: ProviderItem) => {
-    if (item.id === "local" || item.id.startsWith("local:")) return language.tr("本地插件", "Local Plugin")
+    if (item.id === "local" || item.id.startsWith("local:")) {
+      return server.isLocal ? language.tr("本机 CLI", "Local CLI") : language.tr("远程 CLI", "Remote CLI")
+    }
 
     const current = source(item)
 
