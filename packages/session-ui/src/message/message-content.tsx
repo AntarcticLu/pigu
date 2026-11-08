@@ -93,9 +93,52 @@ export async function writeClipboard(text: string): Promise<boolean> {
 
 type MetaItem = { label: string; variant?: boolean }
 
+export function formatProviderModelLabel(
+  data: ReturnType<typeof useData>,
+  model: { providerID: string; id: string },
+) {
+  const match = data.store.provider?.all?.get(model.providerID)
+  const rawModelName =
+    match?.models?.[model.id]?.name ??
+    (model.providerID === "local" && model.id.includes("/") ? model.id.split("/").slice(1).join("/") : model.id)
+
+  const providerName = (() => {
+    if (model.providerID === "local") {
+      const engine = model.id.includes("/") ? model.id.split("/")[0]! : model.id
+
+      if (engine === "agy") return "antigravity"
+
+      if (engine === "deepseek-harness") return "deepseek harness"
+
+      return engine
+    }
+
+    return match?.name || model.providerID
+  })()
+
+  return providerName ? `${providerName} / ${rawModelName}` : rawModelName
+}
+
+export function resolveProviderIconID(model: { providerID: string; id: string }) {
+  if (model.providerID !== "local") return model.providerID
+  const engine = model.id.includes("/") ? model.id.split("/")[0]! : model.id
+
+  if (engine === "agy") return "google"
+
+  if (engine === "claude") return "anthropic"
+
+  if (engine === "codex") return "openai"
+
+  if (engine === "deepseek-harness") return "deepseek"
+
+  if (engine === "grok") return "xai"
+
+  return engine
+}
+
 // The variant follows the model name without a separator, so the model leads.
 function modelItems(data: ReturnType<typeof useData>, model: SessionMessageAssistant["model"]): MetaItem[] {
-  const name = data.store.provider?.all?.get(model.providerID)?.models?.[model.id]?.name ?? model.id
+  const name = formatProviderModelLabel(data, model)
 
   if (!model.variant || model.variant === "default") return [{ label: name }]
 
