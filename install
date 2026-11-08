@@ -175,8 +175,12 @@ else
     fi
 
     GITHUB_REPO=${PIGU_GITHUB_REPO:-AntarcticLu/pigu}
+    if [ "$os" = "linux" ] && [ -f /etc/network_turbo ] && [ -z "${http_proxy:-}" ]; then
+        # AutoDL Linux containers provide /etc/network_turbo to accelerate GitHub downloads
+        . /etc/network_turbo >/dev/null 2>&1 || true
+    fi
     if [ -z "$requested_version" ]; then
-        release_json=$(curl -fsSL "https://api.github.com/repos/$GITHUB_REPO/releases/latest" 2>/dev/null || true)
+        release_json=$(curl -fsSL --connect-timeout 8 --max-time 12 "https://api.github.com/repos/$GITHUB_REPO/releases/latest" 2>/dev/null || true)
         specific_version=$(echo "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
         specific_version="${specific_version#v}"
         if [ -z "$specific_version" ]; then
@@ -286,7 +290,7 @@ download_with_progress() {
 }
 
 download_and_install() {
-    print_message info "\n${MUTED}Installing ${NC}$APP ${MUTED}version: ${NC}$specific_version"
+    print_message info "\n${MUTED}Installing ${NC}pigu ${MUTED}version: ${NC}$specific_version"
     local tmp_dir="${TMPDIR:-/tmp}/opencode_install_$$"
     mkdir -p "$tmp_dir"
 
@@ -334,12 +338,14 @@ download_and_install() {
 }
 
 install_from_binary() {
-    print_message info "\n${MUTED}Installing ${NC}$APP ${MUTED}from: ${NC}$binary_path"
+    print_message info "\n${MUTED}Installing ${NC}pigu ${MUTED}from: ${NC}$binary_path"
     local installed_binary="$APP"
     case "$(uname -s)" in
         MINGW*|MSYS*|CYGWIN*) installed_binary="$APP.exe" ;;
     esac
-    cp "$binary_path" "$INSTALL_DIR/$installed_binary"
+    if [ "$binary_path" != "$INSTALL_DIR/$installed_binary" ]; then
+        cp "$binary_path" "$INSTALL_DIR/$installed_binary"
+    fi
     chmod 755 "$INSTALL_DIR/$installed_binary"
 }
 
@@ -362,6 +368,9 @@ EOF
     fi
     ln -sf "$INSTALL_DIR/opencode" "$INSTALL_DIR/pigu" 2>/dev/null || cp -f "$INSTALL_DIR/opencode" "$INSTALL_DIR/pigu"
     chmod 755 "$INSTALL_DIR/pigu" 2>/dev/null || true
+    mkdir -p "$HOME/.local/bin" "$HOME/.pigu/bin" 2>/dev/null || true
+    ln -sf "$INSTALL_DIR/opencode" "$HOME/.local/bin/pigu" 2>/dev/null || cp -f "$INSTALL_DIR/opencode" "$HOME/.local/bin/pigu" 2>/dev/null || true
+    ln -sf "$INSTALL_DIR/opencode" "$HOME/.pigu/bin/pigu" 2>/dev/null || cp -f "$INSTALL_DIR/opencode" "$HOME/.pigu/bin/pigu" 2>/dev/null || true
     cat > "$INSTALL_DIR/opencode2" <<'EOF'
 #!/bin/sh
 exec "$(dirname "$0")/opencode" "$@"
@@ -386,10 +395,10 @@ add_to_path() {
     if grep -Fxq "$command" "$config_file"; then
         print_message info "Command already exists in $config_file, skipping write."
     elif [[ -w $config_file ]]; then
-        echo -e "\n# opencode" >> "$config_file"
+        echo -e "\n# pigu" >> "$config_file"
         echo "$command" >> "$config_file"
         path_added=true
-        print_message info "${MUTED}Successfully added ${NC}opencode ${MUTED}to \$PATH in ${NC}$config_file"
+        print_message info "${MUTED}Successfully added ${NC}pigu ${MUTED}to \$PATH in ${NC}$config_file"
     else
         print_message warning "Manually add the directory to $config_file (or similar):"
         print_message info "  $command"

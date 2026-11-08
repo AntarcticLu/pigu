@@ -27,6 +27,7 @@ export function discoverScript(options: { fromPath?: boolean; cache?: { director
   return `cli=${options.fromPath ? "$(command -v pigu || command -v opencode || true)" : '""'}
 if [ -z "$cli" ] && [ -x "$HOME/.pigu/bin/pigu" ]; then cli="$HOME/.pigu/bin/pigu"; fi
 if [ -z "$cli" ] && [ -x "$HOME/.local/bin/pigu" ]; then cli="$HOME/.local/bin/pigu"; fi
+if [ -z "$cli" ] && [ -x "$HOME/.opencode/bin/pigu" ]; then cli="$HOME/.opencode/bin/pigu"; fi
 if [ -z "$cli" ] && [ -x "$HOME/.opencode/bin/opencode" ]; then cli="$HOME/.opencode/bin/opencode"; fi
 ${
   options.cache
@@ -90,7 +91,7 @@ export function installScript(input: { version: string; directory?: string; sour
   // installations use archives so their destination and shell setup stay isolated.
   if (input.source.type === "installer")
     return `set -eu
-curl -fsSL https://raw.githubusercontent.com/anomalyco/opencode/v2/install | bash -s -- ${input.source.binary ? `--binary ${input.source.binary}` : `--version ${quote(version)}`}
+curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash -s -- ${input.source.binary ? `--binary ${input.source.binary}` : `--version ${quote(version)}`}
 ${verifyScript('"$HOME/.opencode/bin/opencode"', version)}
 `
 

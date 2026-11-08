@@ -13,30 +13,42 @@
 
 ## 🚀 快速安装与更新（Installation）
 
-### 🍎 macOS & 🐧 Linux（一行命令直接安装）
+### 🍎 macOS（桌面端 + CLI 命令行二合一）
 
-打开终端（Terminal），复制并运行以下一行命令。安装脚本会自动检测你的系统与芯片架构（Apple Silicon `M1/M2/M3/M4`、Intel `x64`、Linux `x64/arm64`），从 GitHub Releases 下载对应安装包并自动完成安装：
+打开终端（Terminal），复制并运行以下一行命令。安装脚本会自动识别芯片架构（Apple Silicon `M1/M2/M3/M4` 或 Intel `x64`），从 GitHub Releases 下载并同时完成**桌面客户端**与**命令行**安装：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
 ```
 
-**安装完成后如何使用：**
-- **桌面端（macOS）**：自动安装到 `/Applications/Pigu.app`，直接在「应用程序」或启动台中点击 **Pigu** 即可打开桌面客户端。
-- **命令行（macOS / Linux）**：重启终端或执行 `exec $SHELL` 后，输入 `pigu --help` 即可使用命令行。
+- **打开桌面端**：已自动安装至 `/Applications/Pigu.app`，直接在「应用程序（Applications）」或启动台中点击 **Pigu** 即可启动。
+- **使用命令行**：重启终端或执行 `exec $SHELL` 后，运行 `pigu`（进入终端 TUI）或 `pigu --help`。
+- **如何更新**：再次运行上面同一条命令即可自动覆盖升级，已有 API Key、模型配置与历史对话完整保留。
+
+---
+
+### 🐧 Linux / 远程算力服务器（纯 CLI 命令行）
+
+在 Ubuntu / Debian / CentOS 或 AutoDL 等 Linux 算力服务器上，运行以下一行命令即可安装轻量级 **Pigu CLI**（支持 `x86_64` 与 `ARM64`，不含桌面端冗余体积）：
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
+```
+
+- **自动安装路径**：`~/.opencode/bin/pigu`（同时包含兼容别名 `opencode`），并自动写入 `~/.bashrc` / `~/.zshrc` 的 `$PATH`。
+- **启动方式**：执行 `exec $SHELL` 刷新环境变量后，在项目目录直接运行 `pigu` 启动终端 AI 编程界面，或由本机 Pigu 桌面端通过 SSH 自动拉起 `pigu service start` 远端守护进程。
 - **指定版本安装**：
   ```bash
   curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash -s -- --version 0.0.1
   ```
-- **如何更新？** 再次运行上面同一条 `curl ... | bash` 命令，即可自动下载最新版并覆盖旧版程序。你的所有 API Key、模型配置与历史对话均独立保存在系统用户配置目录中，更新绝不丢失任何数据。
 
 ---
 
 ### 🪟 Windows（免安装便携压缩包 `.zip`）
 
 1. **下载压缩包**：前往 [**GitHub Releases**](https://github.com/AntarcticLu/pigu/releases) 页面，下载最新版本的 **`pigu-windows-x64.zip`**。
-2. **解压即用**：将 `pigu-windows-x64.zip` 解压到任意文件夹，双击运行目录内的 **`Pigu.exe`** 即可启动桌面端（`bin\pigu.exe` 为内置命令行工具）。
-3. **如何更新？** 下载新版本的 `pigu-windows-x64.zip`，直接解压覆盖原文件夹即可。你的所有账号凭证、模型配置与历史会话均保存在系统 `%APPDATA%` 与 `%LOCALAPPDATA%` 用户目录中，覆盖更新完全不影响已有配置。
+2. **解压即用**：将 `pigu-windows-x64.zip` 解压到任意文件夹，直接双击目录内的 **`Pigu.exe`** 即可启动桌面端，无需任何额外安装步骤（内置命令行工具位于 `bin\pigu.exe`）。
+3. **如何更新**：下载新版本的 `pigu-windows-x64.zip` 解压覆盖原文件夹即可。你的所有账号凭证、模型配置与历史会话均独立保存在系统 `%APPDATA%` 与 `%LOCALAPPDATA%` 用户目录中，覆盖更新绝不丢失数据。
 
 ---
 

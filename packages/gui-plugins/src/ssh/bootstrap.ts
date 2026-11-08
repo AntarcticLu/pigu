@@ -1,7 +1,8 @@
-import { existsSync, readFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { Effect, Option, Schema } from "effect"
+import { HttpClient, HttpClientResponse } from "effect/http"
 import { parseTarget, quote, runSsh, sshArgs, SshFailure } from "./command"
 import { RemoteCli } from "./remote-cli"
 
@@ -75,31 +76,41 @@ fi`
   }
   return `pigu_config_changed=0
 ${wrapperCheck}
-mkdir -p "$HOME/.config/pigu"
+mkdir -p "$HOME/.config/pigu" "$HOME/.config/opencode"
 if [ -x "$HOME/.pigu/bun/bin/bun" ]; then
   if "$HOME/.pigu/bun/bin/bun" -e '
     import fs from "node:fs";
-    const target = process.env.HOME + "/.config/pigu/opencode.json";
     const incoming = JSON.parse(Buffer.from("${b64}", "base64").toString("utf8"));
-    const prevRaw = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
-    let current = {};
-    try { current = prevRaw ? JSON.parse(prevRaw) : {}; } catch {}
-    const merged = {
-      ...incoming,
-      ...current,
-      provider: { ...(current.provider ?? {}), ...(incoming.provider ?? {}) },
-      model: current.model ?? incoming.model,
-    };
-    const nextRaw = JSON.stringify(merged, null, 2) + "\\n";
-    if (nextRaw !== prevRaw) {
-      fs.writeFileSync(target, nextRaw, { mode: 0o600 });
-      process.exit(10);
+    let changed = false;
+    for (const dir of ["/root/.config/pigu", "/root/.config/opencode", process.env.HOME + "/.config/pigu", process.env.HOME + "/.config/opencode"]) {
+      try { fs.mkdirSync(dir, { recursive: true }); } catch {}
+      const target = dir + "/opencode.json";
+      const prevRaw = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
+      let current = {};
+      try { current = prevRaw ? JSON.parse(prevRaw) : {}; } catch {}
+      const merged = {
+        ...incoming,
+        ...current,
+        provider: { ...(current.provider ?? {}), ...(incoming.provider ?? {}) },
+        model: current.model ?? incoming.model,
+      };
+      const nextRaw = JSON.stringify(merged, null, 2) + "\\n";
+      if (nextRaw !== prevRaw) {
+        fs.writeFileSync(target, nextRaw, { mode: 0o600 });
+        changed = true;
+      }
     }
+    if (changed) process.exit(10);
   '; then
     :
   elif [ $? -eq 10 ]; then
     pigu_config_changed=1
   fi
+elif [ ! -f "$HOME/.config/opencode/opencode.json" ]; then
+  printf '%s' '${b64}' | base64 -d > "$HOME/.config/opencode/opencode.json" 2>/dev/null || true
+  cp "$HOME/.config/opencode/opencode.json" "$HOME/.config/pigu/opencode.json" 2>/dev/null || true
+  chmod 600 "$HOME/.config/opencode/opencode.json" "$HOME/.config/pigu/opencode.json" 2>/dev/null || true
+  pigu_config_changed=1
 fi`
 }
 
@@ -208,6 +219,37 @@ chmod 755 "$HOME/.pigu/bin/pigu"
 cp "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu"
 `
 
+const autoInstallReleaseArchiveScript = `set -eu
+mkdir -p "$HOME/.opencode/bin" "$HOME/.pigu/bin" "$HOME/.local/bin"
+stage=$(mktemp -d "\${TMPDIR:-/tmp}/pigu-ssh-install.XXXXXX")
+trap 'rm -rf "$stage"' EXIT
+cat > "$stage/pigu-linux.tar.gz"
+tar -xzf "$stage/pigu-linux.tar.gz" -C "$stage"
+if [ -f "$stage/bin/opencode" ]; then
+  cp -f "$stage/bin/opencode" "$HOME/.opencode/bin/opencode"
+elif [ -f "$stage/opencode" ]; then
+  cp -f "$stage/opencode" "$HOME/.opencode/bin/opencode"
+fi
+chmod 755 "$HOME/.opencode/bin/opencode"
+cp -f "$HOME/.opencode/bin/opencode" "$HOME/.opencode/bin/pigu"
+cp -f "$HOME/.opencode/bin/opencode" "$HOME/.pigu/bin/pigu"
+cp -f "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/pigu"
+chmod 755 "$HOME/.opencode/bin/pigu" "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu"
+`
+
+const remoteGitHubInstallScript = `set -eu
+if [ -f /etc/network_turbo ] && [ -z "\${http_proxy:-}" ]; then
+  . /etc/network_turbo >/dev/null 2>&1 || true
+fi
+curl -fsSL --connect-timeout 15 --max-time 180 https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
+mkdir -p "$HOME/.pigu/bin" "$HOME/.local/bin"
+if [ -x "$HOME/.opencode/bin/opencode" ]; then
+  cp -f "$HOME/.opencode/bin/opencode" "$HOME/.opencode/bin/pigu" 2>/dev/null || true
+  cp -f "$HOME/.opencode/bin/opencode" "$HOME/.pigu/bin/pigu" 2>/dev/null || true
+  cp -f "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/pigu" 2>/dev/null || true
+fi
+`
+
 export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
   target: ReturnType<typeof parseTarget>
   version: string
@@ -224,18 +266,62 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
 
   const firstOutput = yield* run(input.replace ? startScript(input.version, true) : discoverWithSyncScript())
 
+  const installRemoteFallback = Effect.fnUntraced(function* () {
+    const cacheDir = path.join(homedir(), ".pigu", "cache")
+    const cachedBundle = path.join(cacheDir, "pigu-bundle-linux-x64.tar.gz")
+    if (existsSync(cachedBundle)) {
+      const archive = new Uint8Array(readFileSync(cachedBundle))
+      yield* runSsh({
+        args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallBundleScript)}`],
+        env: input.env,
+        stdin: archive,
+      }).pipe(Effect.mapError(() => new SshFailure("install")))
+      return
+    }
+
+    const cachedRelease = path.join(cacheDir, "pigu-linux-x64.tar.gz")
+    if (existsSync(cachedRelease)) {
+      const archive = new Uint8Array(readFileSync(cachedRelease))
+      yield* runSsh({
+        args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallReleaseArchiveScript)}`],
+        env: input.env,
+        stdin: archive,
+      }).pipe(Effect.mapError(() => new SshFailure("install")))
+      return
+    }
+
+    const directSuccess = yield* run(remoteGitHubInstallScript).pipe(
+      Effect.as(true),
+      Effect.orElseSucceed(() => false),
+    )
+    if (directSuccess) return
+
+    const http = yield* HttpClient.HttpClient
+    const bytes = yield* http
+      .get("https://github.com/AntarcticLu/pigu/releases/latest/download/pigu-linux-x64.tar.gz")
+      .pipe(
+        Effect.flatMap(HttpClientResponse.filterStatusOk),
+        Effect.flatMap((res) => res.arrayBuffer),
+        Effect.timeout("180 seconds"),
+        Effect.map((buf) => new Uint8Array(buf)),
+        Effect.mapError(() => new SshFailure("install")),
+      )
+
+    yield* Effect.sync(() => {
+      mkdirSync(cacheDir, { recursive: true })
+      writeFileSync(cachedRelease, bytes)
+    }).pipe(Effect.ignore)
+
+    yield* runSsh({
+      args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallReleaseArchiveScript)}`],
+      env: input.env,
+      stdin: bytes,
+    }).pipe(Effect.mapError(() => new SshFailure("install")))
+  })
+
   const resolveOutput = Effect.fnUntraced(function* () {
     if (!firstOutput.includes("OPENCODE_SSH_CLI_MISSING=1")) return firstOutput
-    const cachedBundle = path.join(homedir(), ".pigu", "cache", "pigu-bundle-linux-x64.tar.gz")
-
-    if (!existsSync(cachedBundle)) return yield* Effect.fail(new SshFailure("install"))
-    const archive = new Uint8Array(readFileSync(cachedBundle))
-    yield* runSsh({
-      args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallBundleScript)}`],
-      env: input.env,
-      stdin: archive,
-    }).pipe(Effect.mapError(() => new SshFailure("install")))
-
+    yield* installRemoteFallback()
     return yield* run(startScript(input.version, false))
   })
 

@@ -58,8 +58,8 @@ jobs:
           mkdir -p release-stage/bin
           tar -xf dist/desktop/opencode-desktop-mac-*.app.tar -C release-stage
           cp packages/cli/dist/cli-${{ matrix.cli_target }}/bin/opencode release-stage/bin/opencode
-          cp packages/cli/dist/cli-${{ matrix.cli_target }}/bin/opencode release-stage/bin/pigu
-          chmod 755 release-stage/bin/opencode release-stage/bin/pigu
+          chmod 755 release-stage/bin/opencode
+          ln -sf opencode release-stage/bin/pigu
           tar -czf pigu-${{ matrix.target }}.tar.gz -C release-stage .
       - uses: actions/upload-artifact@v4
         with:
@@ -102,13 +102,13 @@ jobs:
         run: |
           export OPENCODE_VERSION="${GITHUB_REF_NAME#v}"
           cd packages/cli
-          bun run script/build.ts
+          bun run script/build.ts --skip-web-ui
       - name: Assemble Linux Release Archive
         run: |
           mkdir -p release-stage/bin
           cp packages/cli/dist/cli-${{ matrix.cli_target }}/bin/opencode release-stage/bin/opencode
-          cp packages/cli/dist/cli-${{ matrix.cli_target }}/bin/opencode release-stage/bin/pigu
-          chmod 755 release-stage/bin/opencode release-stage/bin/pigu
+          chmod 755 release-stage/bin/opencode
+          ln -sf opencode release-stage/bin/pigu
           tar -czf pigu-${{ matrix.target }}.tar.gz -C release-stage .
       - uses: actions/upload-artifact@v4
         with:
