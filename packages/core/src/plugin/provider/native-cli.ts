@@ -446,7 +446,12 @@ function extractMessageText(message: LanguageModelV3Prompt[number]) {
   if (message.role === "system") return message.content.trim()
 
   return message.content
-    .flatMap((part) => (part.type === "text" && part.text.trim() ? [part.text.trim()] : []))
+    .flatMap((part) => {
+      if (part.type !== "text") return []
+      const trimmed = part.text.trim()
+      if (!trimmed || /^<system-update>[\s\S]*<\/system-update>$/.test(trimmed)) return []
+      return [trimmed]
+    })
     .join("\n\n")
 }
 
@@ -1981,6 +1986,7 @@ export const NativeCliProviderPlugin = define({
         Effect.sync(() => {
           // Local tools run inside the native local agent process itself, not via Pigu's API tool loop.
           event.tools = {}
+          event.messages = event.messages.filter((message) => message.role !== "system")
         }),
       { providerID: LOCAL_PROVIDER_ID },
     )

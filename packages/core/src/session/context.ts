@@ -153,7 +153,9 @@ const layer = Layer.effect(
         // prompt-cache prefix: user-level catalog and guidance, then project instructions, then
         // the date and environment, which vary by day and directory.
         instructions: Instructions.combine([
-          CodeModeInstructions.make(loaded.tools.codeModeCatalog),
+          CodeModeInstructions.make(
+            session.model?.providerID === "local" ? undefined : loaded.tools.codeModeCatalog,
+          ),
           loaded.mcp,
           loaded.references,
           loaded.skills,
