@@ -189,16 +189,18 @@ export function ServerConnectionRow(props: {
                   </Show>
                 </div>
               </div>
-              <div class="settings-servers-actions">
-                <Show when={signedOut(server())}>
-                  {(http) => (
-                    <Button size="small" variant="neutral" onClick={() => edit(http())}>
-                      {language.t("server.action.authenticate")}
-                    </Button>
-                  )}
-                </Show>
-                <ServerRowMenu server={server()} domain={controller} onEdit={edit} />
-              </div>
+              <Show when={!servers.local(server())}>
+                <div class="settings-servers-actions">
+                  <Show when={signedOut(server())}>
+                    {(http) => (
+                      <Button size="small" variant="neutral" onClick={() => edit(http())}>
+                        {language.t("server.action.authenticate")}
+                      </Button>
+                    )}
+                  </Show>
+                  <ServerRowMenu server={server()} domain={controller} onEdit={edit} />
+                </div>
+              </Show>
             </div>
           )}
         </Show>

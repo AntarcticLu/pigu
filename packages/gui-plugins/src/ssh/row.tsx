@@ -73,7 +73,6 @@ export default function SshRow(props: { row: ServerRow; id: string; ssh: SshCont
                 <Menu.Portal>
                   <Menu.Content>
                     <Menu.Group>
-                      <Menu.GroupLabel>{plugin.t("server.menu.label")}</Menu.GroupLabel>
                       <props.row.Items />
                       <Menu.Separator />
                       <Menu.Item onSelect={() => void props.row.remove()}>{plugin.t("menu.delete")}</Menu.Item>

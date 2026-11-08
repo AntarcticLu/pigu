@@ -33,30 +33,51 @@ export function AddServerMenu(props: { onAddServer: () => void; compact?: boolea
         </Show>
       }
     >
-      <Menu gutter={4} modal={false} placement="bottom-end">
-        <Show
-          when={props.compact}
-          fallback={
-            <Menu.Trigger as={Button} variant="ghost-muted" icon="plus">
-              {language.t("dialog.server.add.button")}
-            </Menu.Trigger>
-          }
-        >
-          <Menu.Trigger
-            as={IconButton}
-            variant="ghost-muted"
-            size="small"
-            icon={<Icon name="plus" />}
-            aria-label={language.t("dialog.server.add.button")}
-          />
-        </Show>
-        <Menu.Portal>
-          <Menu.Content>
-            <Menu.Item onSelect={props.onAddServer}>{language.t("dialog.server.add.button")}</Menu.Item>
-            <For each={items()}>{(item) => <Menu.Item onSelect={() => item.run()}>{item.title}</Menu.Item>}</For>
-          </Menu.Content>
-        </Menu.Portal>
-      </Menu>
+      <Show
+        when={items().length > 1}
+        fallback={
+          <Show
+            when={props.compact}
+            fallback={
+              <Button variant="ghost-muted" icon="plus" onClick={() => items()[0]?.run()}>
+                {items()[0]?.title}
+              </Button>
+            }
+          >
+            <IconButton
+              variant="ghost-muted"
+              size="small"
+              icon={<Icon name="plus" />}
+              aria-label={items()[0]?.title ?? language.t("dialog.server.add.button")}
+              onClick={() => items()[0]?.run()}
+            />
+          </Show>
+        }
+      >
+        <Menu gutter={4} modal={false} placement="bottom-end">
+          <Show
+            when={props.compact}
+            fallback={
+              <Menu.Trigger as={Button} variant="ghost-muted" icon="plus">
+                {language.t("dialog.server.add.button")}
+              </Menu.Trigger>
+            }
+          >
+            <Menu.Trigger
+              as={IconButton}
+              variant="ghost-muted"
+              size="small"
+              icon={<Icon name="plus" />}
+              aria-label={language.t("dialog.server.add.button")}
+            />
+          </Show>
+          <Menu.Portal>
+            <Menu.Content>
+              <For each={items()}>{(item) => <Menu.Item onSelect={() => item.run()}>{item.title}</Menu.Item>}</For>
+            </Menu.Content>
+          </Menu.Portal>
+        </Menu>
+      </Show>
     </Show>
   )
 }
