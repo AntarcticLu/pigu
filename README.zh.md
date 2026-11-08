@@ -35,7 +35,7 @@ curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
 ### 🪟 Windows（免安装便携压缩包 `.zip`）
 
 1. **下载压缩包**：前往 [**GitHub Releases**](https://github.com/AntarcticLu/pigu/releases) 页面，下载最新版本的 **`pigu-windows-x64.zip`**。
-2. **解压即用**：将 `pigu-windows-x64.zip` 解压到任意文件夹，双击运行目录内的 **`Pigu.exe`** 即可启动桌面端（目录内同时内置 `pigu.exe` 命令行工具）。
+2. **解压即用**：将 `pigu-windows-x64.zip` 解压到任意文件夹，双击运行目录内的 **`Pigu.exe`** 即可启动桌面端（`bin\pigu.exe` 为内置命令行工具）。
 3. **如何更新？** 下载新版本的 `pigu-windows-x64.zip`，直接解压覆盖原文件夹即可。你的所有账号凭证、模型配置与历史会话均保存在系统 `%APPDATA%` 与 `%LOCALAPPDATA%` 用户目录中，覆盖更新完全不影响已有配置。
 
 ---

@@ -16,39 +16,6 @@ permissions:
   actions: read
 
 jobs:
-  publish-cached-v001:
-    name: Publish Cached Windows & Linux Assets
-    if: (inputs.tag || github.ref_name) == 'v0.0.1'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v4
-      - name: Download built Windows & Linux artifacts from run 42473017103
-        uses: actions/download-artifact@v4
-        continue-on-error: true
-        with:
-          run-id: 42473017103
-          github-token: ${{ secrets.GITHUB_TOKEN }}
-          path: artifacts
-          merge-multiple: true
-      - name: Prepare install.sh
-        run: |
-          mkdir -p artifacts
-          cp install artifacts/install.sh
-          ls -lh artifacts
-      - name: Create & Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          name: "Pigu ${{ inputs.tag || github.ref_name }}"
-          body_path: CHANGELOG.md
-          draft: false
-          prerelease: false
-          files: |
-            artifacts/pigu-windows-x64.zip
-            artifacts/pigu-linux-x64.tar.gz
-            artifacts/pigu-linux-arm64.tar.gz
-            artifacts/install.sh
-
   build-macos:
     name: Build macOS (${{ matrix.target }})
     runs-on: macos-latest
@@ -110,7 +77,6 @@ jobs:
 
   build-linux:
     name: Build Linux (${{ matrix.target }})
-    if: (inputs.tag || github.ref_name) != 'v0.0.1'
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -160,7 +126,6 @@ jobs:
 
   build-windows:
     name: Build Windows (windows-x64.zip)
-    if: (inputs.tag || github.ref_name) != 'v0.0.1'
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -193,7 +158,9 @@ jobs:
       - name: Create Windows Portable ZIP
         shell: pwsh
         run: |
-          Copy-Item "packages/cli/dist/cli-windows-x64-baseline/bin/opencode.exe" "dist/desktop/app/pigu.exe" -Force
+          New-Item -ItemType Directory -Force -Path "dist/desktop/app/bin" | Out-Null
+          Copy-Item "packages/cli/dist/cli-windows-x64-baseline/bin/opencode.exe" "dist/desktop/app/bin/pigu.exe" -Force
+          Copy-Item "packages/cli/dist/cli-windows-x64-baseline/bin/opencode.exe" "dist/desktop/app/bin/opencode.exe" -Force
           Compress-Archive -Path "dist/desktop/app/*" -DestinationPath "pigu-windows-x64.zip" -Force
       - uses: actions/upload-artifact@v4
         with:
