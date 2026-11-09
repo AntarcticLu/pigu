@@ -253,7 +253,13 @@ export function createMountedSession(session: SessionModel) {
     const project = createMemo(() => {
       const value = info()
 
-      return (value && server.ctx.projects.forSession(value)) || sessionProject(server.ctx.data, value, directory)
+      return (
+        (value ? server.ctx.projects.forSession(value) : server.ctx.projects.forDirectory(directory)) ||
+        sessionProject(server.ctx.data, value, directory) ||
+        (directory
+          ? { id: "", worktree: directory, worktrees: [], sandboxes: [], time: { created: 0, updated: 0, active: 0 } }
+          : undefined)
+      )
     })
 
     // Only a project opened at this exact directory; a session in a project subfolder has none.
@@ -268,16 +274,16 @@ export function createMountedSession(session: SessionModel) {
     const local = createMemo(() => !sessionInWorkspace(server.ctx.sync.data.project, info(), directory))
 
     const view: MountedSession = Object.freeze({
-      key: `${server.key}\n${id}`,
+      key: `${server.key}\n${id || input.tab}`,
       id,
       tab: input.tab,
       visit: input.visit,
       server: serverRef,
       get pending() {
-        return server.ctx.data.session.creating(id)
+        return id ? server.ctx.data.session.creating(id) : false
       },
       get location() {
-        return info()?.location
+        return info()?.location ?? (directory ? { directory } : undefined)
       },
       get project() {
         return project()
@@ -317,11 +323,11 @@ export function createMountedSession(session: SessionModel) {
     const directory = session.workspace.directory()
     const tab = session.layout.tabKey() ?? ""
 
-    if (previous && !id) return previous
+    if (previous && !id && !tab) return previous
 
     if (previous && previous.id === id && previous.directory === directory && previous.tab === tab) return previous
 
-    const visit = previous?.id === id ? previous.visit : {}
+    const visit = previous && previous.id === id && previous.tab === tab ? previous.visit : {}
 
     return untrack(() =>
       createRoot((dispose) => {

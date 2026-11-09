@@ -6,6 +6,7 @@ import { projectSearchCommand } from "@/shell/titlebar/titlebar"
 
 export function useNewSessionCommands(input: {
   restoreFocus: () => void
+  toggleReview: () => void
   project: {
     empty: () => boolean
     open: () => void
@@ -32,6 +33,13 @@ export function useNewSessionCommands(input: {
     },
   ])
   command.register("new-session", () => [
+    {
+      id: "review.toggle",
+      title: language.t("command.review.toggle"),
+      category: language.t("command.category.view"),
+      keybind: "mod+shift+r",
+      onSelect: input.toggleReview,
+    },
     {
       id: "input.focus",
       title: language.t("command.input.focus"),

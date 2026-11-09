@@ -13,8 +13,11 @@ const ArchiveState = Persistence.struct({
 })
 
 const TEMP_FOLDER_PATTERNS = [
-  /^temp/i,
-  /^tmp/i,
+  /^temp$/i,
+  /^temp[_-]/i,
+  /[_-]temp$/i,
+  /^tmp$/i,
+  /^tmp[_-]/i,
   /^test_temp$/i,
   /^默认项目$/,
   /^t$/i,
@@ -31,7 +34,7 @@ const TRIVIAL_SESSION_TITLES = new Set([
   "say 'claude code is working!' and nothing else.",
 ])
 
-export function isDefaultArchivedProject(worktree: string, sessionCount: number, rankWithSessions: number) {
+export function isDefaultArchivedProject(worktree: string, sessionCount: number, _rankWithSessions: number) {
   const name = getFilename(worktree) || worktree
   const normalized = pathKey(worktree)
 
@@ -42,12 +45,16 @@ export function isDefaultArchivedProject(worktree: string, sessionCount: number,
   if (
     normalized === "/users/al" ||
     normalized === "/volumes/antl" ||
+    /^\/users\/[^/]+$/i.test(normalized) ||
+    /^\/home\/[^/]+$/i.test(normalized) ||
+    /^[a-z]:\/users\/[^/]+$/i.test(normalized) ||
+    /^[a-z]:\/$/i.test(normalized) ||
     TEMP_FOLDER_PATTERNS.some((pattern) => pattern.test(name))
   ) {
     return true
   }
 
-  return rankWithSessions >= 5
+  return false
 }
 
 export function isDefaultArchivedSession(session: SessionInfo, indexInProject: number, totalInProject = 1) {

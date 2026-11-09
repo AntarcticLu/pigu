@@ -410,7 +410,7 @@ export function createTerminalModel(input: {
     load(session: SessionRef) {
       sessions.set(session.key, session)
       watch(session.server)
-      void dispatch(session.server, { type: "session.loaded", sessionID: session.id })
+      if (session.id) void dispatch(session.server, { type: "session.loaded", sessionID: session.id })
 
       const existing = handles.get(session.key)
 

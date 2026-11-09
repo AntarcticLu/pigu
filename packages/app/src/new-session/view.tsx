@@ -53,6 +53,7 @@ export function NewSessionView(props: {
   project: PromptProjectController
   workspace: NewSessionWorkspaceController
   location: ReturnType<typeof useNewSessionLocationDialog>
+  connectedEnd?: boolean
 }) {
   const [onboarding, setOnboarding, , onboardingReady] = persisted(
     Persist.global("workspace-onboarding"),
@@ -72,7 +73,11 @@ export function NewSessionView(props: {
     <div class="@container relative flex flex-col min-h-0 h-full flex-1">
       <div
         data-component="new-session"
-        class="relative isolate flex-1 min-h-0 overflow-hidden rounded-[10px] bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]"
+        class="relative isolate flex-1 min-h-0 overflow-hidden bg-v2-background-bg-base shadow-[var(--v2-elevation-raised)]"
+        classList={{
+          "rounded-[10px]": !props.connectedEnd,
+          "rounded-s-[10px] rounded-e-none border-e border-v2-border-border-base": props.connectedEnd,
+        }}
       >
         <ComposerDropzone
           active={props.composer.state.drag === "active"}

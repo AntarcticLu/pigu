@@ -399,6 +399,7 @@ const layer = Layer.effect(
       view: (input) => sessions.forSession(input.sessionID).view(input),
       remove: Effect.fn("Session.remove")(function* (sessionID) {
         yield* result.get(sessionID)
+        SessionExternal.markDeleted(sessionID)
         yield* execution.interrupt(sessionID)
         yield* execution.awaitIdle(sessionID)
         yield* jobs.cancelSession(sessionID)
@@ -410,7 +411,11 @@ const layer = Layer.effect(
         yield* bus.remove(sessionID)
       }),
       list: Effect.fn("Session.list")(function* (input = {}) {
-        yield* Effect.forkDetach(syncExternal())
+        if (!SessionExternal.hasCompletedInitialSync()) {
+          yield* syncExternal().pipe(Effect.timeoutOption("4 seconds"), Effect.ignoreCause)
+        } else {
+          yield* Effect.forkDetach(syncExternal())
+        }
         const filter =
           input.cursor === undefined
             ? input

@@ -5,6 +5,8 @@ import type { SessionInfo } from "@opencode/client/promise"
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
+import { Icon } from "@opencode/ui/icon"
+import { IconButton } from "@opencode/ui/icon-button"
 import { Loader } from "@opencode/ui/loader"
 import { Menu } from "@opencode/ui/menu"
 import { TextInput } from "@opencode/ui/text-input"
@@ -125,13 +127,18 @@ export function ProjectSessionRow(props: {
 
     if (!current) return Promise.resolve(false)
 
+    const conn = connection()
+    queryClient.setQueryData<SessionInfo[]>(["home-sessions", conn], (sessions) =>
+      sessions?.map((session) => (session.id === props.session.id ? { ...session, title } : session)),
+    )
+
     return current.sdk.api.session
       .update({ sessionID: props.session.id, title })
       .then(() => {
         current.data.session.remember({ ...(current.data.session.get(props.session.id) ?? props.session), title })
         current.data.session.invalidate(props.session.id)
         void current.data.session.sync(props.session.id).catch(() => undefined)
-        void queryClient.invalidateQueries({ queryKey: ["home-sessions", connection()], exact: true })
+        void queryClient.invalidateQueries({ queryKey: ["home-sessions", conn], exact: true })
 
         return true
       })
@@ -209,7 +216,11 @@ export function ProjectSessionRow(props: {
         class="group/session relative flex h-7 w-full shrink-0 cursor-pointer items-center gap-1.5 rounded-[6px] ps-8 pe-1.5 text-start text-[13px] leading-[var(--line-height-compact)] font-medium focus-visible:outline-none"
         classList={{ "text-v2-text-text-base": props.active, "text-v2-text-text-faint": !props.active }}
         aria-current={props.active ? "page" : undefined}
-        title={sessionLabel(props.session)}
+        title={
+          props.session.metadata?.originalCwd
+            ? `${sessionLabel(props.session)}\n${language.tr("原项目路径", "Original path")}: ${String(props.session.metadata.originalCwd)}`
+            : sessionLabel(props.session)
+        }
         onPointerEnter={() => {
           const current = ctx()
 
@@ -246,9 +257,37 @@ export function ProjectSessionRow(props: {
           {sessionLabel(props.session)}
         </span>
         <span
-          class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium ${resolveSessionSource(props.session).class}`}
+          class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium group-hover/session:hidden ${resolveSessionSource(props.session).class}`}
         >
           {resolveSessionSource(props.session).label}
+        </span>
+        <span
+          class="hidden shrink-0 items-center gap-0.5 group-hover/session:flex"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          <IconButton
+            icon={<Icon name="edit" size="small" />}
+            variant="ghost-muted"
+            size="small"
+            aria-label={language.t("common.rename")}
+            title={language.t("common.rename")}
+            onClick={(event) => {
+              event.stopPropagation()
+              dialog.show(() => <RenameDialog title={sessionLabel(props.session)} onRename={rename} />)
+            }}
+          />
+          <IconButton
+            icon={<Icon name="outline-trash" size="small" />}
+            variant="ghost-muted"
+            size="small"
+            aria-label={language.t("common.delete")}
+            title={language.t("common.delete")}
+            onClick={(event) => {
+              event.stopPropagation()
+              dialog.show(() => <DeleteDialog />)
+            }}
+          />
         </span>
         <Show when={isSessionUiLoading(props.session.id) || status.loading()}>
           <span class="flex size-3.5 shrink-0 items-center justify-center">

@@ -523,6 +523,9 @@ export const { use: useTabs, provider: TabsProvider } = createSimpleContext({
           }
 
           const active = location.pathname === "/new-session" && location.query.draftId === draftID
+          const draftRegions = regions[tabKey(draft)]
+
+          if (draftRegions && !regions[key]) setRegions(key, { ...draftRegions })
           setStore(
             produce((tabs) => {
               tabs[index] = next

@@ -502,14 +502,16 @@ function SessionScreenContent(props: {
       <div class="flex-1 min-h-0 flex flex-col gap-2 px-[var(--shell-inline-inset,8px)] pb-[var(--shell-bottom-inset,8px)] pt-[var(--shell-top-inset,8px)]">
         <div ref={screen.panel.ref} data-pane-row class="relative flex-1 min-h-0 flex flex-col md:flex-row gap-0">
           {/* Keep the control outside panel animations. */}
-          <Show when={isDesktop() && messagesReady() && session.identity.params.id}>
+          <Show when={isDesktop() && session.identity.params.id}>
             <div
               class="absolute end-[var(--session-header-inset-end,12px)] top-0 z-30 h-12 flex items-center gap-2"
               data-slot="session-review-toggle"
               onPointerDown={hideTimelineScrollbar}
               onClick={hideTimelineScrollbar}
             >
-              <TimelineSearchBar controller={timelineSearch} />
+              <Show when={messagesReady()}>
+                <TimelineSearchBar controller={timelineSearch} />
+              </Show>
               <SessionReviewToggle
                 onToggle={region.toggle}
                 glyph={(fill) => {

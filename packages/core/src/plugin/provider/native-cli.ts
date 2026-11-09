@@ -1,5 +1,6 @@
 export * as NativeCliProvider from "./native-cli.js"
 
+import { Database } from "bun:sqlite"
 import childProcess from "node:child_process"
 import fs from "node:fs"
 import os from "node:os"
@@ -95,12 +96,37 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 
 function globalBinDirs() {
   const home = os.homedir()
+  const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming")
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local")
+
+  const winDirs =
+    process.platform === "win32"
+      ? [
+          path.join(appData, "npm"),
+          path.join(localAppData, "pnpm"),
+          path.join(localAppData, "Microsoft", "WinGet", "Links"),
+          path.join(home, "scoop", "shims"),
+          path.join(home, ".cargo", "bin"),
+          path.join(localAppData, "Programs", "claude-code"),
+          path.join(localAppData, "Programs", "Claude"),
+          path.join(localAppData, "Programs", "Codex"),
+          path.join(localAppData, "Programs", "Antigravity", "bin"),
+          path.join(localAppData, "Programs", "cursor", "resources", "app", "bin"),
+          path.join(localAppData, "Programs", "OpenCode", "bin"),
+          path.join(localAppData, "Programs", "DeepSeek Harness", "resources", "runtime", "cli", "bin"),
+          path.join(localAppData, "Programs", "WorkBuddy", "resources", "runtime", "cli", "bin"),
+          path.join(localAppData, "Programs", "CodeBuddy", "resources", "runtime", "cli", "bin"),
+        ]
+      : []
 
   return [
+    ...winDirs,
     path.join(home, ".mounty", "AL", "node", "bin"),
     path.join(home, ".local", "bin"),
     path.join(home, ".opencode", "bin"),
     path.join(home, ".claude", "local"),
+    path.join(home, ".claude", "bin"),
+    path.join(home, ".codex", "bin"),
     path.join(home, ".bun", "bin"),
     "/opt/homebrew/bin",
     "/usr/local/bin",
@@ -111,9 +137,13 @@ function globalBinDirs() {
 
 function appBundleRuntimeDirs() {
   const home = os.homedir()
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local")
+  const programFiles = process.env.ProgramFiles ?? "C:\\Program Files"
   const appRoots = ["/Applications", path.join(home, "Applications")]
+  const winRoots =
+    process.platform === "win32" ? [path.join(localAppData, "Programs"), programFiles] : []
 
-  return appRoots.flatMap((root) => [
+  const macDirs = appRoots.flatMap((root) => [
     path.join(root, "Codex.app", "Contents", "Resources", "bin"),
     path.join(root, "Codex.app", "Contents", "Resources", "app", "bin"),
     path.join(root, "Claude.app", "Contents", "Resources", "bin"),
@@ -133,6 +163,23 @@ function appBundleRuntimeDirs() {
     path.join(root, "CodeBuddy.app", "Contents", "Resources", "runtime", "cli", "bin"),
     path.join(root, "CodeBuddy.app", "Contents", "Resources", "app", "bin"),
   ])
+
+  const winDirs = winRoots.flatMap((root) => [
+    path.join(root, "Codex", "resources", "bin"),
+    path.join(root, "Codex", "resources", "app", "bin"),
+    path.join(root, "Claude", "resources", "bin"),
+    path.join(root, "Claude", "resources", "app", "bin"),
+    path.join(root, "Antigravity", "bin"),
+    path.join(root, "Antigravity", "resources", "app", "bin"),
+    path.join(root, "cursor", "resources", "app", "bin"),
+    path.join(root, "OpenCode", "resources", "bin"),
+    path.join(root, "DeepSeek Harness", "resources", "runtime", "cli", "bin"),
+    path.join(root, "DeepSeek Harness", "resources", "runtime", "bin"),
+    path.join(root, "WorkBuddy", "resources", "runtime", "cli", "bin"),
+    path.join(root, "CodeBuddy", "resources", "runtime", "cli", "bin"),
+  ])
+
+  return [...winDirs, ...macDirs]
 }
 
 function buildAugmentedPath() {
@@ -142,10 +189,18 @@ function buildAugmentedPath() {
   return combined.join(path.delimiter)
 }
 
+function expandPlatformExecutableNames(names: ReadonlyArray<string>) {
+  if (process.platform !== "win32") return names
+  return names.flatMap((name) =>
+    /\.(exe|cmd|bat|ps1)$/i.test(name) ? [name] : [`${name}.exe`, `${name}.cmd`, `${name}.bat`, name],
+  )
+}
+
 function resolveGlobalExecutable(names: ReadonlyArray<string>) {
   const existing = (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)
-  const dirs = [...new Set([...globalBinDirs(), ...existing])]
-  const candidates = names.flatMap((name) => dirs.map((dir) => path.join(dir, name)))
+  const dirs = [...new Set([...globalBinDirs(), ...appBundleRuntimeDirs(), ...existing])]
+  const expandedNames = expandPlatformExecutableNames(names)
+  const candidates = expandedNames.flatMap((name) => dirs.map((dir) => path.join(dir, name)))
 
   return candidates.find((candidate) => fs.existsSync(candidate))
 }
@@ -229,7 +284,12 @@ function appBundledCliCandidates(engine: LocalEngine) {
 }
 
 function resolveAppBundledCli(engine: LocalEngine) {
-  return appBundledCliCandidates(engine).find((candidate) => fs.existsSync(candidate))
+  const candidates = expandPlatformExecutableNames(appBundledCliCandidates(engine))
+  return candidates.find((candidate) => fs.existsSync(candidate))
+}
+
+function shouldUseWindowsShell(binary: string) {
+  return process.platform === "win32" && /\.(cmd|bat)$/i.test(binary)
 }
 
 function resolveEngineBinary(engine: LocalEngine) {
@@ -674,6 +734,7 @@ async function runStreamJsonProcess(input: {
     const child = childProcess.spawn(input.binary, args, {
       cwd: input.cwd,
       env,
+      shell: shouldUseWindowsShell(input.binary),
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -929,6 +990,7 @@ async function runCodexProcess(input: {
     const child = childProcess.spawn(input.binary, args, {
       cwd: input.cwd,
       env,
+      shell: shouldUseWindowsShell(input.binary),
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -1088,6 +1150,7 @@ async function runPlainCliProcess(input: {
     const child = childProcess.spawn(input.binary, [...input.args], {
       cwd: input.cwd,
       env,
+      shell: shouldUseWindowsShell(input.binary),
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -1148,6 +1211,7 @@ async function runOpencodeProcess(input: {
     const child = childProcess.spawn(input.binary, [...input.args], {
       cwd: input.cwd,
       env,
+      shell: shouldUseWindowsShell(input.binary),
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -1542,7 +1606,7 @@ export function syncDshThirdPartyPlugins(home: string) {
     if (!fs.existsSync(srcPkgDir) || fs.existsSync(dstPkgDir)) return
     fs.mkdirSync(path.dirname(dstPkgDir), { recursive: true })
     const realSrc = fs.realpathSync(srcPkgDir)
-    fs.symlinkSync(realSrc, dstPkgDir, "dir")
+    fs.symlinkSync(realSrc, dstPkgDir, process.platform === "win32" ? "junction" : "dir")
   })
 
   if (
@@ -1741,6 +1805,7 @@ async function runDshProcess(input: {
     const child = childProcess.spawn(input.binary, args, {
       cwd: input.cwd,
       env,
+      shell: shouldUseWindowsShell(input.binary),
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -1920,7 +1985,8 @@ class LocalLanguageModel implements LanguageModelV3 {
     const headers = options.headers ?? {}
     const kind = headers[HEADER_REQUEST_KIND] ?? "primary"
     const sessionID = headers[HEADER_SESSION_ID] ?? ""
-    const cwd = headers[HEADER_SESSION_CWD] || this.defaultDirectory
+    const rawCwd = headers[HEADER_SESSION_CWD] || this.defaultDirectory
+    const cwd = rawCwd && fs.existsSync(rawCwd) ? rawCwd : os.homedir()
     const variant = headers[HEADER_MODEL_VARIANT]
     const rawMetadata = headers[HEADER_SESSION_METADATA]
     const parsedMetadata = rawMetadata ? Option.getOrUndefined(decodeSessionMetadata(rawMetadata)) : undefined
@@ -2262,10 +2328,10 @@ type AgyModelSpec = {
 }
 
 const DEFAULT_AGY_MODELS: readonly AgyModelSpec[] = [
-  { id: "gemini-4-argon", efforts: ["low", "medium", "high"] },
-  { id: "gemini-3.8-flash", efforts: ["low", "medium", "high"] },
-  { id: "claude-opus-5-5", efforts: ["low", "medium", "high"] },
-  { id: "claude-sonnet-5-5", efforts: ["low", "medium", "high"] },
+  { id: "gemini-2.5-pro", efforts: ["low", "medium", "high"] },
+  { id: "gemini-2.5-flash", efforts: ["low", "medium", "high"] },
+  { id: "claude-sonnet-4-6", efforts: ["low", "medium", "high"] },
+  { id: "claude-opus-4-6", efforts: ["low", "medium", "high"] },
   { id: "gpt-oss-120b", efforts: [] },
 ]
 
@@ -2328,7 +2394,11 @@ function refreshAgyModelsCache(home: string, onUpdated: () => void) {
   childProcess.execFile(
     binary,
     ["models"],
-    { timeout: 15_000, env: { ...process.env, PATH: buildAugmentedPath() } },
+    {
+      timeout: 15_000,
+      shell: shouldUseWindowsShell(binary),
+      env: { ...process.env, PATH: buildAugmentedPath() },
+    },
     (err, stdout) => {
       agyRefreshInFlight = false
       if (err && !stdout) return
@@ -2345,22 +2415,236 @@ function refreshAgyModelsCache(home: string, onUpdated: () => void) {
   )
 }
 
+function parseTomlQuotedAssignment(line: string, key: string): string | undefined {
+  const pattern = new RegExp(`^\\s*${key}\\s*=\\s*(?:"([^"]+)"|'([^']+)')`)
+  const match = pattern.exec(line)
+  return (match?.[1] ?? match?.[2])?.trim() || undefined
+}
+
+function discoverCodexSqliteModels(codexRoot: string): readonly string[] {
+  if (!fs.existsSync(codexRoot)) return []
+  const sqliteFiles = fs
+    .readdirSync(codexRoot)
+    .filter((name) => /^state_\d+\.sqlite$/i.test(name))
+    .toSorted((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+  const latestDb = sqliteFiles[0]
+  if (!latestDb) return []
+  const dbPath = path.join(codexRoot, latestDb)
+  if (!fs.existsSync(dbPath) || fs.statSync(dbPath, { throwIfNoEntry: false })?.size === 0) return []
+  const db = new Database(dbPath, { readonly: true })
+  const hasThreads = db
+    .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'threads'")
+    .get()
+  if (!hasThreads) {
+    db.close()
+    return []
+  }
+  const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all()
+  const hasModelColumn = columns.some((col) => col.name === "model")
+  if (!hasModelColumn) {
+    db.close()
+    return []
+  }
+  const rows = db
+    .query<{ model: string | null }, []>(
+      "SELECT model FROM threads WHERE model IS NOT NULL AND trim(model) != '' ORDER BY updated_at DESC LIMIT 80",
+    )
+    .all()
+  db.close()
+  return [
+    ...new Set(
+      rows
+        .map((row) => row.model?.trim() ?? "")
+        .filter((val) => val.length > 0),
+    ),
+  ]
+}
+
+function discoverCodexRecentRolloutModels(codexRoot: string): readonly string[] {
+  const sessionsRoot = path.join(codexRoot, "sessions")
+  if (!fs.existsSync(sessionsRoot)) return []
+  const years = fs
+    .readdirSync(sessionsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .toSorted((a, b) => b.name.localeCompare(a.name))
+    .slice(0, 2)
+  const dayDirs = years.flatMap((year) => {
+    const yearDir = path.join(sessionsRoot, year.name)
+    return fs
+      .readdirSync(yearDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .toSorted((a, b) => b.name.localeCompare(a.name))
+      .slice(0, 3)
+      .flatMap((month) => {
+        const monthDir = path.join(yearDir, month.name)
+        return fs
+          .readdirSync(monthDir, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .toSorted((a, b) => b.name.localeCompare(a.name))
+          .slice(0, 4)
+          .map((day) => path.join(monthDir, day.name))
+      })
+  })
+  const recentFiles = dayDirs
+    .flatMap((dayDir) =>
+      fs
+        .readdirSync(dayDir)
+        .filter((file) => file.endsWith(".jsonl"))
+        .map((file) => path.join(dayDir, file)),
+    )
+    .toSorted(
+      (a, b) =>
+        (fs.statSync(b, { throwIfNoEntry: false })?.mtimeMs ?? 0) -
+        (fs.statSync(a, { throwIfNoEntry: false })?.mtimeMs ?? 0),
+    )
+    .slice(0, 8)
+
+  const found: string[] = []
+  for (const filePath of recentFiles) {
+    const size = fs.statSync(filePath, { throwIfNoEntry: false })?.size ?? 0
+    if (size <= 0 || size > 4 * 1024 * 1024) continue
+    const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/).slice(0, 40)
+    for (const line of lines) {
+      if (!line.includes('"model"')) continue
+      const decoded = Option.getOrUndefined(decodeJsonUnknown(line))
+      if (!isRecord(decoded) || !isRecord(decoded.payload)) continue
+      const directModel = typeof decoded.payload.model === "string" ? decoded.payload.model.trim() : ""
+      if (directModel) {
+        found.push(directModel)
+        break
+      }
+      const collab = isRecord(decoded.payload.collaboration_mode) ? decoded.payload.collaboration_mode : undefined
+      const settings = collab && isRecord(collab.settings) ? collab.settings : undefined
+      const settingsModel = typeof settings?.model === "string" ? settings.model.trim() : ""
+      if (settingsModel) {
+        found.push(settingsModel)
+        break
+      }
+    }
+  }
+  return [...new Set(found)]
+}
+
 function discoverCodexConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
-  const configPath = path.join(home, ".codex", "config.toml")
-  if (!fs.existsSync(configPath)) return { models: [] }
-  const text = fs.readFileSync(configPath, "utf8")
-  const lines = text.split(/\r?\n/)
-  const firstSectionIdx = lines.findIndex((line) => /^\s*\[/.test(line))
-  const topLines = firstSectionIdx >= 0 ? lines.slice(0, firstSectionIdx) : lines
-  const defaultMatch = topLines
-    .map((line) => /^\s*model\s*=\s*"([^"]+)"/.exec(line)?.[1]?.trim())
-    .find((val): val is string => Boolean(val))
-  const nuxMatches = lines
-    .map((line) => /^\s*"([a-zA-Z0-9._-]+)"\s*=\s*\d+/.exec(line)?.[1]?.trim())
-    .filter((val): val is string => Boolean(val && /^(gpt-|o[134])/i.test(val)))
+  const codexRoot = process.env.CODEX_HOME ? path.resolve(process.env.CODEX_HOME) : path.join(home, ".codex")
+  if (!fs.existsSync(codexRoot)) return { models: [] }
+
+  const configPath = path.join(codexRoot, "config.toml")
+  const configParsed = (() => {
+    if (!fs.existsSync(configPath)) {
+      return {
+        topModel: undefined as string | undefined,
+        activeProfileModel: undefined as string | undefined,
+        profileModels: [] as string[],
+        nuxModels: [] as string[],
+      }
+    }
+    const text = fs.readFileSync(configPath, "utf8")
+    const lines = text.split(/\r?\n/)
+    const firstSectionIdx = lines.findIndex((line) => /^\s*\[/.test(line))
+    const topLines = firstSectionIdx >= 0 ? lines.slice(0, firstSectionIdx) : lines
+    const topModel = topLines
+      .map((line) => parseTomlQuotedAssignment(line, "model"))
+      .find((val): val is string => Boolean(val))
+    const activeProfile = topLines
+      .map((line) => parseTomlQuotedAssignment(line, "profile"))
+      .find((val): val is string => Boolean(val))
+
+    const profileMap = new Map<string, string>()
+    const nuxModels: string[] = []
+    let currentSection = ""
+
+    for (const line of lines) {
+      const sectionMatch = /^\s*\[([^\]]+)\]\s*$/.exec(line)
+      if (sectionMatch?.[1]) {
+        currentSection = sectionMatch[1].trim()
+        continue
+      }
+      const profMatch = /^profiles\.(.+)$/.exec(currentSection)
+      if (profMatch?.[1]) {
+        const profName = profMatch[1].replace(/^["']|["']$/g, "").trim()
+        const modelVal = parseTomlQuotedAssignment(line, "model")
+        if (profName && modelVal) profileMap.set(profName, modelVal)
+      }
+      if (currentSection === "tui.model_availability_nux") {
+        const nuxKey = /^\s*(?:"([^"]+)"|'([^']+)')\s*=\s*\d+/.exec(line)
+        const modelKey = (nuxKey?.[1] ?? nuxKey?.[2])?.trim()
+        if (modelKey) nuxModels.push(modelKey)
+      }
+      if (currentSection === "notice.model_migrations") {
+        const migMatch = /^\s*(?:"([^"]+)"|'([^']+)')\s*=\s*(?:"([^"]+)"|'([^']+)')/.exec(line)
+        const targetModel = (migMatch?.[3] ?? migMatch?.[4])?.trim()
+        if (targetModel) nuxModels.push(targetModel)
+      }
+    }
+
+    return {
+      topModel,
+      activeProfileModel: activeProfile ? profileMap.get(activeProfile) : undefined,
+      profileModels: [...profileMap.values()],
+      nuxModels,
+    }
+  })()
+
+  const sqliteModels = discoverCodexSqliteModels(codexRoot)
+  const rolloutModels = sqliteModels.length > 0 ? [] : discoverCodexRecentRolloutModels(codexRoot)
+
+  const globalState = readJsonRecordSafe(path.join(codexRoot, ".codex-global-state.json"))
+  const atoms =
+    globalState && isRecord(globalState["electron-persisted-atom-state"])
+      ? globalState["electron-persisted-atom-state"]
+      : undefined
+  const atomSelectedModel =
+    (typeof atoms?.["selected-model"] === "string" && atoms["selected-model"].trim()) ||
+    (typeof atoms?.model === "string" && atoms.model.trim()) ||
+    undefined
+  const seenUpgradeModels = Array.isArray(atoms?.["seen-model-upgrade-list"])
+    ? atoms["seen-model-upgrade-list"].filter(
+        (item): item is string => typeof item === "string" && item.trim().length > 0,
+      )
+    : []
+
+  const modelsCache = readJsonRecordSafe(path.join(codexRoot, "models_cache.json"))
+  const cacheModels =
+    modelsCache && Array.isArray(modelsCache.models)
+      ? modelsCache.models
+          .flatMap((entry): string[] => {
+            if (!isRecord(entry)) return []
+            const slug =
+              typeof entry.slug === "string"
+                ? entry.slug.trim()
+                : typeof entry.id === "string"
+                  ? entry.id.trim()
+                  : ""
+            return slug ? [slug] : []
+          })
+          .slice(0, 20)
+      : []
+
+  const defaultModel =
+    configParsed.topModel ??
+    configParsed.activeProfileModel ??
+    atomSelectedModel ??
+    sqliteModels[0] ??
+    rolloutModels[0]
+
+  const models = [
+    ...new Set([
+      ...(defaultModel ? [defaultModel] : []),
+      ...(configParsed.topModel ? [configParsed.topModel] : []),
+      ...(configParsed.activeProfileModel ? [configParsed.activeProfileModel] : []),
+      ...sqliteModels,
+      ...rolloutModels,
+      ...configParsed.profileModels,
+      ...configParsed.nuxModels,
+      ...cacheModels,
+      ...seenUpgradeModels,
+    ]),
+  ]
+
   return {
-    defaultModel: defaultMatch,
-    models: [...new Set([...(defaultMatch ? [defaultMatch] : []), ...nuxMatches])],
+    defaultModel,
+    models,
   }
 }
 
@@ -2368,32 +2652,119 @@ function normalizeClaudeModelId(raw: string): string {
   return raw.trim().replace(/-\d{8}$/, "")
 }
 
+function isValidDiscoveredModelId(raw: string): boolean {
+  const trimmed = raw.trim()
+  return Boolean(trimmed && trimmed !== "<synthetic>" && !trimmed.startsWith("<") && trimmed.length <= 120)
+}
+
+function discoverClaudeRecentSessionModels(claudeRoot: string): readonly string[] {
+  const projectsRoot = path.join(claudeRoot, "projects")
+  if (!fs.existsSync(projectsRoot)) return []
+  const projectDirs = fs
+    .readdirSync(projectsRoot, { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => path.join(projectsRoot, entry.name))
+  const recentFiles = projectDirs
+    .flatMap((dir) =>
+      fs
+        .readdirSync(dir)
+        .filter((file) => file.endsWith(".jsonl") && !file.startsWith("agent-"))
+        .map((file) => path.join(dir, file)),
+    )
+    .toSorted(
+      (a, b) =>
+        (fs.statSync(b, { throwIfNoEntry: false })?.mtimeMs ?? 0) -
+        (fs.statSync(a, { throwIfNoEntry: false })?.mtimeMs ?? 0),
+    )
+    .slice(0, 10)
+
+  const found: string[] = []
+  for (const filePath of recentFiles) {
+    const size = fs.statSync(filePath, { throwIfNoEntry: false })?.size ?? 0
+    if (size <= 0 || size > 4 * 1024 * 1024) continue
+    const lines = fs.readFileSync(filePath, "utf8").split(/\r?\n/).toReversed()
+    for (const line of lines) {
+      if (!line.includes('"model"')) continue
+      const decoded = Option.getOrUndefined(decodeJsonUnknown(line))
+      if (!isRecord(decoded) || !isRecord(decoded.message)) continue
+      const rawModel = typeof decoded.message.model === "string" ? normalizeClaudeModelId(decoded.message.model) : ""
+      if (isValidDiscoveredModelId(rawModel)) {
+        found.push(rawModel)
+        break
+      }
+    }
+  }
+  return [...new Set(found)]
+}
+
 function discoverClaudeConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
-  const settings = readJsonRecordSafe(path.join(home, ".claude", "settings.json"))
+  const claudeRoot = process.env.CLAUDE_CONFIG_DIR
+    ? path.resolve(process.env.CLAUDE_CONFIG_DIR)
+    : path.join(home, ".claude")
+
+  const localSettings = readJsonRecordSafe(path.join(claudeRoot, "settings.local.json"))
+  const settings = readJsonRecordSafe(path.join(claudeRoot, "settings.json"))
+  const localEnv = localSettings && isRecord(localSettings.env) ? localSettings.env : undefined
   const env = settings && isRecord(settings.env) ? settings.env : undefined
-  const defaultModel =
-    (typeof settings?.model === "string" ? normalizeClaudeModelId(settings.model) : undefined) ||
-    (typeof env?.ANTHROPIC_MODEL === "string" ? normalizeClaudeModelId(env.ANTHROPIC_MODEL) : undefined)
+
+  const rawDefaultModel =
+    (typeof localSettings?.model === "string" && localSettings.model.trim()) ||
+    (typeof localEnv?.ANTHROPIC_MODEL === "string" && localEnv.ANTHROPIC_MODEL.trim()) ||
+    (typeof settings?.model === "string" && settings.model.trim()) ||
+    (typeof env?.ANTHROPIC_MODEL === "string" && env.ANTHROPIC_MODEL.trim()) ||
+    undefined
+  const configuredDefault =
+    rawDefaultModel && isValidDiscoveredModelId(rawDefaultModel)
+      ? normalizeClaudeModelId(rawDefaultModel)
+      : undefined
+
   const envModels = [
+    localEnv?.ANTHROPIC_MODEL,
+    localEnv?.ANTHROPIC_DEFAULT_SONNET_MODEL,
+    localEnv?.ANTHROPIC_DEFAULT_OPUS_MODEL,
+    localEnv?.ANTHROPIC_DEFAULT_HAIKU_MODEL,
+    localEnv?.ANTHROPIC_SMALL_FAST_MODEL,
     env?.ANTHROPIC_MODEL,
-    env?.ANTHROPIC_DEFAULT_OPUS_MODEL,
     env?.ANTHROPIC_DEFAULT_SONNET_MODEL,
+    env?.ANTHROPIC_DEFAULT_OPUS_MODEL,
     env?.ANTHROPIC_DEFAULT_HAIKU_MODEL,
+    env?.ANTHROPIC_SMALL_FAST_MODEL,
   ]
-    .filter((val): val is string => typeof val === "string" && val.trim().length > 0)
+    .filter((val): val is string => typeof val === "string" && isValidDiscoveredModelId(val))
     .map(normalizeClaudeModelId)
 
-  const stats = readJsonRecordSafe(path.join(home, ".claude", "stats-cache.json"))
+  const recentSessionModels = discoverClaudeRecentSessionModels(claudeRoot)
+
+  const claudeJson = readJsonRecordSafe(path.join(home, ".claude.json"))
+  const claudeJsonProjects = claudeJson && isRecord(claudeJson.projects) ? claudeJson.projects : {}
+  const claudeJsonModels = Object.values(claudeJsonProjects).flatMap((proj) => {
+    if (!isRecord(proj) || !isRecord(proj.lastModelUsage)) return []
+    return Object.keys(proj.lastModelUsage)
+      .filter(isValidDiscoveredModelId)
+      .map(normalizeClaudeModelId)
+  })
+
+  const stats = readJsonRecordSafe(path.join(claudeRoot, "stats-cache.json"))
   const usageModels =
     stats && isRecord(stats.modelUsage)
       ? Object.keys(stats.modelUsage)
-          .filter((key) => /^claude-/i.test(key.trim()))
+          .filter(isValidDiscoveredModelId)
           .map(normalizeClaudeModelId)
       : []
 
+  const defaultModel = configuredDefault ?? recentSessionModels[0] ?? claudeJsonModels[0] ?? usageModels[0]
+
   return {
     defaultModel,
-    models: [...new Set([...(defaultModel ? [defaultModel] : []), ...envModels, ...usageModels])],
+    models: [
+      ...new Set([
+        ...(defaultModel ? [defaultModel] : []),
+        ...envModels,
+        ...recentSessionModels,
+        ...claudeJsonModels,
+        ...usageModels,
+      ]),
+    ],
   }
 }
 
@@ -2410,13 +2781,17 @@ function discoverPiConfigModels(home: string): { defaultModel?: string; models: 
 }
 
 function discoverOpencodeConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
+  const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming")
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local")
   const cfg =
     readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json")) ??
     readJsonRecordSafe(path.join(home, ".config", "opencode", "config.json")) ??
-    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json"))
+    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json")) ??
+    readJsonRecordSafe(path.join(appData, "opencode", "opencode.json")) ??
+    readJsonRecordSafe(path.join(localAppData, "opencode", "opencode.json"))
   if (!cfg) return { models: [] }
   const defaultModel = typeof cfg.model === "string" ? cfg.model.trim() : undefined
-  const providers = isRecord(cfg.provider) ? cfg.provider : {}
+  const providers = isRecord(cfg.provider) ? cfg.provider : isRecord(cfg.providers) ? cfg.providers : {}
   const configuredModels = Object.entries(providers).flatMap(([providerKey, providerVal]) => {
     if (!isRecord(providerVal) || !isRecord(providerVal.models)) return []
     return Object.keys(providerVal.models).map((modelKey) => `${providerKey}/${modelKey}`)
@@ -2427,39 +2802,65 @@ function discoverOpencodeConfigModels(home: string): { defaultModel?: string; mo
   }
 }
 
+function discoverDshConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
+  const patchFiles = [
+    path.join(home, ".dsh", "profiles", "desktop", "cordis.patch.yml"),
+    path.join(home, ".dsh", "profiles", "headless", "cordis.patch.yml"),
+  ]
+  const patchModels: string[] = []
+  for (const patchPath of patchFiles) {
+    if (!fs.existsSync(patchPath)) continue
+    const text = fs.readFileSync(patchPath, "utf8")
+    for (const line of text.split(/\r?\n/)) {
+      const modelMatch = /^\s*model:\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9._/-]+))\s*$/.exec(line)
+      const val = (modelMatch?.[1] ?? modelMatch?.[2] ?? modelMatch?.[3])?.trim()
+      if (val && isValidDiscoveredModelId(val)) patchModels.push(val)
+    }
+  }
+  const opencodeDiscovered = discoverOpencodeConfigModels(home)
+  const defaultModel = patchModels[0] ?? opencodeDiscovered.defaultModel
+  return {
+    defaultModel,
+    models: [
+      ...new Set([
+        ...(defaultModel ? [defaultModel] : []),
+        ...patchModels,
+        ...opencodeDiscovered.models,
+      ]),
+    ],
+  }
+}
+
 const BUILTIN_ENGINE_SUBMODELS: Readonly<Record<LocalEngine, readonly string[]>> = {
   claude: [
-    "claude-opus-5-5",
-    "claude-sonnet-5-5",
-    "claude-fable-5",
-    "claude-opus-4-8",
     "claude-sonnet-4-6",
+    "claude-opus-4-6",
     "claude-haiku-4-5",
   ],
   codex: [
-    "gpt-5.6-sol",
-    "gpt-5.5",
     "gpt-5.4",
     "gpt-5.3-codex",
+    "o3",
+    "o4-mini",
   ],
   agy: [],
   pi: [
     "claude-sonnet-4-6",
     "claude-opus-4-6",
-    "gpt-5.6-sol",
-    "gemini-3.8-flash",
+    "gpt-5.4",
+    "gemini-2.5-pro",
   ],
   opencode: [
     "claude-sonnet-4-6",
     "claude-opus-4-6",
-    "gpt-5.6-sol",
-    "gemini-3.8-flash",
+    "gpt-5.4",
+    "gemini-2.5-pro",
   ],
   cursor: [
-    "claude-sonnet-5-5",
-    "claude-opus-5-5",
-    "gpt-5.6-sol",
-    "gemini-3.8-flash",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "gpt-5.4",
+    "gemini-2.5-pro",
   ],
   grok: ["grok-4.7", "grok-4", "grok-code-fast-1", "grok-3-mini"],
   "deepseek-harness": [
@@ -2467,7 +2868,7 @@ const BUILTIN_ENGINE_SUBMODELS: Readonly<Record<LocalEngine, readonly string[]>>
     "deepseek-reasoner",
     "deepseek-chat",
   ],
-  workbuddy: ["claude-sonnet-4-6", "gpt-5.6-sol", "glm-5.3", "kimi-k3"],
+  workbuddy: ["claude-sonnet-4-6", "gpt-5.4", "glm-5", "kimi-k2.5"],
 }
 
 function buildEngineModels(
@@ -2494,14 +2895,21 @@ function buildEngineModels(
         ? discoverClaudeConfigModels(home)
         : engine === "pi"
           ? discoverPiConfigModels(home)
-          : engine === "opencode" || engine === "deepseek-harness"
-            ? discoverOpencodeConfigModels(home)
-            : { defaultModel: undefined, models: [] }
+          : engine === "deepseek-harness"
+            ? discoverDshConfigModels(home)
+            : engine === "opencode"
+              ? discoverOpencodeConfigModels(home)
+              : { defaultModel: undefined, models: [] }
+
+  const orderedDiscovered = [
+    ...(discovered.defaultModel ? [discovered.defaultModel] : []),
+    ...discovered.models,
+  ]
 
   const subModels =
-    engine === "opencode" && discovered.models.length > 0
-      ? [...new Set(discovered.models)]
-      : [...new Set([...BUILTIN_ENGINE_SUBMODELS[engine], ...discovered.models])]
+    engine === "opencode" && orderedDiscovered.length > 0
+      ? [...new Set(orderedDiscovered)]
+      : [...new Set([...orderedDiscovered, ...BUILTIN_ENGINE_SUBMODELS[engine]])]
 
   return subModels.map((sub) => {
     const displaySub =
@@ -2529,7 +2937,11 @@ export const refreshLocalEngineModels = Effect.fn("NativeCliProvider.refreshLoca
           childProcess.execFile(
             binary,
             ["models"],
-            { timeout: 15_000, env: { ...process.env, PATH: buildAugmentedPath() } },
+            {
+              timeout: 15_000,
+              shell: shouldUseWindowsShell(binary),
+              env: { ...process.env, PATH: buildAugmentedPath() },
+            },
             (_err, stdout) => {
               const parsed = parseAgyModelsStdout(stdout ?? "")
               if (parsed.length > 0) {

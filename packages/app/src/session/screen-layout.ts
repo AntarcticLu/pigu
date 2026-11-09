@@ -26,7 +26,7 @@ export function createSessionScreenLayout(
 ) {
   const size = createSizing()
   const view = session.layout.view
-  const tabsOpen = createMemo(() => session.isDesktop() && view().side.opened() && !!session.identity.params.id)
+  const tabsOpen = createMemo(() => session.isDesktop() && view().side.opened())
 
   const sized = createMemo(() => {
     const entry = input.panel()

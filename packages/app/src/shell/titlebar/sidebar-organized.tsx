@@ -32,8 +32,9 @@ import { createProjectSessionActions } from "@/shell/tabs/project-sessions"
 import { useTabs, type Tab } from "@/shell/tabs/tabs"
 import { pathKey } from "@/workspaces/path-key"
 import { useDirectoryPicker } from "@/workspaces/selection/picker"
+import { sessionLabel } from "@/session/title"
 import "./tab-nav.css"
-import { ProjectSessionRow } from "./project-session-row"
+import { ProjectSessionRow, resolveSessionSource } from "./project-session-row"
 import { createSidebarSessionActivity, mergeSidebarSessions } from "./sidebar-sessions"
 import { useArchiveState } from "./archive-store"
 import { useExtensionScopeStore } from "./extension-scope-store"
@@ -85,7 +86,24 @@ export function SidebarOrganized(props: {
     projectSession: { server: ServerConnection.Key; sessionId: string } | undefined
     thumbTrack: HTMLDivElement | undefined
     hoverTarget: HTMLDivElement | undefined
-  }>({ projectSession: undefined, thumbTrack: undefined, hoverTarget: undefined })
+    searchQuery: string
+    sourceFilter: string
+  }>({
+    projectSession: undefined,
+    thumbTrack: undefined,
+    hoverTarget: undefined,
+    searchQuery: "",
+    sourceFilter: "all",
+  })
+
+  const SOURCE_FILTERS = [
+    { id: "all", label: () => tr("全部", "All") },
+    { id: "claude", label: () => "Claude" },
+    { id: "codex", label: () => "Codex" },
+    { id: "agy", label: () => "AGY" },
+    { id: "deepseek-harness", label: () => "DSH" },
+    { id: "opencode", label: () => "OpenCode" },
+  ] as const
 
   const selectTabs = () => setLocal("projectSession", undefined)
 
@@ -226,6 +244,54 @@ export function SidebarOrganized(props: {
               </Show>
             </div>
             <Show when={!state.projectsCollapsed}>
+              <div class="flex flex-col gap-1.5 px-1 pb-0.5">
+                <div class="relative flex h-7 items-center rounded-[6px] border border-v2-border-border-muted/70 bg-v2-background-bg-base/60 px-2 focus-within:border-v2-border-border-base">
+                  <Icon name="magnifying-glass" size="small" class="shrink-0 text-v2-icon-icon-faint" />
+                  <input
+                    type="text"
+                    value={local.searchQuery}
+                    placeholder={tr("搜索项目或会话...", "Search projects or sessions...")}
+                    class="h-full min-w-0 flex-1 bg-transparent px-1.5 text-[12px] text-v2-text-text-base placeholder:text-v2-text-text-faint focus:outline-none"
+                    onInput={(event) => setLocal("searchQuery", event.currentTarget.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Escape" && local.searchQuery) {
+                        event.stopPropagation()
+                        setLocal("searchQuery", "")
+                      }
+                    }}
+                  />
+                  <Show when={local.searchQuery.length > 0}>
+                    <button
+                      type="button"
+                      class="flex size-4 shrink-0 items-center justify-center rounded text-v2-text-text-faint hover:text-v2-text-text-base"
+                      aria-label={tr("清空搜索", "Clear search")}
+                      onClick={() => setLocal("searchQuery", "")}
+                    >
+                      <Icon name="xmark-small" size="small" />
+                    </button>
+                  </Show>
+                </div>
+                <div class="flex flex-wrap items-center gap-1">
+                  <For each={SOURCE_FILTERS}>
+                    {(item) => {
+                      const active = () => local.sourceFilter === item.id
+                      return (
+                        <button
+                          type="button"
+                          class={`rounded px-1.5 py-0.5 text-[10px] leading-tight font-medium transition-colors ${
+                            active()
+                              ? "bg-v2-interactive-interactive-base text-v2-text-text-on-interactive"
+                              : "bg-v2-overlay-simple-overlay-hover/60 text-v2-text-text-muted hover:text-v2-text-text-base"
+                          }`}
+                          onClick={() => setLocal("sourceFilter", active() && item.id !== "all" ? "all" : item.id)}
+                        >
+                          {item.label()}
+                        </button>
+                      )
+                    }}
+                  </For>
+                </div>
+              </div>
               <div class="flex min-w-0 flex-col gap-1">
                 <For each={servers.visible}>
                   {(conn) => (
@@ -239,6 +305,8 @@ export function SidebarOrganized(props: {
                       lastActivity={activity.get}
                       isOpenTab={isOpenTab}
                       highlightActive={true}
+                      searchQuery={local.searchQuery}
+                      sourceFilter={local.sourceFilter}
                       onSelect={(session) => setLocal("projectSession", session)}
                       state={state}
                       ready={ready()}
@@ -270,6 +338,8 @@ function ProjectList(props: {
   lastActivity: (server: ServerConnection.Key, sessionId: string) => number | undefined
   isOpenTab: (server: ServerConnection.Key, sessionId: string) => boolean
   highlightActive: boolean
+  searchQuery: string
+  sourceFilter: string
   onSelect: (session: { server: ServerConnection.Key; sessionId: string }) => void
   state: typeof SidebarState.Type
   ready: boolean
@@ -327,12 +397,22 @@ function ProjectList(props: {
     }
   })
 
+  createEffect((prevCount: number | undefined) => {
+    const count = allProjects().length
+    if (prevCount !== undefined && count > prevCount) {
+      void sessions.refetch()
+    }
+    return count
+  })
+
+  const isFiltering = () => Boolean(props.searchQuery.trim() || props.sourceFilter !== "all")
+
   const records = createMemo(() => {
     const current = ctx()
 
     if (!current) return []
 
-    return buildHomeSessionRecords({
+    const allRecords = buildHomeSessionRecords({
       sessions: () =>
         current.data.session
           .apply(
@@ -347,6 +427,31 @@ function ProjectList(props: {
       projects: allProjects,
       projectDirectories: () => undefined,
       resolveProject: current.projects.forSession,
+    })
+
+    if (!isFiltering()) return allRecords
+
+    const query = props.searchQuery.trim().toLowerCase()
+    const sourceFilter = props.sourceFilter
+
+    return allRecords.filter((record) => {
+      const source = String(record.session.metadata?.source ?? "pigu").toLowerCase()
+      if (sourceFilter !== "all" && source !== sourceFilter) return false
+      if (!query) return true
+
+      const title = sessionLabel(record.session).toLowerCase()
+      const sourceName = resolveSessionSource(record.session).label.toLowerCase()
+      const projectName = displayName(record.project).toLowerCase()
+      const worktree = record.project.worktree.toLowerCase()
+      const originalCwd = String(record.session.metadata?.originalCwd ?? "").toLowerCase()
+
+      return (
+        title.includes(query) ||
+        sourceName.includes(query) ||
+        projectName.includes(query) ||
+        worktree.includes(query) ||
+        originalCwd.includes(query)
+      )
     })
   })
 
@@ -373,6 +478,21 @@ function ProjectList(props: {
 
   const projects = createMemo(() => {
     const map = grouped()
+    const query = props.searchQuery.trim().toLowerCase()
+
+    if (isFiltering()) {
+      return sortedAllProjects().filter((project) => {
+        const count = (map.get(pathKey(project.worktree)) ?? []).length
+        if (count > 0) return true
+        if (props.sourceFilter === "all" && query) {
+          return (
+            displayName(project).toLowerCase().includes(query) ||
+            project.worktree.toLowerCase().includes(query)
+          )
+        }
+        return false
+      })
+    }
 
     return sortedAllProjects().filter((project, idx) => {
       const count = (map.get(pathKey(project.worktree)) ?? []).length
@@ -382,6 +502,7 @@ function ProjectList(props: {
   })
 
   const archivedProjects = createMemo(() => {
+    if (isFiltering()) return []
     const map = grouped()
 
     return sortedAllProjects().filter((project, idx) => {
@@ -391,7 +512,7 @@ function ProjectList(props: {
     })
   })
 
-  const visible = () => (local.showAll ? projects() : projects().slice(0, 15))
+  const visible = () => (local.showAll || isFiltering() ? projects() : projects().slice(0, 15))
 
   const renderProjectItem = (
     conn: Accessor<ServerConnection.Any>,
@@ -404,23 +525,28 @@ function ProjectList(props: {
     const projectSessions = () => grouped().get(pathKey(project().worktree)) ?? []
 
     const shownSessions = () =>
-      projectSessions().filter(
-        (record, idx) => !archive.isSessionArchived(record.session, idx, projectSessions().length),
-      )
+      isFiltering()
+        ? projectSessions()
+        : projectSessions().filter(
+            (record, idx) => !archive.isSessionArchived(record.session, idx, projectSessions().length),
+          )
 
     const archivedSessions = () =>
-      projectSessions().filter((record, idx) =>
-        archive.isSessionArchived(record.session, idx, projectSessions().length),
-      )
+      isFiltering()
+        ? []
+        : projectSessions().filter((record, idx) =>
+            archive.isSessionArchived(record.session, idx, projectSessions().length),
+          )
 
-    const limit = () => local.sessionLimits[key()] ?? 6
+    const limit = () => (isFiltering() ? 50 : (local.sessionLimits[key()] ?? 6))
 
     const isExpanded = () =>
-      props.state.expanded[key()] ??
-      ((!archivedProject && index() < 3 && shownSessions().length > 0) ||
-        projectSessions().some(
-          (record) => props.currentTab?.type === "session" && props.currentTab.sessionId === record.session.id,
-        ))
+      isFiltering() ||
+      (props.state.expanded[key()] ??
+        ((!archivedProject && index() < 3 && shownSessions().length > 0) ||
+          projectSessions().some(
+            (record) => props.currentTab?.type === "session" && props.currentTab.sessionId === record.session.id,
+          )))
 
     return (
       <ProjectRow

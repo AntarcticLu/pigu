@@ -1,4 +1,4 @@
-import { useParams } from "@solidjs/router"
+import { useParams, useSearchParams } from "@solidjs/router"
 import { createMemo } from "solid-js"
 import { useLayout } from "@/shell/state/layout"
 import { SessionRouteKey, SessionStateKey } from "@/runtime/server/scope"
@@ -10,26 +10,29 @@ import { tabKey, useTabs } from "@/shell/tabs/tabs"
 
 const useSessionKey = () => {
   const params = useParams()
+  const [search] = useSearchParams<{ draftId?: string }>()
   const sdk = useWorkspaceLocation()
   const serverSDK = useServerSDK()
   const scope = createMemo(() => serverSDK.scope)
   const directory = createMemo(() => base64Encode(sdk().directory))
+  const routeId = createMemo(() => params.id ?? (search.draftId ? `draft:${search.draftId}` : undefined))
   const workspaceKey = createMemo(() => SessionStateKey.from(scope(), SessionRouteKey.fromRoute(directory())))
-  const sessionKey = createMemo(() => SessionStateKey.from(scope(), SessionRouteKey.fromRoute(directory(), params.id)))
+  const sessionKey = createMemo(() => SessionStateKey.from(scope(), SessionRouteKey.fromRoute(directory(), routeId())))
 
-  return { params, sessionKey, workspaceKey }
+  return { params, search, sessionKey, workspaceKey }
 }
 
 export const useSessionLayout = () => {
   const layout = useLayout()
   const tabs = useTabs()
-  const { params, sessionKey, workspaceKey } = useSessionKey()
+  const { params, search, sessionKey, workspaceKey } = useSessionKey()
   const serverSDK = useServerSDK()
 
   const currentTab = createMemo(() => {
-    if (!params.id) return
+    if (params.id) return tabs.sessionTab(ServerConnection.key(serverSDK.server), params.id)
+    if (!search.draftId) return
 
-    return tabs.sessionTab(ServerConnection.key(serverSDK.server), params.id)
+    return tabs.store.find((tab) => tab.type === "draft" && tab.draftID === search.draftId)
   })
 
   const regions = {

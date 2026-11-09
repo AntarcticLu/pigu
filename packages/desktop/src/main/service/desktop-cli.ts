@@ -150,6 +150,11 @@ const installCli = Effect.fn("DesktopCli.install")(function* (source: string, ve
   const destination = path.join(directory, executableName())
 
   if (existsSync(destination)) {
+    if (process.platform === "darwin") {
+      yield* Effect.promise(() =>
+        execFileAsync("/usr/bin/xattr", ["-d", "com.apple.quarantine", destination]).catch(() => undefined),
+      )
+    }
     yield* Effect.logInfo("v2 CLI staged executable reused", { path: destination, version })
 
     return destination
@@ -160,6 +165,11 @@ const installCli = Effect.fn("DesktopCli.install")(function* (source: string, ve
   yield* fs.copyFile(source, temp)
 
   if (process.platform !== "win32") yield* fs.chmod(temp, 0o755)
+  if (process.platform === "darwin") {
+    yield* Effect.promise(() =>
+      execFileAsync("/usr/bin/xattr", ["-d", "com.apple.quarantine", temp]).catch(() => undefined),
+    )
+  }
   yield* fs
     .rename(temp, destination)
     .pipe(Effect.catch((error) => fs.remove(temp, { force: true }).pipe(Effect.andThen(Effect.fail(error)))))
