@@ -36,35 +36,38 @@ export const make = Effect.fn("BrowserConnection.make")(function* (
   )
   // Each attachment adds and removes its own allows, so a replaced attachment keeps the new one's.
   const grant = (sessionID: Session.ID) =>
-    Effect.acquireRelease(
-      ctx.session.get({ sessionID }).pipe(
-        Effect.flatMap((session) =>
-          ctx.session.update({
-            sessionID,
-            permissions: [
-              ...(session.permissions ?? []),
-              ...access.map((rule) => ({ ...rule, effect: "allow" as const })),
-            ],
-          }),
-        ),
-        Effect.orDie,
-      ),
-      () =>
-        ctx.session.get({ sessionID }).pipe(
-          Effect.flatMap((session) => {
-            const current = session.permissions ?? []
-            const permissions = access.reduce((rules, allow) => {
-              const index = rules.findIndex(
-                (rule) => rule.action === allow.action && rule.resource === allow.resource && rule.effect === "allow",
-              )
-              return index === -1 ? rules : rules.toSpliced(index, 1)
-            }, current)
-            if (permissions.length === current.length) return Effect.void
-            return ctx.session.update({ sessionID, permissions })
-          }),
-          Effect.ignore,
-        ),
-    )
+    sessionID.startsWith("ses_draft_")
+      ? Effect.void
+      : Effect.acquireRelease(
+          ctx.session.get({ sessionID }).pipe(
+            Effect.flatMap((session) =>
+              ctx.session.update({
+                sessionID,
+                permissions: [
+                  ...(session.permissions ?? []),
+                  ...access.map((rule) => ({ ...rule, effect: "allow" as const })),
+                ],
+              }),
+            ),
+            Effect.orDie,
+          ),
+          () =>
+            ctx.session.get({ sessionID }).pipe(
+              Effect.flatMap((session) => {
+                const current = session.permissions ?? []
+                const permissions = access.reduce((rules, allow) => {
+                  const index = rules.findIndex(
+                    (rule) =>
+                      rule.action === allow.action && rule.resource === allow.resource && rule.effect === "allow",
+                  )
+                  return index === -1 ? rules : rules.toSpliced(index, 1)
+                }, current)
+                if (permissions.length === current.length) return Effect.void
+                return ctx.session.update({ sessionID, permissions })
+              }),
+              Effect.ignore,
+            ),
+        )
   let active = true
   const close = (sessionID: Session.ID, reason: "closed" | "replaced" = "closed") =>
     Effect.gen(function* () {
@@ -91,11 +94,13 @@ export const make = Effect.fn("BrowserConnection.make")(function* (
     .register(Browser.Definition, {
       attach: (input, call) =>
         Effect.gen(function* () {
-          const session = yield* ctx.session
-            .get({ sessionID: input.sessionID })
-            .pipe(Effect.mapError(() => call.error("unavailable", "Session not found.", {})))
-          if (session.location.directory !== ctx.location.directory)
-            return yield* Effect.fail(call.error("unavailable", "Session belongs to another location.", {}))
+          if (!input.sessionID.startsWith("ses_draft_")) {
+            const session = yield* ctx.session
+              .get({ sessionID: input.sessionID })
+              .pipe(Effect.mapError(() => call.error("unavailable", "Session not found.", {})))
+            if (session.location.directory !== ctx.location.directory)
+              return yield* Effect.fail(call.error("unavailable", "Session belongs to another location.", {}))
+          }
           const browser = yield* Effect.acquireRelease(
             Effect.gen(function* () {
               if (!active) return yield* Effect.fail(call.error("unavailable", "Browser is unavailable.", {}))

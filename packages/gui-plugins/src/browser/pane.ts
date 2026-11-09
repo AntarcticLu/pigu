@@ -37,7 +37,7 @@ import {
 } from "./pane-machine"
 import { createBrowserRestoreStore } from "./restore"
 
-type Target = { readonly server: string; readonly session: string; readonly restore?: Browser.State }
+type Target = { readonly server: string; readonly session: string; readonly directory?: string; readonly restore?: Browser.State }
 
 /** The Electron and Effect handles of one binding; its phase lives in the pane machine. */
 type Handle = {
@@ -155,7 +155,9 @@ export function createBrowserPane(input: {
               ),
             )
 
-            const session = yield* client.session.get({ sessionID })
+            const session = sessionID.startsWith("ses_draft_")
+              ? { location: { directory: target.directory || process.cwd(), workspaceID: undefined } }
+              : yield* client.session.get({ sessionID })
 
             // The agent can already read this workspace, so showing its files adds no access. A forwarded or explicit
             // loopback server does not share this machine's disk.

@@ -225,6 +225,9 @@ export function createModel(ctx: SetupContext<typeof definition>) {
     timers.delete(sessionKey)
   }
 
+  const sessionID = (ref: Pick<SessionRef, "id" | "tab">) =>
+    ref.id || (ref.tab.startsWith("draft:") ? `ses_draft_${ref.tab.slice(6)}` : ref.tab)
+
   const open = (effect: Extract<MachineEffect, { type: "open-registration" }>) => {
     const sessionKey = effect.sessionKey
     const attempt = effect.attempt
@@ -235,7 +238,11 @@ export function createModel(ctx: SetupContext<typeof definition>) {
 
     if (!current) return dispatch({ type: "register.failed", sessionKey, attempt, unavailable: true, closed: false })
     registrations.get(sessionKey)?.registration.close()
-    const target = { server: drive.ref.server.id, session: drive.ref.id }
+    const target = {
+      server: drive.ref.server.id,
+      session: sessionID(drive.ref),
+      ...(drive.ref.location?.directory ? { directory: drive.ref.location.directory } : {}),
+    }
 
     registrations.set(sessionKey, {
       attempt,
@@ -481,7 +488,7 @@ export function createModel(ctx: SetupContext<typeof definition>) {
   createKeyed(() => {
     const view = sessions.current()
 
-    if (!view?.id) return
+    if (!view || !sessionID(view)) return
     const ref = sessions.list().find((item) => item.key === view.key)
 
     return ref?.server.compatible && serverSupported(machine(), ref.server.id) ? ref : undefined
@@ -528,7 +535,10 @@ export function createModel(ctx: SetupContext<typeof definition>) {
   const attached = (session: Session) => sessionAttached(machine(), session.key)
 
   const available = (session: SessionRef) =>
-    serverSupported(machine(), session.server.id) && !!session.id && session.server.compatible && !layout.narrow()
+    serverSupported(machine(), session.server.id) &&
+    !!sessionID(session) &&
+    session.server.compatible &&
+    !layout.narrow()
 
   const tab = (session: Session, tabID: string) => sessionTab(machine(), session.key, tabID)
 

@@ -258,13 +258,17 @@ export function createTerminalModel(input: {
     })
   }
 
+  const sessionID = (session: Pick<SessionRef, "id" | "tab">) =>
+    session.id || (session.tab.startsWith("draft:") ? `ses_draft_${session.tab.slice(6)}` : session.tab)
+
   const handle = (initial: SessionRef) => {
     const key = initial.key
+    const id = sessionID(initial)
     // A removed workspace forgets its session, while a component may still hold the handle.
     const session = () => sessions.get(key) ?? initial
-    const view = () => sessionView(serverState(initial.server.id), initial.id)
+    const view = () => sessionView(serverState(initial.server.id), id)
     const all = () => viewItems(view())
-    const get = (id: string) => all().find((info) => info.id === id)
+    const get = (ptyID: string) => all().find((info) => info.id === ptyID)
 
     return {
       key,
@@ -272,26 +276,27 @@ export function createTerminalModel(input: {
       /** What the session's terminal panel shows: loading, failed, unsupported or the server's list. */
       view,
       /** The server connection whose answer the session's list is; a restarted server lists under a newer one. */
-      connection: () => sessionConnection(serverState(initial.server.id), initial.id),
+      connection: () => sessionConnection(serverState(initial.server.id), id),
       /** The session's terminals, in the server's order. */
       all,
       get,
       /** The strip's tab ids for the stored `open` ones. */
       tabs: (open: readonly string[]) => viewTabs(view(), open),
       /** Loads the session's terminals again after a failure. */
-      retry: () => dispatch(session().server, { type: "session.retry", sessionID: initial.id }),
+      retry: () => dispatch(session().server, { type: "session.retry", sessionID: id }),
       /** The selected terminal, else the first one. */
       active() {
-        const id = selection(session()).value?.id
+        const selectedID = selection(session()).value?.id
 
-        return id && get(id) ? id : all()[0]?.id
+        return selectedID && get(selectedID) ? selectedID : all()[0]?.id
       },
-      select(id: string) {
-        selection(session()).set({ id })
+      select(selectedID: string) {
+        selection(session()).set({ id: selectedID })
       },
       /** Creates a terminal and selects it; resolves its id, or undefined when the server refuses. */
       async new() {
         const target = session()
+        const targetID = sessionID(target)
         const request = dispatchFocus({ type: "request.pending", session: key, overlay: overlay() }).request
 
         await settled(target, owner)
@@ -300,14 +305,14 @@ export function createTerminalModel(input: {
         const known =
           view().type === "ready"
             ? all()
-            : await target.server.client.experimental.persistentPty.list({ sessionID: target.id }).catch(() => all())
+            : await target.server.client.experimental.persistentPty.list({ sessionID: targetID }).catch(() => all())
 
         const used = new Set(known.flatMap((info) => titleNumber(info.title) ?? []))
         const number = Array.from({ length: used.size + 1 }, (_, index) => index + 1).find((n) => !used.has(n)) ?? 1
 
         const info = await target.server.client.experimental.persistentPty
           .create({
-            sessionID: target.id,
+            sessionID: targetID,
             args: [],
             // A session that moved keeps its object; the server's record has the directory it runs in now.
             cwd: target.server.data.session.get(target.id)?.location.directory ?? target.location?.directory,
@@ -339,43 +344,45 @@ export function createTerminalModel(input: {
 
         if (!info) return undefined
 
-        await dispatch(target.server, { type: "session.refresh", sessionID: target.id })
+        await dispatch(target.server, { type: "session.refresh", sessionID: targetID })
         selection(target).set({ id: info.id })
         dispatchFocus({ type: "pending.resolved", request, id: info.id })
 
         return info.id
       },
       /** Removes the terminal on the server; its tab leaves once the server lists it no longer. */
-      async close(id: string) {
+      async close(ptyID: string) {
         const target = session()
+        const targetID = sessionID(target)
 
         await target.server.client.experimental.persistentPty
-          .remove({ ptyID: id })
-          .then(() => dispatch(target.server, { type: "session.refresh", sessionID: target.id }))
+          .remove({ ptyID })
+          .then(() => dispatch(target.server, { type: "session.refresh", sessionID: targetID }))
           .catch((error) => console.error("Failed to close terminal", error))
       },
       /**
        * Sets the terminal's title on the server; `null` clears it, so the shell's or the default title shows again.
        * The current title, or clearing a terminal never renamed, sends nothing.
        */
-      async rename(id: string, title: string | null) {
+      async rename(ptyID: string, title: string | null) {
         const target = session()
-        const previous = get(id)
+        const targetID = sessionID(target)
+        const previous = get(ptyID)
 
         if (!previous || title === previous.title || (title === null && previous.userTitle === null)) return
 
         const replace = (terminal: PersistentPtyInfo) =>
-          void dispatch(target.server, { type: "terminal.replaced", sessionID: target.id, terminal })
+          void dispatch(target.server, { type: "terminal.replaced", sessionID: targetID, terminal })
 
         // Only a new title is known before the server answers; a cleared one shows whatever the server falls back to.
         if (title !== null) replace({ ...previous, title, userTitle: title })
 
         await target.server.client.experimental.persistentPty
-          .update({ ptyID: id, title })
+          .update({ ptyID, title })
           .then(replace)
           .catch((error) => {
             // A newer title from the server stays.
-            if (title !== null && get(id)?.userTitle === title) replace(previous)
+            if (title !== null && get(ptyID)?.userTitle === title) replace(previous)
             input.toast.show(
               isPtyFeatureUnsupportedError(error)
                 ? { variant: "error", title: input.t("rename.unsupported") }
@@ -408,9 +415,11 @@ export function createTerminalModel(input: {
     available,
     /** The session's terminals; the first load lists them from its server. */
     load(session: SessionRef) {
+      const id = sessionID(session)
       sessions.set(session.key, session)
+      sessions.set(`${session.server.id}\n${id}`, session)
       watch(session.server)
-      if (session.id) void dispatch(session.server, { type: "session.loaded", sessionID: session.id })
+      if (id) void dispatch(session.server, { type: "session.loaded", sessionID: id })
 
       const existing = handles.get(session.key)
 
@@ -442,6 +451,7 @@ export function createTerminalModel(input: {
 
       removed.forEach((session) => {
         sessions.delete(session.key)
+        sessions.delete(`${session.server.id}\n${sessionID(session)}`)
         handles.delete(session.key)
         selected.delete(session.key)
         dispatchFocus({ type: "cancelled", session: session.key })
@@ -449,7 +459,8 @@ export function createTerminalModel(input: {
 
       const server = removed[0]?.server
 
-      if (server) void dispatch(server, { type: "sessions.removed", sessionIDs: removed.map((session) => session.id) })
+      if (server)
+        void dispatch(server, { type: "sessions.removed", sessionIDs: removed.map((session) => sessionID(session)) })
     },
     dispose() {
       lifetime.abort()

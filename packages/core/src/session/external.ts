@@ -443,7 +443,7 @@ function extractPathsFromText(sample: string, home: string): string | undefined 
 
 function fileMtimeMs(fullPath: string): number {
   if (!nodeFs.existsSync(fullPath)) return 0
-  return nodeFs.statSync(fullPath, { throwIfNoEntry: false })?.mtimeMs ?? 0
+  return Math.floor(nodeFs.statSync(fullPath, { throwIfNoEntry: false })?.mtimeMs ?? 0)
 }
 
 function selectRecentFilesByParent(
@@ -745,6 +745,7 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
         const lines = yield* readBoundedJsonlLines(fullPath)
 
         if (lines.length === 0) return undefined
+        const fallbackTime = fileMtimeMs(fullPath) || Date.now()
         let cwd = ""
         let relocatedCwd = ""
         let customTitle = ""
@@ -767,10 +768,12 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
           if (row.type === "relocated" && row.relocatedCwd?.trim()) relocatedCwd = row.relocatedCwd.trim()
           if (row.type === "custom-title" && row.customTitle?.trim()) customTitle = row.customTitle.trim()
 
-          const time = parseTime(row.timestamp, updatedAt || Date.now())
+          const time = parseTime(row.timestamp, updatedAt || fallbackTime)
 
-          if (!createdAt && row.timestamp) createdAt = time
-          updatedAt = Math.max(updatedAt, time)
+          if (row.timestamp) {
+            if (!createdAt) createdAt = time
+            updatedAt = Math.max(updatedAt, time)
+          }
 
           if (row.type === "user" && !row.isMeta) {
             const extracted = extractParts(row.message?.content)
@@ -805,7 +808,6 @@ const scanClaude = Effect.fn("SessionExternal.scanClaude")(function* (
         if (!firstUser) return undefined
         seenIDs.add(sessionID)
 
-        const fallbackTime = fileMtimeMs(fullPath) || Date.now()
         const discovered: DiscoveredSession = {
           id: sessionID,
           source: "claude",
@@ -1100,6 +1102,7 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
       const lines = yield* readBoundedJsonlLines(fullPath)
 
       if (lines.length === 0) return undefined
+      const fallbackTime = fileMtimeMs(fullPath) || Date.now()
       let cwd = ""
       let createdAt = 0
       let updatedAt = 0
@@ -1113,10 +1116,12 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
 
         if (Option.isNone(parsed)) continue
         const row = parsed.value
-        const time = parseTime(row.timestamp, updatedAt || Date.now())
+        const time = parseTime(row.timestamp, updatedAt || fallbackTime)
 
-        if (!createdAt && row.timestamp) createdAt = time
-        updatedAt = Math.max(updatedAt, time)
+        if (row.timestamp) {
+          if (!createdAt) createdAt = time
+          updatedAt = Math.max(updatedAt, time)
+        }
 
         if (row.type === "session" && row.cwd && !cwd) cwd = row.cwd
 
@@ -1138,7 +1143,6 @@ const scanPi = Effect.fn("SessionExternal.scanPi")(function* (
 
       if (!firstUser) return undefined
 
-      const fallbackTime = fileMtimeMs(fullPath) || Date.now()
       const discovered: DiscoveredSession = {
         id: sessionID,
         source: "pi",
@@ -1205,6 +1209,7 @@ const scanGenericJsonlSource = Effect.fn("SessionExternal.scanGenericJsonlSource
       const lines = yield* readBoundedJsonlLines(fullPath)
 
       if (lines.length === 0) return undefined
+      const fallbackTime = fileMtimeMs(fullPath) || Date.now()
       let cwd = ""
       let createdAt = 0
       let updatedAt = 0
@@ -1220,10 +1225,12 @@ const scanGenericJsonlSource = Effect.fn("SessionExternal.scanGenericJsonlSource
         const row = parsed.value
 
         if (row.cwd && !cwd) cwd = row.cwd
-        const time = parseTime(row.timestamp, updatedAt || Date.now())
+        const time = parseTime(row.timestamp, updatedAt || fallbackTime)
 
-        if (!createdAt && row.timestamp) createdAt = time
-        updatedAt = Math.max(updatedAt, time)
+        if (row.timestamp) {
+          if (!createdAt) createdAt = time
+          updatedAt = Math.max(updatedAt, time)
+        }
 
         const role = row.message?.role ?? row.role ?? (row.type === "user" || row.type === "assistant" ? row.type : undefined)
         const rawContent = row.message?.content ?? row.content
@@ -1252,7 +1259,6 @@ const scanGenericJsonlSource = Effect.fn("SessionExternal.scanGenericJsonlSource
 
       if (!firstUser) return undefined
 
-      const fallbackTime = fileMtimeMs(fullPath) || Date.now()
       const discovered: DiscoveredSession = {
         id: sessionID,
         source: input.source,
@@ -1302,6 +1308,7 @@ const scanDsh = Effect.fn("SessionExternal.scanDsh")(function* (
       const lines = yield* readBoundedJsonlLines(fullPath)
 
       if (lines.length === 0) return undefined
+      const fallbackTime = fileMtimeMs(fullPath) || Date.now()
       let cwd = ""
       let title = ""
       let createdAt = 0
@@ -1316,9 +1323,12 @@ const scanDsh = Effect.fn("SessionExternal.scanDsh")(function* (
         const surfaceOp = isRecord(row.surfaceOp) ? row.surfaceOp : undefined
         if (surfaceOp?.op === "replace") continue
 
-        const time = typeof row.time === "number" ? row.time : typeof row.createdAt === "number" ? row.createdAt : updatedAt || Date.now()
-        if (!createdAt && time) createdAt = time
-        updatedAt = Math.max(updatedAt, time)
+        const explicitTime = typeof row.time === "number" ? row.time : typeof row.createdAt === "number" ? row.createdAt : 0
+        const time = explicitTime || updatedAt || fallbackTime
+        if (explicitTime) {
+          if (!createdAt) createdAt = explicitTime
+          updatedAt = Math.max(updatedAt, explicitTime)
+        }
 
         if ((row.type === "session" || row.type === "header") && typeof row.cwd === "string" && row.cwd && !cwd) {
           cwd = row.cwd
@@ -1378,7 +1388,6 @@ const scanDsh = Effect.fn("SessionExternal.scanDsh")(function* (
       if (!firstUser) return undefined
       seenIDs.add(sessionID)
 
-      const fallbackTime = fileMtimeMs(fullPath) || Date.now()
       const discovered: DiscoveredSession = {
         id: sessionID,
         source: "deepseek-harness",
@@ -1870,7 +1879,14 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
   const checkedExternalIDs = new Set<string>(deletedIDs)
 
   const existingRows = yield* input.db
-    .select({ id: SessionTable.id, model: SessionTable.model, directory: SessionTable.directory })
+    .select({
+      id: SessionTable.id,
+      project_id: SessionTable.project_id,
+      model: SessionTable.model,
+      directory: SessionTable.directory,
+      time_updated: SessionTable.time_updated,
+      metadata: SessionTable.metadata,
+    })
     .from(SessionTable)
     .where(like(SessionTable.id, "ses_ext_%"))
     .all()
@@ -1888,13 +1904,23 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
     "workbuddy",
   ]
 
+  const maxActivityByProject = new Map<Project.ID, number>()
+  const recordProjectActivity = (projectID: Project.ID, timestamp: number) => {
+    const prev = maxActivityByProject.get(projectID) ?? 0
+    if (timestamp > prev) maxActivityByProject.set(projectID, timestamp)
+  }
+
   const resolvedDirs = new Map<string, Project.Resolved>()
-  const resolveProjectForDir = Effect.fnUntraced(function* (dir: string) {
+  const resolveProjectForDir = Effect.fnUntraced(function* (dir: string, activityTime?: number) {
     const cached = resolvedDirs.get(dir)
-    if (cached) return cached
+    if (cached) {
+      if (activityTime) recordProjectActivity(cached.id, activityTime)
+      return cached
+    }
     const project = yield* input.projects.resolve(AbsolutePath.make(dir))
     resolvedDirs.set(dir, project)
     yield* upsertProject(input.db, project).pipe(Effect.ignoreCause)
+    if (activityTime) recordProjectActivity(project.id, activityTime)
     return project
   })
 
@@ -1905,6 +1931,23 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
     }
 
     checkedExternalIDs.add(row.id)
+
+    const filePath = typeof row.metadata?.filePath === "string" ? row.metadata.filePath : ""
+    const mtime = filePath ? fileMtimeMs(filePath) : 0
+    const effectiveUpdated = Math.floor(mtime > 0 && row.time_updated > mtime + 60_000 ? mtime : row.time_updated)
+
+    if (effectiveUpdated !== row.time_updated) {
+      yield* input.db
+        .update(SessionTable)
+        .set({
+          time_updated: effectiveUpdated,
+          time_idle: effectiveUpdated,
+          time_viewed: effectiveUpdated,
+        })
+        .where(eq(SessionTable.id, row.id))
+        .run()
+        .pipe(Effect.ignoreCause)
+    }
 
     const shouldUpgrade =
       (row.model?.providerID === "pigu" && row.model?.id === "default") ||
@@ -1925,7 +1968,7 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
 
     if (isHomeOrRoot(row.directory, home) || !(yield* input.fs.isDir(row.directory))) {
       const fallbackDir = ensureFallbackProjectDir(home, row.directory)
-      const project = yield* resolveProjectForDir(fallbackDir)
+      const project = yield* resolveProjectForDir(fallbackDir, effectiveUpdated)
       const subpath = RelativePath.make(path.relative(project.directory, fallbackDir).replaceAll("\\", "/"))
       yield* input.db
         .update(SessionTable)
@@ -1937,7 +1980,10 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
         .where(eq(SessionTable.id, row.id))
         .run()
         .pipe(Effect.ignoreCause)
+      continue
     }
+
+    recordProjectActivity(row.project_id, effectiveUpdated)
   }
 
   const [codex, claude, agy, pi, opencode, cursor, grok, dsh, workbuddy] = yield* Effect.all([
@@ -1970,15 +2016,13 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
 
   const all = [...codex, ...claude, ...agy, ...pi, ...opencode, ...cursor, ...grok, ...dsh, ...workbuddy]
 
-  if (all.length === 0) return
-
   const defaultAgent = Agent.ID.make("build")
 
   for (const session of all) {
     const existingDir = yield* resolveExistingDir(input.fs, session.cwd, home)
     const validDir = existingDir ?? ensureFallbackProjectDir(home, session.cwd)
     const sessionModel = localModelForSource(session.source, session.model)
-    const project = yield* resolveProjectForDir(validDir)
+    const project = yield* resolveProjectForDir(validDir, session.updatedAt)
 
     const subpath = RelativePath.make(path.relative(project.directory, validDir).replaceAll("\\", "/"))
 
@@ -2083,18 +2127,18 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
     }
 
     yield* Bus.reserveSequence(input.db, session.id, Math.max(1, messageRows.length)).pipe(Effect.ignoreCause)
+  }
 
+  for (const [projectID, maxActivity] of maxActivityByProject) {
     yield* input.db
       .update(ProjectTable)
       .set({
-        time_active: sql`max(${ProjectTable.time_active}, ${session.updatedAt})`,
+        time_active: maxActivity,
         time_updated: sql`${ProjectTable.time_updated}`,
       })
-      .where(eq(ProjectTable.id, project.id))
+      .where(eq(ProjectTable.id, projectID))
       .run()
       .pipe(Effect.ignoreCause)
-
-    yield* input.projects.activate(project.id).pipe(Effect.ignoreCause)
   }
 })
 

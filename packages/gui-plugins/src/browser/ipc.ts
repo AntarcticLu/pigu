@@ -101,6 +101,7 @@ export const BrowserPane = Ipc.define({
         binding,
         server: text(16_384),
         session: text(256).check(Schema.isStartingWith("ses")),
+        directory: Schema.optionalKey(text(16_384)),
         restore: Schema.optionalKey(Browser.State),
       }),
     },

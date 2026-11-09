@@ -175,8 +175,9 @@ export function createHostApis() {
       connected.scoped(renamed)
       const server = connected.scope(scope.session.server.id)
       const directory = base64Encode(location.directory)
-      const session = SessionStateKey.from(server, SessionRouteKey.fromRoute(directory, scope.session.id))
-      const at = (store: string) => Persist.serverSession(server, directory, scope.session.id, store)
+      const routeId = scope.session.id || scope.session.tab
+      const session = SessionStateKey.from(server, SessionRouteKey.fromRoute(directory, routeId))
+      const at = (store: string) => Persist.serverSession(server, directory, routeId, store)
 
       return { ...at(name), copyFrom: [...older(at(renamed)), ...storeImports(from, session)] }
     }
@@ -554,15 +555,35 @@ export function createPluginAttachment(apis: HostApis) {
   }
 
   const sessions = createMemo(() => {
-    const owned = new Set(tabs.store.filter((tab) => tab.type === "session").map(tabKey))
+    const owned = new Set(tabs.store.map(tabKey))
     Array.from(refs).forEach(([key, ref]) => {
       if (!owned.has(ref.tab)) refs.delete(key)
     })
     tabs.store.forEach((tab) => {
-      if (tab.type !== "session") return
       const target = server(tab.server)
 
       if (!target) return
+      if (tab.type === "draft") {
+        const id = tabKey(tab)
+        const key = `${tab.server}\n${id}`
+
+        if (refs.has(key)) return
+        refs.set(key, {
+          key,
+          id: "",
+          tab: id,
+          server: target,
+          pending: false,
+          get location() {
+            const currentView = routedView()?.()
+            if (currentView?.key === key && currentView.location) return currentView.location
+            const dir =
+              tab.worktree && tab.worktree !== "main" && tab.worktree !== "create" ? tab.worktree : tab.directory
+            return dir ? { directory: dir } : undefined
+          },
+        })
+        return
+      }
       Array.from(new Set([tab.sessionId, tab.routeSessionId ?? tab.sessionId])).forEach((id) => {
         const key = `${tab.server}\n${id}`
 
@@ -588,7 +609,12 @@ export function createPluginAttachment(apis: HostApis) {
   const routed = createMemo(() => {
     const value = route()
 
-    return value.type === "session" ? `${value.server}\n${value.sessionId}` : undefined
+    if (value.type === "session") return `${value.server}\n${value.sessionId}`
+    if (value.type === "draft") {
+      const tab = tabs.store.find((item) => item.type === "draft" && item.draftID === value.draftID)
+      return tab ? `${tab.server}\n${tabKey(tab)}` : undefined
+    }
+    return undefined
   })
 
   const current = createMemo(() => {
@@ -613,7 +639,7 @@ export function createPluginAttachment(apis: HostApis) {
 
     return SessionStateKey.from(
       servers.scope(ServerConnection.Key.make(session.server.id)),
-      SessionRouteKey.fromRoute(base64Encode(location.directory), session.id),
+      SessionRouteKey.fromRoute(base64Encode(location.directory), session.id || session.tab),
     )
   }
 
@@ -654,7 +680,9 @@ export function createPluginAttachment(apis: HostApis) {
   })
 
   const shellTab = (session: SessionRef) =>
-    findSessionTab(tabs.store, ServerConnection.Key.make(session.server.id), session.id)
+    session.id
+      ? findSessionTab(tabs.store, ServerConnection.Key.make(session.server.id), session.id)
+      : tabs.store.find((tab) => tabKey(tab) === session.tab)
 
   const sideOpened = (session: SessionRef) => !!tabs.region(shellTab(session), "side")
 

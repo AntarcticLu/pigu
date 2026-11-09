@@ -30,7 +30,7 @@ export type Registration = {
 export function openBinding(input: {
   client: Client
   listen: (binding: string, listener: (event: PaneEvent) => void) => () => void
-  target: { server: string; session: string; restore?: Browser.State }
+  target: { server: string; session: string; directory?: string; restore?: Browser.State }
   /** Main took the binding. */
   accepted: () => void
   /** Main refused or closed the binding, or the Ipc could not answer. */

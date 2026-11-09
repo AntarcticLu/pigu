@@ -34,15 +34,15 @@ const TRIVIAL_SESSION_TITLES = new Set([
   "say 'claude code is working!' and nothing else.",
 ])
 
-export function isDefaultArchivedProject(worktree: string, sessionCount: number, _rankWithSessions: number) {
+export function isIntrinsicArchivedProject(worktree: string, sessionCount: number) {
   const name = getFilename(worktree) || worktree
   const normalized = pathKey(worktree)
 
-  if (normalized.endsWith("/pigu/pigu") || normalized.endsWith("/pigu")) return false
-
   if (sessionCount === 0) return true
 
-  if (
+  return (
+    normalized.includes("/.pigu/projects/") ||
+    normalized === "/volumes/antl/pigu" ||
     normalized === "/users/al" ||
     normalized === "/volumes/antl" ||
     /^\/users\/[^/]+$/i.test(normalized) ||
@@ -50,11 +50,13 @@ export function isDefaultArchivedProject(worktree: string, sessionCount: number,
     /^[a-z]:\/users\/[^/]+$/i.test(normalized) ||
     /^[a-z]:\/$/i.test(normalized) ||
     TEMP_FOLDER_PATTERNS.some((pattern) => pattern.test(name))
-  ) {
-    return true
-  }
+  )
+}
 
-  return false
+export function isDefaultArchivedProject(worktree: string, sessionCount: number, rankWithSessions: number) {
+  if (isIntrinsicArchivedProject(worktree, sessionCount)) return true
+
+  return rankWithSessions >= 5
 }
 
 export function isDefaultArchivedSession(session: SessionInfo, indexInProject: number, totalInProject = 1) {

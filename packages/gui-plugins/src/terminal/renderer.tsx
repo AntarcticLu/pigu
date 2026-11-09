@@ -44,7 +44,7 @@ const setup: Plugin.Setup<typeof Terminal> = (ctx) => {
   const enabled = createMemo(() => {
     const session = sessions.current()
 
-    return !!session?.id && model.available(session.server)
+    return !!(session?.id || session?.tab) && model.available(session.server)
   })
 
   // Opens a terminal's tab in the session's side panel and focuses it.

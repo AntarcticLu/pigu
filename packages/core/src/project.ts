@@ -17,6 +17,7 @@ import { ProjectSchema } from "./project/schema.js"
 import { ProjectTable, upsertProject } from "./project/sql.js"
 import { ProjectIcon } from "./project/icon.js"
 import { WorktreeTable } from "./worktree/sql.js"
+import { SessionExternal } from "./session/external.js"
 
 export const ID = ProjectSchema.ID
 export type ID = ProjectSchema.ID
@@ -117,10 +118,10 @@ function fromRow(row: typeof ProjectTable.$inferSelect): Info {
     icon,
     commands: row.commands ?? undefined,
     time: {
-      created: row.time_created,
-      updated: row.time_updated,
-      active: row.time_active,
-      archived: row.time_archived ?? undefined,
+      created: Math.floor(row.time_created),
+      updated: Math.floor(row.time_updated),
+      active: Math.floor(row.time_active),
+      archived: row.time_archived != null ? Math.floor(row.time_archived) : undefined,
     },
     sandboxes: row.sandboxes,
   }
@@ -248,6 +249,14 @@ const layer = Layer.effect(
     })
 
     const list = Effect.fn("Project.list")(function* (input?: ListInput) {
+      if (!SessionExternal.hasCompletedInitialSync()) {
+        yield* SessionExternal.sync({
+          db,
+          fs,
+          projects: service,
+          version: "0.0.1",
+        }).pipe(Effect.ignoreCause)
+      }
       const rows = yield* db
         .select()
         .from(ProjectTable)
@@ -504,7 +513,8 @@ const layer = Layer.effect(
       )
     })
 
-    return Service.of({ list, update, activate, resolve, sweep })
+    const service = Service.of({ list, update, activate, resolve, sweep })
+    return service
   }),
 )
 

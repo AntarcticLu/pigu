@@ -259,7 +259,7 @@ export function getConfig() {
         protocols: { name: "Pigu", schemes: ["pigu", "opencode"] },
         // An Icon Composer package compiles to Assets.car, which macOS 26 and later draw the app icon from
         // (Dock, Finder, system dialogs and the system icon styles). Older macOS keeps using the ICNS.
-        mac: { ...base.mac, icon: "resources/icons/icon.icon" },
+        mac: { ...base.mac, icon: "resources/icons/icon.icns" },
         // The DMG volume icon would otherwise use the same actool-generated ICNS.
         dmg: { icon: "resources/icons/icon.icns" },
         publish: {
