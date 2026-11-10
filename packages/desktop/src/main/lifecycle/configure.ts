@@ -1,5 +1,6 @@
+import { execFileSync } from "node:child_process"
 import { randomUUID } from "node:crypto"
-import { mkdirSync, rmSync } from "node:fs"
+import { mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs"
 import { enableCompileCache } from "node:module"
 import { homedir, tmpdir } from "node:os"
 import path from "node:path"
@@ -54,6 +55,7 @@ export function configureApplication() {
 
   // V8 bytecode for the main bundle survives between launches, like the renderer's code cache.
   enableCompileCache(path.join(app.getPath("userData"), "compile-cache"))
+  ensureWindowsSandboxAcl()
 }
 
 export function acquireApplicationLock() {
@@ -61,6 +63,39 @@ export function acquireApplicationLock() {
   app.quit()
 
   return false
+}
+
+// Electron 44 aborts startup on Windows 11 (install_dir_access.cc) when the app is extracted to a
+// drive or directory whose inherited ACL contains an AppContainer SID without ALL APPLICATION PACKAGES
+// (*S-1-15-2-1). Granting read/execute on the install directory before ready lets the sandboxed child
+// processes read the runtime files on any drive.
+function ensureWindowsSandboxAcl() {
+  if (process.platform !== "win32" || !app.isPackaged) return
+
+  try {
+    const installDir = path.dirname(process.execPath)
+    const userData = app.getPath("userData")
+    const markerPath = path.join(userData, "win-sandbox-acl.txt")
+    const key = `${installDir}:${Math.floor(statSync(installDir).birthtimeMs)}`
+
+    if (readMarker(markerPath) === key) return
+
+    execFileSync(
+      "icacls.exe",
+      [installDir, "/grant", "*S-1-15-2-1:(OI)(CI)(RX)", "/grant", "*S-1-15-2-2:(OI)(CI)(RX)", "/Q"],
+      { windowsHide: true, stdio: "ignore", timeout: 5000 },
+    )
+    mkdirSync(userData, { recursive: true })
+    writeFileSync(markerPath, key, "utf8")
+  } catch {}
+}
+
+function readMarker(filePath: string) {
+  try {
+    return readFileSync(filePath, "utf8")
+  } catch {
+    return ""
+  }
 }
 
 function createTestRoot() {
