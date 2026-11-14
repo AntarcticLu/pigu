@@ -16,6 +16,7 @@ import type { ComposerModel } from "./model"
 import type { ComposerModelLabel } from "./model-label"
 import { ComposerContextCircle } from "./context-circle"
 import { ComposerMcpSkillControl } from "./mcp-skill-control"
+import { ComposerVoiceControl } from "./voice-control"
 
 export function Composer(props: {
   class?: string
@@ -67,6 +68,7 @@ export function Composer(props: {
         suggestionBoundary={props.suggestionBoundary}
         trailingControl={
           <div class="flex items-center gap-0.5">
+            <ComposerVoiceControl model={props.model} />
             <ComposerMcpSkillControl model={props.model} />
             <ComposerContextCircle model={props.model} />
             <ComposerFollowUpControl />

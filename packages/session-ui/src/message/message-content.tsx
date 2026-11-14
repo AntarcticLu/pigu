@@ -1043,10 +1043,14 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
   }
 
   const label = createMemo(() => [i18n.t(outcome()), usage()].filter(Boolean).join(" · "))
+  const isExternalCompaction = () => props.message.id.startsWith("msg_ext_") && props.message.status === "completed"
 
   return (
     <Show
-      when={!data.backgroundCompaction || props.message.reason === "manual" || props.message.status === "failed"}
+      when={
+        !isExternalCompaction() &&
+        (!data.backgroundCompaction || props.message.reason === "manual" || props.message.status === "failed")
+      }
       fallback={
         <QuietCompaction
           id={props.message.id}
@@ -1164,7 +1168,7 @@ function QuietCompaction(props: { id: string; created: number; running: boolean;
         <div id={`${props.id}-summary`} data-slot="session-compaction-summary">
           <div data-component="text-part" data-timeline-part-id={props.id}>
             <div data-slot="text-part-body">
-              <PacedMarkdown text={props.summary} cacheKey={props.id} streaming={false} />
+              <Markdown text={props.summary} cacheKey={props.id} streaming={false} />
             </div>
           </div>
           <Show when={props.usage}>

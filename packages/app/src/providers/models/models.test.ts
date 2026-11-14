@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test"
 import { latestModels, uniqueModels } from "./models"
+import { detectModelProtocol } from "./protocol"
 
 const model = (provider: string, id: string, release_date: string, family?: string) => ({
   id,
@@ -52,4 +53,17 @@ test("uniqueModels keeps the first of each model in order", () => {
     { providerID: "b", modelID: "1" },
     { providerID: "a", modelID: "2" },
   ])
+})
+
+test("detectModelProtocol respects vendor endpoint kind and slash-namespaced router IDs", () => {
+  expect(detectModelProtocol("google/gemini-2.5-pro", "https://openrouter.ai/api/v1")).toBe("openai-chat")
+  expect(detectModelProtocol("anthropic/claude-sonnet-4.6", "https://openrouter.ai/api/v1")).toBe("openai-chat")
+  expect(detectModelProtocol("claude-sonnet-4-6", "https://api.anthropic.com/v1")).toBe("anthropic")
+  expect(detectModelProtocol("MiniMax-M2.7", "https://api.minimaxi.com/anthropic/v1")).toBe("anthropic")
+  expect(detectModelProtocol("gemini-2.5-pro", "https://generativelanguage.googleapis.com/v1beta")).toBe("gemini")
+  expect(detectModelProtocol("gpt-5.4", "https://api.openai.com/v1")).toBe("openai-responses")
+  expect(detectModelProtocol("o3", "https://api.openai.com/v1")).toBe("openai-responses")
+  expect(detectModelProtocol("gpt-4o", "https://api.openai.com/v1")).toBe("openai-chat")
+  expect(detectModelProtocol("deepseek-reasoner", "https://api.deepseek.com/v1")).toBe("openai-chat")
+  expect(detectModelProtocol("gpt-6.1-sol", "https://pigutoken.com/v1")).toBe("openai-responses")
 })

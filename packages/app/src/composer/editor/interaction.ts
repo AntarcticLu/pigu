@@ -790,6 +790,12 @@ export function createComposerEditor(input: {
       void attachments.addAttachments(files)
       restoreFocus()
     },
+    insertText(text: string) {
+      if (!text) return
+      resetCycle()
+      draft.addText(text)
+      restoreFocus()
+    },
     setQuery(value: string) {
       dispatch({ type: "popover.query", value })
     },

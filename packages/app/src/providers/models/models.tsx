@@ -1,5 +1,7 @@
 import { type Accessor, createMemo } from "solid-js"
 import { createSimpleContext } from "@opencode/ui/context"
+import { consoleProviderGroup } from "@/providers/catalog/console"
+import { useIntegrations } from "@/providers/catalog/integrations"
 import { useProviders } from "@/providers/catalog/providers"
 import { tr } from "@/runtime/i18n/language"
 import { useGlobal } from "@/runtime/server/runtime"
@@ -54,22 +56,37 @@ export function uniqueModels(models: ModelKey[]) {
 
 const createModelsController = (directory: Accessor<string | undefined>) => {
   const providers = useProviders(() => directory())
+  const integrations = useIntegrations(() => directory())
   const models = useGlobal().models
   const scopeStore = useExtensionScopeStore()
   const store = models.store
   const setStore = models.set
 
-  const available = createMemo(() =>
-    providers
-      .connected()
+  const available = createMemo(() => {
+    const connected = providers.connected()
+    const managedConsole = consoleProviderGroup(connected)
+
+    const consoleConnected = integrations
+      .list()
+      .find((item) => item.id === "opencode")
+      ?.connections.some((connection) => connection.type === "credential" || connection.type === "env")
+
+    return connected
+      .filter(
+        (p) =>
+          p.id !== "opencode" ||
+          managedConsole !== undefined ||
+          Boolean(consoleConnected) ||
+          Object.values(p.models).some((m) => m.cost.input > 0),
+      )
       .flatMap((p) =>
         Object.values(p.models).map((m) => ({
           ...m,
           provider: p,
         })),
       )
-      .filter((m) => (m.provider.id === "local" ? scopeStore.isLocalAgentEnabled(m.id, directory()) : true)),
-  )
+      .filter((m) => (m.provider.id === "local" ? scopeStore.isLocalAgentEnabled(m.id, directory()) : true))
+  })
 
   // Release dates as epoch ms; an unparseable date is NaN and never counts as recent.
   const release = createMemo(

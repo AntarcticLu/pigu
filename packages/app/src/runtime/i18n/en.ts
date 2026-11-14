@@ -828,6 +828,7 @@ export const dict = {
   "settings.tab.notifications": "Notifications",
   "settings.tab.projects": "Projects",
   "settings.tab.extensions": "Extensions",
+  "settings.tab.mobile": "Mobile",
   "settings.tab.experimental": "Experimental",
   "settings.experimental.description": "Try experimental features",
   "settings.experimental.row.newIcons.title": "New icons",

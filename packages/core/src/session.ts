@@ -443,11 +443,17 @@ const layer = Layer.effect(
       }),
       messages: Effect.fn("Session.messages")(function* (input) {
         yield* result.get(input.sessionID)
+        if (input.sessionID.startsWith("ses_ext_")) {
+          yield* SessionExternal.prepareMessagesRead({ db, sessionID: input.sessionID, request: input })
+        }
         return yield* store.messages(input)
       }),
       message: (input) => sessions.forSession(input.sessionID).message(input.messageID),
       messagesWithRefs: Effect.fn("Session.messagesWithRefs")(function* (input) {
         const session = yield* result.get(input.sessionID)
+        if (input.sessionID.startsWith("ses_ext_")) {
+          yield* SessionExternal.prepareMessagesRead({ db, sessionID: input.sessionID, request: input })
+        }
         if (!(yield* mediaBlob(session))) return yield* store.messages(input)
         return yield* store.messagesWithRefs(input)
       }),

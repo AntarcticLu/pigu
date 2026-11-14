@@ -107,6 +107,7 @@ const materializeAttachment = Effect.fn("SessionPrompt.materializeAttachment")(f
     })
   }
   const label = attachmentLabel(input)
+  const declaredMime = input.uri.startsWith("data:") ? dataURLMime(input.uri) : undefined
   const resolved = input.uri.startsWith("data:")
     ? {
         bytes: yield* decodeDataURL(input.uri, label),
@@ -123,7 +124,14 @@ const materializeAttachment = Effect.fn("SessionPrompt.materializeAttachment")(f
       message: `Attachment exceeds the ${MAX_ATTACHMENT_BYTES} byte limit: ${label}`,
     })
 
-  const mime = resolved.mime ?? Mime.detect(resolved.bytes)
+  const detected = resolved.mime ?? Mime.detect(resolved.bytes)
+  const mime =
+    declaredMime &&
+    (detected === "application/octet-stream" ||
+      ((declaredMime.startsWith("audio/") || declaredMime.startsWith("video/")) &&
+        (detected.endsWith("/webm") || detected.endsWith("/mp4"))))
+      ? declaredMime
+      : detected
   const content =
     mime === "text/plain" && resolved.start !== undefined
       ? Buffer.from(
@@ -226,6 +234,14 @@ const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 // A data URL is the whole file; errors and logs must name the attachment, not echo its bytes.
 function attachmentLabel(input: PromptInput.FileAttachment) {
   return input.name ?? (input.uri.startsWith("data:") ? "inline attachment" : input.uri)
+}
+
+function dataURLMime(uri: string) {
+  const comma = uri.indexOf(",")
+  if (comma === -1) return undefined
+  const raw = uri.slice(5, comma).split(";", 1)[0]?.trim().toLowerCase()
+  if (!raw || !/^[a-z0-9.+-]+\/[a-z0-9.+-]+$/.test(raw)) return undefined
+  return raw
 }
 
 function decodeDataURL(uri: string, label: string) {

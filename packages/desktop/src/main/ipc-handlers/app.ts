@@ -1,4 +1,4 @@
-import { BrowserWindow } from "electron"
+import { app, BrowserWindow, powerSaveBlocker } from "electron"
 import { parseDesktopNativeBundle } from "@opencode/app/i18n/desktop-native"
 import { Effect } from "effect"
 import { AppRpcs } from "../../shared/ipc-rpc"
@@ -50,6 +50,7 @@ export const appHandlers = AppRpcs.toLayer(
       AppSetBackgroundColor: ({ color }) => Effect.sync(() => setBackgroundColor(color)),
       AppGetSpellcheckEnabled: () => Effect.sync(getSpellcheckEnabled),
       AppSetSpellcheckEnabled: ({ enabled }) => Effect.sync(() => setSpellcheckEnabled(enabled)),
+      AppSetPreventSleep: ({ enabled }) => Effect.sync(() => setPreventSleepBlocker(enabled)),
       AppExportDebugLogs: () => logging.exportDebug,
       AppSetForceFocus: ({ enabled }, context) => promise(() => setForceFocus(sender(handoff, context), enabled)),
       AppRecordFatalRendererError: ({ error }) =>
@@ -87,4 +88,39 @@ export const appHandlers = AppRpcs.toLayer(
 
 function promise<A>(evaluate: () => A | Promise<A>) {
   return Effect.tryPromise(async () => evaluate()).pipe(Effect.orDie)
+}
+
+let sleepBlockerID: number | undefined
+
+let sleepBlockerCleanupWired = false
+
+function setPreventSleepBlocker(enabled: boolean): boolean {
+  if (!sleepBlockerCleanupWired) {
+    sleepBlockerCleanupWired = true
+    app.once("will-quit", () => {
+      if (sleepBlockerID !== undefined && powerSaveBlocker.isStarted(sleepBlockerID)) {
+        powerSaveBlocker.stop(sleepBlockerID)
+      }
+
+      sleepBlockerID = undefined
+    })
+  }
+
+  if (!enabled) {
+    if (sleepBlockerID !== undefined && powerSaveBlocker.isStarted(sleepBlockerID)) {
+      powerSaveBlocker.stop(sleepBlockerID)
+    }
+
+    sleepBlockerID = undefined
+
+    return false
+  }
+
+  if (sleepBlockerID !== undefined && powerSaveBlocker.isStarted(sleepBlockerID)) {
+    return true
+  }
+
+  sleepBlockerID = powerSaveBlocker.start("prevent-app-suspension")
+
+  return powerSaveBlocker.isStarted(sleepBlockerID)
 }

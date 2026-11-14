@@ -45,6 +45,7 @@ import { WebSearch } from "@opencode/core/websearch"
 import { Worktree } from "@opencode/core/worktree"
 import { WorktreeStrategies } from "@opencode/core/worktree/strategies"
 import { Effect, Layer } from "effect"
+import { tempGlobalLayer } from "../fixture/global"
 import { tempLocationLayer } from "../fixture/location"
 import { emptyMcpLayer } from "../fixture/mcp"
 import { offlineModels } from "../fixture/models"
@@ -135,6 +136,7 @@ export const makePluginTestLayer = (permission = permissionLayer, generate = gen
       WorktreeStrategies.node,
     ]),
     [
+      Global.node.replace(tempGlobalLayer),
       Location.node.replace(tempLocationLayer),
       Npm.node.replace(npmLayer),
       Config.node.replace(configLayer),

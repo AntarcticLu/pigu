@@ -102,11 +102,14 @@ import { CommandPlugin } from "./command.js"
 import { IdentityPlugin } from "./identity.js"
 import { PlanPlugin } from "./plan.js"
 import { GoalPlugin } from "./goal.js"
+import { ModelsDevPlugin } from "./models-dev.js"
 import { McpCodeModeDefaultsPlugin } from "./mcp-codemode-defaults.js"
+import { ProviderPlugins } from "./provider.js"
 import { DynamicProviderPlugin } from "./provider/dynamic.js"
 import { NativeCliProviderPlugin } from "./provider/native-cli.js"
 import { OpencodePlugin } from "./provider/opencode.js"
 import { PiguProviderPlugin } from "./provider/pigu.js"
+import { WebSearchPlugins } from "./websearch/index.js"
 import { SkillPlugin } from "./skill.js"
 import { VcsHgPlugin } from "./vcs/hg.js"
 import { ToolInputRepairPlugin } from "./tool-input-repair.js"
@@ -249,6 +252,9 @@ const pre = [
   GoalPlugin.Plugin,
   SkillPlugin.Plugin,
   VcsHgPlugin.Plugin,
+  ModelsDevPlugin,
+  ...ProviderPlugins,
+  ...WebSearchPlugins,
   NativeCliProviderPlugin,
   PatchTool.Plugin,
   // Render model prompts after the patch plugin selects the available editing tools.

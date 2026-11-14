@@ -19,6 +19,7 @@ export function ProjectMenuItems(props: {
   onRevealProject: (server: ServerConnection.Any, project: LocalProject) => void
   onClearNotifications?: (server: ServerConnection.Any, project: LocalProject) => void
   onHideProject: (server: ServerConnection.Any, project: LocalProject) => void
+  onDeleteProject?: (server: ServerConnection.Any, project: LocalProject) => void
 }) {
   const language = useLanguage()
 
@@ -41,6 +42,16 @@ export function ProjectMenuItems(props: {
           {language.t(
             fileManagerApp(platform.platform === "desktop" ? (platform.os ?? "unknown") : "unknown").actionLabel,
           )}
+        </Menu.Item>
+      </Show>
+      <Show when={props.onDeleteProject}>
+        <Menu.Separator />
+        <Menu.Item
+          data-variant="critical"
+          data-action="project-menu-delete"
+          onSelect={() => props.onDeleteProject?.(props.server, props.project)}
+        >
+          {language.tr("删除项目…", "Delete project…")}
         </Menu.Item>
       </Show>
     </>

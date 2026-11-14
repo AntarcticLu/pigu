@@ -891,6 +891,7 @@ export const dict = {
   "workspace.delete.confirm": "删除“{{name}}”吗？",
   "workspace.delete.location": "位置",
   "settings.search.empty.query": "“{{query}}”",
+  "settings.tab.mobile": "手机端",
 } satisfies Partial<Record<Keys, string>>
 
 export default dict

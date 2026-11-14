@@ -17,6 +17,7 @@ import { normalizeAgentList } from "@/runtime/server/global-sync/utils"
 import { useServerSDK } from "@/runtime/server/client"
 import { ScopedKey, type ServerScope } from "@/runtime/server/scope"
 import { useConfiguredModel } from "./configured"
+import { effectiveModelModality } from "./protocol"
 
 const ModelKeySchema = Schema.Struct({
   providerID: Schema.String,
@@ -195,7 +196,8 @@ export const { use: useLocal, provider: LocalProvider } = createSimpleContext({
 
     const defaultModel = () => {
       for (const provider of providers.connected()) {
-        const first = Object.values(provider.models)[0]
+        const values = Object.values(provider.models)
+        const first = values.find((item) => effectiveModelModality(provider.id, item.id) === "text")
 
         if (!first) continue
         const model = { providerID: provider.id, modelID: first.id }

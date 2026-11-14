@@ -562,6 +562,7 @@ const API_KEY_AUTH_PACKAGES: ReadonlySet<string> = new Set([
   "@opencode/ai/providers/deepseek",
   "@opencode/ai/providers/fireworks",
   "@opencode/ai/providers/openai-compatible",
+  "@opencode/ai/providers/openai-compatible-responses",
   "@opencode/ai/providers/google",
   "@opencode/ai/providers/google/interactions",
   "@opencode/ai/providers/groq",
@@ -579,6 +580,7 @@ function usesAPIKeyAuth(packageName: string | undefined) {
   return (
     API_KEY_AUTH_PACKAGES.has(name) ||
     name.startsWith("@opencode/ai/providers/openai/") ||
+    name.startsWith("@opencode/ai/providers/openai-compatible/") ||
     name.startsWith("@opencode/ai/providers/azure/")
   )
 }

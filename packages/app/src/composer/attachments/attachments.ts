@@ -282,6 +282,21 @@ function dragType(data: DataTransfer | null) {
 
 const imageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
 
+const audioMimes = new Set([
+  "audio/wav",
+  "audio/x-wav",
+  "audio/wave",
+  "audio/ogg",
+  "audio/mpeg",
+  "audio/mp3",
+  "audio/mp4",
+  "audio/m4a",
+  "audio/x-m4a",
+  "audio/flac",
+  "audio/amr",
+  "audio/webm",
+])
+
 // The server rejects inline attachments above this size, so larger media takes the path route.
 const MAX_INLINE_BYTES = 20 * 1024 * 1024
 
@@ -290,6 +305,8 @@ function native(mime: string, input: AttachmentDestination["input"]) {
   if (imageMimes.has(mime)) return input.image
 
   if (mime === "application/pdf") return input.pdf
+
+  if (audioMimes.has(mime) || mime.startsWith("audio/")) return Boolean(input.audio)
 
   return false
 }
@@ -301,6 +318,26 @@ const imageExtensions = new Map([
   ["png", "image/png"],
   ["webp", "image/webp"],
 ])
+
+const audioExtensions = new Map([
+  ["amr", "audio/amr"],
+  ["flac", "audio/flac"],
+  ["m4a", "audio/mp4"],
+  ["mp3", "audio/mpeg"],
+  ["ogg", "audio/ogg"],
+  ["opus", "audio/ogg"],
+  ["wav", "audio/wav"],
+])
+
+function normalizeAudioMime(type: string) {
+  if (type === "audio/x-wav" || type === "audio/wave") return "audio/wav"
+
+  if (type === "audio/mp3") return "audio/mpeg"
+
+  if (type === "audio/x-m4a" || type === "audio/m4a") return "audio/mp4"
+
+  return type
+}
 
 const textMimes = new Set([
   "application/json",
@@ -318,9 +355,12 @@ async function attachmentMime(file: File) {
   const type = file.type.split(";", 1)[0]?.trim().toLowerCase() ?? ""
 
   if (imageMimes.has(type) || type === "application/pdf") return type
+
+  if (audioMimes.has(type) || type.startsWith("audio/")) return normalizeAudioMime(type)
   const index = file.name.lastIndexOf(".")
   const suffix = index === -1 ? "" : file.name.slice(index + 1).toLowerCase()
-  const fallback = imageExtensions.get(suffix) ?? (suffix === "pdf" ? "application/pdf" : undefined)
+  const fallback =
+    imageExtensions.get(suffix) ?? audioExtensions.get(suffix) ?? (suffix === "pdf" ? "application/pdf" : undefined)
 
   if ((!type || type === "application/octet-stream") && fallback) return fallback
 

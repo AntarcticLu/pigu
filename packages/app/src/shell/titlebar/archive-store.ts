@@ -8,7 +8,7 @@ import type { SessionInfo } from "@opencode/client/promise"
 import { sessionLabel } from "@/session/title"
 
 const ArchiveState = Persistence.struct({
-  projectStatus: Persistence.record(Schema.Literals(["shown", "archived"])),
+  projectStatus: Persistence.record(Schema.Literals(["shown", "archived", "deleted"])),
   sessionStatus: Persistence.record(Schema.Literals(["shown", "archived"])),
 })
 
@@ -19,7 +19,6 @@ const TEMP_FOLDER_PATTERNS = [
   /^tmp$/i,
   /^tmp[_-]/i,
   /^test_temp$/i,
-  /^默认项目$/,
   /^t$/i,
   /^\./,
 ]
@@ -56,17 +55,18 @@ export function isIntrinsicArchivedProject(worktree: string, sessionCount: numbe
 export function isDefaultArchivedProject(worktree: string, sessionCount: number, rankWithSessions: number) {
   if (isIntrinsicArchivedProject(worktree, sessionCount)) return true
 
-  return rankWithSessions >= 5
+  return rankWithSessions >= 12
 }
 
 export function isDefaultArchivedSession(session: SessionInfo, indexInProject: number, totalInProject = 1) {
   if (totalInProject <= 3) return false
 
   const title = sessionLabel(session).trim().toLowerCase()
+  const durationMs = Math.max(0, session.time.updated - session.time.created)
 
-  if (TRIVIAL_SESSION_TITLES.has(title)) return true
+  if (TRIVIAL_SESSION_TITLES.has(title) && durationMs < 60_000) return true
 
-  return indexInProject >= 6
+  return indexInProject >= 12
 }
 
 export function useArchiveState() {
@@ -79,6 +79,17 @@ export function useArchiveState() {
     },
   )
 
+  const isProjectDeleted = (worktree: string) => {
+    const key = pathKey(worktree)
+
+    return archiveStore.projectStatus[key] === "deleted"
+  }
+
+  const setProjectDeleted = (worktree: string, deleted: boolean) => {
+    const key = pathKey(worktree)
+    setArchiveStore("projectStatus", key, deleted ? "deleted" : "shown")
+  }
+
   const isProjectArchived = (worktree: string, sessionCount = 0, rankWithSessions = 0) => {
     const key = pathKey(worktree)
     const explicit = archiveStore.projectStatus[key]
@@ -86,6 +97,8 @@ export function useArchiveState() {
     if (explicit === "shown") return false
 
     if (explicit === "archived") return true
+
+    if (explicit === "deleted") return false
 
     return isDefaultArchivedProject(worktree, sessionCount, rankWithSessions)
   }
@@ -123,6 +136,8 @@ export function useArchiveState() {
   }
 
   return {
+    isProjectDeleted,
+    setProjectDeleted,
     isProjectArchived,
     setProjectArchived,
     isSessionArchived,

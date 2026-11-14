@@ -179,6 +179,8 @@ import type {
   ProjectListOutput,
   ProjectUpdateInput,
   ProjectUpdateOutput,
+  ExperimentalProjectRemoveInput,
+  ExperimentalProjectRemoveOutput,
   FormListInput,
   FormListOutput,
   PermissionRequestListInput,
@@ -269,6 +271,30 @@ import type {
   ExperimentalArtifactsDeleteOutput,
   ExperimentalJobListInput,
   ExperimentalJobListOutput,
+  ExperimentalMobileSettingsOutput,
+  ExperimentalMobileUpdateSettingsInput,
+  ExperimentalMobileUpdateSettingsOutput,
+  ExperimentalMobileListOutput,
+  ExperimentalMobileCreateInput,
+  ExperimentalMobileCreateOutput,
+  ExperimentalMobileUpdateInput,
+  ExperimentalMobileUpdateOutput,
+  ExperimentalMobileDeleteInput,
+  ExperimentalMobileDeleteOutput,
+  ExperimentalMobileImportCodeInput,
+  ExperimentalMobileImportCodeOutput,
+  ExperimentalMobileFeishuQrBeginOutput,
+  ExperimentalMobileFeishuQrPollInput,
+  ExperimentalMobileFeishuQrPollOutput,
+  ExperimentalMobileWeixinQrBeginOutput,
+  ExperimentalMobileWeixinQrPollInput,
+  ExperimentalMobileWeixinQrPollOutput,
+  ExperimentalMobileSyncRemotesInput,
+  ExperimentalMobileSyncRemotesOutput,
+  ExperimentalMobileTranscribeInput,
+  ExperimentalMobileTranscribeOutput,
+  ExperimentalMobileSimulateInput,
+  ExperimentalMobileSimulateOutput,
   ShellListInput,
   ShellListOutput,
   ShellCreateInput,
@@ -1263,6 +1289,18 @@ const adaptGroupProject = (raw: RawClient["server.project"]) => ({
   update: EndpointProjectUpdate(raw),
 })
 
+const EndpointExperimentalProjectRemove =
+  (raw: RawClient["server.project"]) => (input: ExperimentalProjectRemoveInput) =>
+    preserveEffect<ExperimentalProjectRemoveOutput>()(
+      raw["experimental.project.remove"]({ params: { projectID: input["projectID"] } }).pipe(
+        Effect.mapError(mapClientError),
+      ),
+    )
+
+const adaptGroupExperimentalProject = (raw: RawClient["server.project"]) => ({
+  remove: EndpointExperimentalProjectRemove(raw),
+})
+
 const EndpointFormList = (raw: RawClient["server.form"]) => (input?: FormListInput) =>
   preserveEffect<FormListOutput>()(
     raw["form.list"]({ query: { location: input?.["location"] } }).pipe(Effect.mapError(mapClientError)),
@@ -1715,6 +1753,168 @@ const EndpointExperimentalJobList = (raw: RawClient["server.experimental"]) => (
     ),
   )
 
+const EndpointExperimentalMobileSettings = (raw: RawClient["server.experimental"]) => () =>
+  preserveEffect<ExperimentalMobileSettingsOutput>()(
+    raw["mobile.settings"]({}).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointExperimentalMobileUpdateSettings =
+  (raw: RawClient["server.experimental"]) => (input?: ExperimentalMobileUpdateSettingsInput) =>
+    preserveEffect<ExperimentalMobileUpdateSettingsOutput>()(
+      raw["mobile.updateSettings"]({ payload: { preventSleep: input?.["preventSleep"] } }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointExperimentalMobileList = (raw: RawClient["server.experimental"]) => () =>
+  preserveEffect<ExperimentalMobileListOutput>()(
+    raw["mobile.list"]({}).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointExperimentalMobileCreate =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileCreateInput) =>
+    preserveEffect<ExperimentalMobileCreateOutput>()(
+      raw["mobile.create"]({
+        payload: {
+          name: input["name"],
+          platform: input["platform"],
+          enabled: input["enabled"],
+          ownerID: input["ownerID"],
+          allowFrom: input["allowFrom"],
+          adminFrom: input["adminFrom"],
+          feishu: input["feishu"],
+          weixin: input["weixin"],
+          dingtalk: input["dingtalk"],
+          wecom: input["wecom"],
+          qqbot: input["qqbot"],
+        },
+      }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointExperimentalMobileUpdate =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileUpdateInput) =>
+    preserveEffect<ExperimentalMobileUpdateOutput>()(
+      raw["mobile.update"]({
+        params: { robotID: input["robotID"] },
+        payload: {
+          name: input["name"],
+          enabled: input["enabled"],
+          ownerID: input["ownerID"],
+          allowFrom: input["allowFrom"],
+          adminFrom: input["adminFrom"],
+          feishu: input["feishu"],
+          weixin: input["weixin"],
+          dingtalk: input["dingtalk"],
+          wecom: input["wecom"],
+          qqbot: input["qqbot"],
+        },
+      }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointExperimentalMobileDelete =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileDeleteInput) =>
+    preserveEffect<ExperimentalMobileDeleteOutput>()(
+      raw["mobile.delete"]({ params: { robotID: input["robotID"] } }).pipe(Effect.mapError(mapClientError)),
+    )
+
+const EndpointExperimentalMobileImportCode =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileImportCodeInput) =>
+    preserveEffect<ExperimentalMobileImportCodeOutput>()(
+      raw["mobile.importCode"]({ payload: { code: input["code"] } }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointExperimentalMobileFeishuQrBegin = (raw: RawClient["server.experimental"]) => () =>
+  preserveEffect<ExperimentalMobileFeishuQrBeginOutput>()(
+    raw["mobile.feishuQrBegin"]({}).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointExperimentalMobileFeishuQrPoll =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileFeishuQrPollInput) =>
+    preserveEffect<ExperimentalMobileFeishuQrPollOutput>()(
+      raw["mobile.feishuQrPoll"]({ payload: { deviceCode: input["deviceCode"], baseUrl: input["baseUrl"] } }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointExperimentalMobileWeixinQrBegin = (raw: RawClient["server.experimental"]) => () =>
+  preserveEffect<ExperimentalMobileWeixinQrBeginOutput>()(
+    raw["mobile.weixinQrBegin"]({}).pipe(
+      Effect.mapError(mapClientError),
+      Effect.map((value) => value.data),
+    ),
+  )
+
+const EndpointExperimentalMobileWeixinQrPoll =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileWeixinQrPollInput) =>
+    preserveEffect<ExperimentalMobileWeixinQrPollOutput>()(
+      raw["mobile.weixinQrPoll"]({ payload: { qrcodeKey: input["qrcodeKey"] } }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointExperimentalMobileSyncRemotes =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileSyncRemotesInput) =>
+    preserveEffect<ExperimentalMobileSyncRemotesOutput>()(
+      raw["mobile.syncRemotes"]({ payload: { remotes: input["remotes"] } }).pipe(Effect.mapError(mapClientError)),
+    )
+
+const EndpointExperimentalMobileTranscribe =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileTranscribeInput) =>
+    preserveEffect<ExperimentalMobileTranscribeOutput>()(
+      raw["mobile.transcribe"]({
+        payload: { audioBase64: input["audioBase64"], mimeType: input["mimeType"], fileName: input["fileName"] },
+      }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
+const EndpointExperimentalMobileSimulate =
+  (raw: RawClient["server.experimental"]) => (input: ExperimentalMobileSimulateInput) =>
+    preserveEffect<ExperimentalMobileSimulateOutput>()(
+      raw["mobile.simulate"]({
+        payload: {
+          robotId: input["robotId"],
+          userId: input["userId"],
+          userName: input["userName"],
+          chatId: input["chatId"],
+          text: input["text"],
+          audioBase64: input["audioBase64"],
+          audioMimeType: input["audioMimeType"],
+          audioFileName: input["audioFileName"],
+          fileBase64: input["fileBase64"],
+          fileMimeType: input["fileMimeType"],
+          fileName: input["fileName"],
+          progressDelayMs: input["progressDelayMs"],
+          pushLive: input["pushLive"],
+        },
+      }).pipe(
+        Effect.mapError(mapClientError),
+        Effect.map((value) => value.data),
+      ),
+    )
+
 const adaptGroupExperimental = (raw: RawClient["server.experimental"]) => ({
   persistentPty: {
     read: EndpointExperimentalPersistentPtyRead(raw),
@@ -1745,6 +1945,22 @@ const adaptGroupExperimental = (raw: RawClient["server.experimental"]) => ({
     delete: EndpointExperimentalArtifactsDelete(raw),
   },
   job: { list: EndpointExperimentalJobList(raw) },
+  mobile: {
+    settings: EndpointExperimentalMobileSettings(raw),
+    updateSettings: EndpointExperimentalMobileUpdateSettings(raw),
+    list: EndpointExperimentalMobileList(raw),
+    create: EndpointExperimentalMobileCreate(raw),
+    update: EndpointExperimentalMobileUpdate(raw),
+    delete: EndpointExperimentalMobileDelete(raw),
+    importCode: EndpointExperimentalMobileImportCode(raw),
+    feishuQrBegin: EndpointExperimentalMobileFeishuQrBegin(raw),
+    feishuQrPoll: EndpointExperimentalMobileFeishuQrPoll(raw),
+    weixinQrBegin: EndpointExperimentalMobileWeixinQrBegin(raw),
+    weixinQrPoll: EndpointExperimentalMobileWeixinQrPoll(raw),
+    syncRemotes: EndpointExperimentalMobileSyncRemotes(raw),
+    transcribe: EndpointExperimentalMobileTranscribe(raw),
+    simulate: EndpointExperimentalMobileSimulate(raw),
+  },
 })
 
 const EndpointShellList = (raw: RawClient["server.shell"]) => (input?: ShellListInput) =>
@@ -1975,6 +2191,7 @@ const adaptClient = (raw: RawClient) => {
       voice: adaptGroupExperimentalVoice(raw["server.voice"]),
       integration: adaptGroupExperimentalIntegration(raw["server.integration"]),
       mcp: adaptGroupExperimentalMcp(raw["server.mcp"]),
+      project: adaptGroupExperimentalProject(raw["server.project"]),
       file: adaptGroupExperimentalFile(raw["server.fs"]),
       migration: adaptGroupExperimentalMigration(raw["server.migration"]),
       usage: adaptGroupExperimentalUsage(raw["server.usage"]),
@@ -2071,6 +2288,11 @@ const adaptClient = (raw: RawClient) => {
         /** @deprecated Use `client.experimental.mcp.client.token`. Removed in the next minor. */
         token: client.experimental.mcp.client.token,
       },
+    },
+    project: {
+      ...client.project,
+      /** @deprecated Use `client.experimental.project.remove`. Removed in the next minor. */
+      remove: client.experimental.project.remove,
     },
     file: {
       ...client.file,

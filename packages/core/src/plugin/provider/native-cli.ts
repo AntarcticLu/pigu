@@ -2,9 +2,11 @@ export * as NativeCliProvider from "./native-cli.js"
 
 import { Database } from "bun:sqlite"
 import childProcess from "node:child_process"
+import nodeCrypto from "node:crypto"
 import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
+import { fileURLToPath } from "node:url"
 import type {
   LanguageModelV3,
   LanguageModelV3CallOptions,
@@ -21,6 +23,13 @@ import { Credential } from "../../credential.js"
 import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
 import type { PluginInternal } from "../internal.js"
+import {
+  buildCatalogLimitMap,
+  buildMultimodalProcessEnv,
+  resolveDefaultConfigDir,
+  resolveModelLimit,
+  type ResolvedModelLimit,
+} from "./multimodal.js"
 
 export const LOCAL_PROVIDER_ID = Provider.ID.make("local")
 export const NATIVE_CLI_PROVIDER_ID = LOCAL_PROVIDER_ID
@@ -502,6 +511,121 @@ function findEngineSessionFile(home: string, engine: LocalEngine, sessionId: str
   return undefined
 }
 
+export type MaterializedAttachment = {
+  readonly filePath: string
+  readonly mediaType: string
+  readonly filename: string
+  readonly isImage: boolean
+}
+
+function sanitizeFileComponent(raw: string): string {
+  const cleaned = raw
+    .trim()
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+  return cleaned.slice(0, 64) || "attachment"
+}
+
+export function extensionForMediaType(mediaType: string, filename?: string): string {
+  if (filename) {
+    const ext = path.extname(filename).toLowerCase()
+    if (/^\.[a-z0-9]{1,8}$/.test(ext)) return ext
+  }
+  const normalized = mediaType.toLowerCase().split(";")[0]?.trim() ?? ""
+  if (normalized === "image/png") return ".png"
+  if (normalized === "image/jpeg" || normalized === "image/jpg") return ".jpg"
+  if (normalized === "image/webp") return ".webp"
+  if (normalized === "image/gif") return ".gif"
+  if (normalized === "image/svg+xml") return ".svg"
+  if (normalized === "image/bmp") return ".bmp"
+  if (normalized === "application/pdf") return ".pdf"
+  if (normalized === "text/plain") return ".txt"
+  if (normalized === "text/markdown") return ".md"
+  if (normalized === "text/csv") return ".csv"
+  if (normalized === "application/json") return ".json"
+  return ".bin"
+}
+
+function decodeFilePartBytes(data: string | Uint8Array | URL): Buffer | undefined {
+  if (data instanceof Uint8Array) return Buffer.from(data)
+  const raw = data instanceof URL ? data.toString() : data
+  const dataUriMatch = /^data:[^;,]+(?:;[^,]*)*;base64,(.*)$/s.exec(raw)
+  if (dataUriMatch?.[1] !== undefined) {
+    return Buffer.from(dataUriMatch[1], "base64")
+  }
+  if (/^https?:\/\//i.test(raw) || raw.startsWith("file://")) return undefined
+  return Buffer.from(raw, "base64")
+}
+
+export function materializeMessageAttachments(
+  message: LanguageModelV3Prompt[number],
+  attachmentsDir: string,
+): readonly MaterializedAttachment[] {
+  if (message.role === "system") return []
+
+  return message.content.flatMap((part, index): MaterializedAttachment[] => {
+    if (part.type !== "file") return []
+    const mediaType = (part.mediaType || "application/octet-stream").toLowerCase()
+    const isImage = mediaType.startsWith("image/")
+
+    if (part.data instanceof URL && part.data.protocol === "file:") {
+      const localPath = fileURLToPath(part.data)
+      if (fs.existsSync(localPath)) {
+        return [
+          {
+            filePath: localPath,
+            mediaType,
+            filename: part.filename || path.basename(localPath),
+            isImage,
+          },
+        ]
+      }
+    }
+
+    if (typeof part.data === "string" && part.data.startsWith("file://") && URL.canParse(part.data)) {
+      const localPath = fileURLToPath(new URL(part.data))
+      if (fs.existsSync(localPath)) {
+        return [
+          {
+            filePath: localPath,
+            mediaType,
+            filename: part.filename || path.basename(localPath),
+            isImage,
+          },
+        ]
+      }
+    }
+
+    const bytes = decodeFilePartBytes(part.data)
+    if (!bytes || bytes.byteLength === 0) return []
+
+    const ext = extensionForMediaType(mediaType, part.filename)
+    const rawStem = part.filename ? path.basename(part.filename, path.extname(part.filename)) : `part-${index + 1}`
+    const safeStem = sanitizeFileComponent(rawStem)
+    const digest = nodeCrypto.createHash("sha256").update(bytes).digest("hex").slice(0, 12)
+    const finalName = `${safeStem}-${digest}${ext}`
+    fs.mkdirSync(attachmentsDir, { recursive: true })
+    const filePath = path.join(attachmentsDir, finalName)
+    if (!fs.existsSync(filePath)) {
+      fs.writeFileSync(filePath, bytes)
+    }
+
+    return [
+      {
+        filePath,
+        mediaType,
+        filename: part.filename || finalName,
+        isImage,
+      },
+    ]
+  })
+}
+
+function messageHasFileParts(message: LanguageModelV3Prompt[number]): boolean {
+  if (message.role === "system") return false
+  return message.content.some((part) => part.type === "file")
+}
+
 function extractMessageText(message: LanguageModelV3Prompt[number]) {
   if (message.role === "system") return message.content.trim()
 
@@ -515,22 +639,90 @@ function extractMessageText(message: LanguageModelV3Prompt[number]) {
     .join("\n\n")
 }
 
-function extractPromptTurns(prompt: LanguageModelV3Prompt) {
-  const turns = prompt
+export function extractPromptTurns(prompt: LanguageModelV3Prompt, attachmentsDir?: string) {
+  const rawTurns = prompt
     .filter((msg) => msg.role === "user" || msg.role === "assistant")
     .flatMap((msg) => {
       const text = extractMessageText(msg)
-
-      return text ? [{ role: msg.role, text }] : []
+      const hasFiles = messageHasFileParts(msg)
+      if (!text && !hasFiles) return []
+      const attachments = attachmentsDir && hasFiles ? materializeMessageAttachments(msg, attachmentsDir) : []
+      return [{ role: msg.role, text, hasFiles, attachments }]
     })
 
-  const lastUserIndex = turns.findLastIndex((turn) => turn.role === "user")
+  const lastUserIndex = rawTurns.findLastIndex((turn) => turn.role === "user")
 
-  if (lastUserIndex < 0) return { priorTurns: [], userText: "" }
+  if (lastUserIndex < 0) {
+    return { priorTurns: [], userText: "", attachments: [] as readonly MaterializedAttachment[] }
+  }
+
+  const priorTurns = rawTurns.slice(0, lastUserIndex).map((turn) => {
+    const attachmentNote =
+      turn.attachments.length > 0
+        ? `[附带本地文件: ${turn.attachments.map((item) => item.filePath).join(", ")}]`
+        : turn.hasFiles
+          ? "[附带图片/文件]"
+          : ""
+    const combined = [turn.text, attachmentNote].filter(Boolean).join("\n")
+    return { role: turn.role, text: combined }
+  })
+
+  const latestUser = rawTurns[lastUserIndex]
+  const userText =
+    latestUser?.text ||
+    (latestUser?.hasFiles ? "请查看附带的图片或文件并按内容处理。" : "")
 
   return {
-    priorTurns: turns.slice(0, lastUserIndex),
-    userText: turns[lastUserIndex]?.text ?? "",
+    priorTurns,
+    userText,
+    attachments: latestUser?.attachments ?? [],
+  }
+}
+
+export function buildPromptWithAttachments(
+  prompt: string,
+  attachments: readonly MaterializedAttachment[],
+): string {
+  if (attachments.length === 0) return prompt
+  const lines = attachments.map((item) => `- ${item.filePath} (${item.mediaType})`)
+  return [
+    "<attached_files>",
+    "用户随本条消息附带了以下本地图片/文件，请优先直接读取或查看其内容：",
+    ...lines,
+    "</attached_files>",
+    "",
+    prompt,
+  ].join("\n")
+}
+
+export function buildCliAttachmentFlags(
+  engine: LocalEngine,
+  attachments: readonly MaterializedAttachment[],
+): readonly string[] {
+  if (attachments.length === 0) return []
+  if (engine === "codex") {
+    return attachments.filter((item) => item.isImage).flatMap((item) => ["-i", item.filePath])
+  }
+  if (engine === "opencode") {
+    return attachments.flatMap((item) => ["-f", item.filePath])
+  }
+  if (engine === "claude") {
+    const dirs = [...new Set(attachments.map((item) => path.dirname(item.filePath)))]
+    return dirs.flatMap((dir) => ["--add-dir", dir])
+  }
+  return []
+}
+
+function buildLocalChildEnv(
+  home: string,
+  extra?: Readonly<Record<string, string | undefined>>,
+): Record<string, string | undefined> {
+  const multimodal = buildMultimodalProcessEnv(resolveDefaultConfigDir(home))
+  return {
+    ...process.env,
+    ...multimodal,
+    PATH: buildAugmentedPath(),
+    ...(extra ?? {}),
   }
 }
 
@@ -586,8 +778,7 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
     controller.enqueue({ type: "response-metadata", id: responseId, modelId })
   }
 
-  const pushReasoning = (delta: string) => {
-    if (!delta) return
+  const openReasoning = () => {
     ensureMetadata()
 
     if (state.textOpen) {
@@ -599,7 +790,11 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
       state.reasoningOpen = true
       controller.enqueue({ type: "reasoning-start", id: reasoningId })
     }
+  }
 
+  const pushReasoning = (delta: string) => {
+    if (!delta) return
+    openReasoning()
     controller.enqueue({ type: "reasoning-delta", id: reasoningId, delta })
   }
 
@@ -643,6 +838,7 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
 
   return {
     state,
+    openReasoning,
     pushReasoning,
     pushText,
     finish,
@@ -654,7 +850,9 @@ async function runStreamJsonProcess(input: {
   mode: "claude" | "agy" | "cursor"
   binary: string
   cwd: string
+  home: string
   prompt: string
+  extraFlags?: ReadonlyArray<string>
   sessionId?: string
   resume: boolean
   subModel?: string
@@ -677,6 +875,7 @@ async function runStreamJsonProcess(input: {
           : ["--session-id", targetSessionId]
 
   const modelFlag = input.subModel ? ["--model", input.subModel] : []
+  const extraFlags = input.extraFlags ?? []
 
   const effortFlag =
     (input.mode === "claude" || input.mode === "agy") &&
@@ -698,6 +897,7 @@ async function runStreamJsonProcess(input: {
           ...modelFlag,
           ...effortFlag,
           ...sessionFlag,
+          ...extraFlags,
           "-p",
           input.prompt,
         ]
@@ -710,6 +910,7 @@ async function runStreamJsonProcess(input: {
             "--force",
             ...modelFlag,
             ...sessionFlag,
+            ...extraFlags,
             input.prompt,
           ]
         : [
@@ -722,13 +923,11 @@ async function runStreamJsonProcess(input: {
             ...modelFlag,
             ...effortFlag,
             ...sessionFlag,
+            ...extraFlags,
             input.prompt,
           ]
 
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    PATH: buildAugmentedPath(),
-  }
+  const env = buildLocalChildEnv(input.home)
 
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(input.binary, args, {
@@ -934,7 +1133,9 @@ async function runStreamJsonProcess(input: {
 async function runCodexProcess(input: {
   binary: string
   cwd: string
+  home: string
   prompt: string
+  imageFlags?: ReadonlyArray<string>
   sessionId?: string
   resume: boolean
   subModel?: string
@@ -944,6 +1145,7 @@ async function runCodexProcess(input: {
 }): Promise<{ sessionId?: string }> {
   const lastMsgFile = path.join(os.tmpdir(), `pigu-codex-last-${crypto.randomUUID()}.txt`)
   const modelFlag = input.subModel ? ["-c", `model="${input.subModel}"`] : []
+  const imageFlags = input.imageFlags ?? []
   const effortFlag =
     input.variant &&
     (input.variant === "low" ||
@@ -952,47 +1154,50 @@ async function runCodexProcess(input: {
       input.variant === "xhigh")
       ? ["-c", `model_reasoning_effort="${input.variant}"`]
       : []
+  // Pass "-" so Codex reads the prompt from stdin rather than argv, avoiding Windows 32KB CreateProcess
+  // command-line truncation, cmd.exe quoting hazards, and leading "-" flag collisions.
   const args =
     input.resume && input.sessionId
       ? [
           "exec",
           "resume",
           input.sessionId,
-          input.prompt,
+          "-",
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           "--skip-git-repo-check",
           ...modelFlag,
           ...effortFlag,
+          ...imageFlags,
           "-o",
           lastMsgFile,
         ]
       : [
           "exec",
-          input.prompt,
+          "-",
           "--json",
           "--dangerously-bypass-approvals-and-sandbox",
           "--skip-git-repo-check",
           ...modelFlag,
           ...effortFlag,
+          ...imageFlags,
           "-C",
           input.cwd,
           "-o",
           lastMsgFile,
         ]
 
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    PATH: buildAugmentedPath(),
-  }
+  const env = buildLocalChildEnv(input.home)
 
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(input.binary, args, {
       cwd: input.cwd,
       env,
       shell: shouldUseWindowsShell(input.binary),
-      stdio: ["ignore", "pipe", "pipe"],
+      stdio: ["pipe", "pipe", "pipe"],
     })
+    child.stdin.on("error", () => {})
+    child.stdin.end(input.prompt, "utf8")
 
     const state = {
       detectedSessionId: input.sessionId,
@@ -1029,6 +1234,11 @@ async function runCodexProcess(input: {
 
       if (row.type === "item.started" && isRecord(row.item)) {
         const item = row.item
+
+        if (item.type === "reasoning") {
+          input.emitter.openReasoning()
+          return
+        }
 
         if (item.type === "command_execution" && typeof item.command === "string") {
           input.emitter.pushReasoning(`\n[codex 原生命令: ${item.command}]\n`)
@@ -1137,14 +1347,12 @@ async function runPlainCliProcess(input: {
   binary: string
   args: ReadonlyArray<string>
   cwd: string
+  home: string
   sessionId?: string
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    PATH: buildAugmentedPath(),
-  }
+  const env = buildLocalChildEnv(input.home)
 
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(input.binary, [...input.args], {
@@ -1195,15 +1403,12 @@ async function runOpencodeProcess(input: {
   binary: string
   args: ReadonlyArray<string>
   cwd: string
+  home: string
   sessionId?: string
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    PATH: buildAugmentedPath(),
-    PWD: input.cwd,
-  }
+  const env = buildLocalChildEnv(input.home, { PWD: input.cwd })
   delete env.OPENCODE_DB
   delete env.OPENCODE_DISABLE_CHANNEL_DB
 
@@ -1794,12 +1999,10 @@ async function runDshProcess(input: {
     input.prompt,
   ]
 
-  const env: Record<string, string | undefined> = {
-    ...process.env,
-    PATH: buildAugmentedPath(),
+  const env = buildLocalChildEnv(input.home, {
     DSH_PERMISSION_MODE: "danger-full-access",
     ...(route ? { PIGU_DSH_API_KEY: route.apiKey } : {}),
-  }
+  })
 
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(input.binary, args, {
@@ -1997,7 +2200,12 @@ class LocalLanguageModel implements LanguageModelV3 {
         const emitter = createStreamEmitter(controller, this.modelId)
 
         const execute = async () => {
-          const { priorTurns, userText } = extractPromptTurns(options.prompt)
+          const home = process.env.OPENCODE_TEST_HOME || os.homedir()
+          const attachmentsDir =
+            kind === "primary"
+              ? path.join(home, ".cache", "pigu", "attachments", sanitizeFileComponent(sessionID || "transient"))
+              : undefined
+          const { priorTurns, userText, attachments } = extractPromptTurns(options.prompt, attachmentsDir)
 
           if (kind === "title") {
             const firstLine =
@@ -2034,7 +2242,6 @@ class LocalLanguageModel implements LanguageModelV3 {
             return
           }
 
-          const home = os.homedir()
           const saved = sessionID ? await this.getSessionState(sessionID) : {}
           const initialExternalSource: LocalEngine | undefined =
             saved.lastEngine === undefined &&
@@ -2085,6 +2292,7 @@ class LocalLanguageModel implements LanguageModelV3 {
             return formatted.length > 8000 ? formatted.slice(-8000) : formatted
           })()
 
+          const promptUserTurn = buildPromptWithAttachments(userText, attachments)
           const finalPrompt = contextFileToRead
             ? [
                 "<conversation_context>",
@@ -2092,13 +2300,14 @@ class LocalLanguageModel implements LanguageModelV3 {
                 inlineContext,
                 "</conversation_context>",
                 "",
-                userText,
+                promptUserTurn,
               ].join("\n")
-            : userText
+            : promptUserTurn
 
           const canResume = Boolean(
             currentRecord.sessionId && currentRecord.filePath && fs.existsSync(currentRecord.filePath),
           )
+          const cliAttachmentFlags = buildCliAttachmentFlags(currentEngine, attachments)
 
           const runResult = await (async () => {
             if (currentEngine === "claude" || currentEngine === "agy" || currentEngine === "cursor") {
@@ -2107,7 +2316,9 @@ class LocalLanguageModel implements LanguageModelV3 {
                 mode: currentEngine,
                 binary,
                 cwd,
+                home,
                 prompt: finalPrompt,
+                extraFlags: cliAttachmentFlags,
                 sessionId: currentRecord.sessionId,
                 resume: canResume,
                 subModel,
@@ -2121,7 +2332,9 @@ class LocalLanguageModel implements LanguageModelV3 {
               return runCodexProcess({
                 binary,
                 cwd,
+                home,
                 prompt: finalPrompt,
+                imageFlags: cliAttachmentFlags,
                 sessionId: currentRecord.sessionId,
                 resume: canResume,
                 subModel,
@@ -2145,6 +2358,7 @@ class LocalLanguageModel implements LanguageModelV3 {
                 binary,
                 args: piArgs,
                 cwd,
+                home,
                 sessionId: currentRecord.sessionId,
                 signal,
                 emitter,
@@ -2154,16 +2368,19 @@ class LocalLanguageModel implements LanguageModelV3 {
             if (currentEngine === "opencode") {
               const opencodeSubModel =
                 subModel && subModel.includes("/") ? subModel : discoverOpencodeConfigModels(home).defaultModel
+              const modelArg = opencodeSubModel
+                ? variant && variant !== "default"
+                  ? `${opencodeSubModel}#${variant}`
+                  : opencodeSubModel
+                : undefined
               const opencodeArgs = [
                 "run",
                 "--format",
                 "json",
                 "--auto",
-                "--dir",
-                cwd,
-                ...(opencodeSubModel ? ["-m", opencodeSubModel] : []),
-                ...(variant && variant !== "default" ? ["--variant", variant] : []),
+                ...(modelArg ? ["-m", modelArg] : []),
                 ...(canResume && currentRecord.sessionId ? ["--session", currentRecord.sessionId] : []),
+                ...cliAttachmentFlags,
                 finalPrompt,
               ]
 
@@ -2171,6 +2388,7 @@ class LocalLanguageModel implements LanguageModelV3 {
                 binary,
                 args: opencodeArgs,
                 cwd,
+                home,
                 sessionId: currentRecord.sessionId,
                 signal,
                 emitter,
@@ -2183,6 +2401,7 @@ class LocalLanguageModel implements LanguageModelV3 {
                 binary,
                 args: [...(subModel ? ["-m", subModel] : []), "-p", finalPrompt],
                 cwd,
+                home,
                 sessionId: currentRecord.sessionId,
                 signal,
                 emitter,
@@ -2208,6 +2427,7 @@ class LocalLanguageModel implements LanguageModelV3 {
               binary,
               args: [...(subModel ? ["--model", subModel] : []), "-p", finalPrompt],
               cwd,
+              home,
               sessionId: currentRecord.sessionId,
               signal,
               emitter,
@@ -2287,6 +2507,20 @@ function localModelEfforts(engine: LocalEngine, subModel?: string): readonly str
   return []
 }
 
+function resolveLocalModelLimit(
+  engine: LocalEngine,
+  subModel: string | undefined,
+  catalogLimits?: ReadonlyMap<string, ResolvedModelLimit>,
+): ResolvedModelLimit {
+  if (subModel) return resolveModelLimit(subModel, { catalogLimits })
+  if (engine === "codex") return { context: 400_000, input: 272_000, output: 128_000 }
+  if (engine === "claude") return { context: 1_000_000, output: 128_000 }
+  if (engine === "agy") return { context: 1_048_576, output: 65_536 }
+  if (engine === "deepseek-harness") return { context: 1_048_576, output: 393_216 }
+  if (engine === "grok") return { context: 500_000, output: 128_000 }
+  return { context: 200_000, output: 32_000 }
+}
+
 function buildLocalModel(id: Model.ID, name: string, explicitEfforts?: readonly string[]): Model.Info {
   const defaults = Model.Info.default(LOCAL_PROVIDER_ID, id)
   const engine = normalizeEngine(id)
@@ -2307,10 +2541,7 @@ function buildLocalModel(id: Model.ID, name: string, explicitEfforts?: readonly 
       input: ["text", "image", "pdf"],
       output: ["text"],
     },
-    limit: {
-      context: 200_000,
-      output: 32_000,
-    },
+    limit: resolveLocalModelLimit(engine, subModel),
     cost: [],
   }
 }
@@ -2982,6 +3213,20 @@ export const NativeCliProviderPlugin = define({
     )
 
     yield* ctx.provider.transform((editor) => {
+      const catalogLimits = buildCatalogLimitMap(editor.list())
+      const rawModels = [
+        ...buildEngineModels("claude", CLAUDE_LOCAL_MODEL_ID, home),
+        ...buildEngineModels("codex", CODEX_LOCAL_MODEL_ID, home),
+        ...buildEngineModels("agy", AGY_LOCAL_MODEL_ID, home, () => {
+          void runPromise(ctx.provider.reload())
+        }),
+        ...buildEngineModels("pi", PI_LOCAL_MODEL_ID, home),
+        ...buildEngineModels("opencode", OPENCODE_LOCAL_MODEL_ID, home),
+        ...buildEngineModels("cursor", CURSOR_LOCAL_MODEL_ID, home),
+        ...buildEngineModels("grok", GROK_LOCAL_MODEL_ID, home),
+        ...buildEngineModels("deepseek-harness", DEEPSEEK_HARNESS_LOCAL_MODEL_ID, home),
+        ...buildEngineModels("workbuddy", WORKBUDDY_LOCAL_MODEL_ID, home),
+      ]
       editor.add({
         info: {
           id: LOCAL_PROVIDER_ID,
@@ -2989,19 +3234,10 @@ export const NativeCliProviderPlugin = define({
           activation: "enabled",
           package: Provider.aisdk(LOCAL_PACKAGE),
         },
-        models: [
-          ...buildEngineModels("claude", CLAUDE_LOCAL_MODEL_ID, home),
-          ...buildEngineModels("codex", CODEX_LOCAL_MODEL_ID, home),
-          ...buildEngineModels("agy", AGY_LOCAL_MODEL_ID, home, () => {
-            void runPromise(ctx.provider.reload())
-          }),
-          ...buildEngineModels("pi", PI_LOCAL_MODEL_ID, home),
-          ...buildEngineModels("opencode", OPENCODE_LOCAL_MODEL_ID, home),
-          ...buildEngineModels("cursor", CURSOR_LOCAL_MODEL_ID, home),
-          ...buildEngineModels("grok", GROK_LOCAL_MODEL_ID, home),
-          ...buildEngineModels("deepseek-harness", DEEPSEEK_HARNESS_LOCAL_MODEL_ID, home),
-          ...buildEngineModels("workbuddy", WORKBUDDY_LOCAL_MODEL_ID, home),
-        ],
+        models: rawModels.map((model) => ({
+          ...model,
+          limit: resolveLocalModelLimit(normalizeEngine(model.id), extractSubModel(model.id), catalogLimits),
+        })),
       })
     })
 

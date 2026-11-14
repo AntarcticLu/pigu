@@ -22,6 +22,7 @@ import { usePlatform } from "@/runtime/platform/platform"
 import { SettingsList } from "@/settings/list"
 import type { SettingsView } from "@/settings/surface"
 import { showToast } from "@/shell/notifications/toast"
+import { DialogMultimodalModels } from "./multimodal-dialog"
 import {
   BUILTIN_LOCAL_AGENT_PLUGINS,
   localizeSkillDescription,
@@ -619,7 +620,22 @@ export const SettingsExtensions: Component<{
           <div class="flex min-w-0 flex-col gap-1">
             <h2 class="settings-tab-title">{language.t("settings.tab.extensions")}</h2>
           </div>
-          <div class="settings-tab-header-actions">{props.headerAction}</div>
+          <div class="settings-tab-header-actions flex items-center gap-2">
+            <Button
+              size="small"
+              variant="neutral"
+              icon="outline-sliders"
+              data-action="settings-extensions-open-multimodal"
+              onClick={() =>
+                void dialog.show(() => (
+                  <DialogMultimodalModels initialServerKey={ServerConnection.key(serverSdk.server)} />
+                ))
+              }
+            >
+              {language.tr("高级（多模态）", "Advanced (Multimodal)")}
+            </Button>
+            {props.headerAction}
+          </div>
         </div>
       </div>
 

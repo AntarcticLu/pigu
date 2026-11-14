@@ -173,6 +173,8 @@ import type {
   ProjectListOutput,
   ProjectUpdateInput,
   ProjectUpdateOutput,
+  ExperimentalProjectRemoveInput,
+  ExperimentalProjectRemoveOutput,
   FormListInput,
   FormListOutput,
   PermissionRequestListInput,
@@ -271,6 +273,30 @@ import type {
   ExperimentalArtifactsViewOutput,
   ExperimentalJobListInput,
   ExperimentalJobListOutput,
+  ExperimentalMobileSettingsOutput,
+  ExperimentalMobileUpdateSettingsInput,
+  ExperimentalMobileUpdateSettingsOutput,
+  ExperimentalMobileListOutput,
+  ExperimentalMobileCreateInput,
+  ExperimentalMobileCreateOutput,
+  ExperimentalMobileUpdateInput,
+  ExperimentalMobileUpdateOutput,
+  ExperimentalMobileDeleteInput,
+  ExperimentalMobileDeleteOutput,
+  ExperimentalMobileImportCodeInput,
+  ExperimentalMobileImportCodeOutput,
+  ExperimentalMobileFeishuQrBeginOutput,
+  ExperimentalMobileFeishuQrPollInput,
+  ExperimentalMobileFeishuQrPollOutput,
+  ExperimentalMobileWeixinQrBeginOutput,
+  ExperimentalMobileWeixinQrPollInput,
+  ExperimentalMobileWeixinQrPollOutput,
+  ExperimentalMobileSyncRemotesInput,
+  ExperimentalMobileSyncRemotesOutput,
+  ExperimentalMobileTranscribeInput,
+  ExperimentalMobileTranscribeOutput,
+  ExperimentalMobileSimulateInput,
+  ExperimentalMobileSimulateOutput,
   ShellListInput,
   ShellListOutput,
   ShellCreateInput,
@@ -1326,6 +1352,19 @@ export function make(options: ClientOptions) {
             ),
         },
       },
+      project: {
+        remove: (input: ExperimentalProjectRemoveInput, requestOptions?: RequestOptions) =>
+          request<ExperimentalProjectRemoveOutput>(
+            {
+              method: "DELETE",
+              path: `/api/experimental/project/${encodeURIComponent(input.projectID)}`,
+              successStatus: 204,
+              declaredStatuses: [400, 401, 404],
+              empty: true,
+            },
+            requestOptions,
+          ),
+      },
       file: {
         write: (input: ExperimentalFileWriteInput, requestOptions?: RequestOptions) =>
           request<ExperimentalFileWriteOutput>(
@@ -1697,6 +1736,208 @@ export function make(options: ClientOptions) {
               },
               successStatus: 200,
               declaredStatuses: [400, 401, 404],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+      },
+      mobile: {
+        settings: (requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileSettingsOutput }>(
+            {
+              method: "GET",
+              path: `/api/experimental/mobile/settings`,
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        updateSettings: (input?: ExperimentalMobileUpdateSettingsInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileUpdateSettingsOutput }>(
+            {
+              method: "PATCH",
+              path: `/api/experimental/mobile/settings`,
+              body: { preventSleep: input?.["preventSleep"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        list: (requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileListOutput }>(
+            {
+              method: "GET",
+              path: `/api/experimental/mobile/robots`,
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        create: (input: ExperimentalMobileCreateInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileCreateOutput }>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/robots`,
+              body: {
+                name: input["name"],
+                platform: input["platform"],
+                enabled: input["enabled"],
+                ownerID: input["ownerID"],
+                allowFrom: input["allowFrom"],
+                adminFrom: input["adminFrom"],
+                feishu: input["feishu"],
+                weixin: input["weixin"],
+                dingtalk: input["dingtalk"],
+                wecom: input["wecom"],
+                qqbot: input["qqbot"],
+              },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        update: (input: ExperimentalMobileUpdateInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileUpdateOutput }>(
+            {
+              method: "PATCH",
+              path: `/api/experimental/mobile/robots/${encodeURIComponent(input.robotID)}`,
+              body: {
+                name: input["name"],
+                enabled: input["enabled"],
+                ownerID: input["ownerID"],
+                allowFrom: input["allowFrom"],
+                adminFrom: input["adminFrom"],
+                feishu: input["feishu"],
+                weixin: input["weixin"],
+                dingtalk: input["dingtalk"],
+                wecom: input["wecom"],
+                qqbot: input["qqbot"],
+              },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        delete: (input: ExperimentalMobileDeleteInput, requestOptions?: RequestOptions) =>
+          request<ExperimentalMobileDeleteOutput>(
+            {
+              method: "DELETE",
+              path: `/api/experimental/mobile/robots/${encodeURIComponent(input.robotID)}`,
+              successStatus: 204,
+              declaredStatuses: [400, 401],
+              empty: true,
+            },
+            requestOptions,
+          ),
+        importCode: (input: ExperimentalMobileImportCodeInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileImportCodeOutput }>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/import`,
+              body: { code: input["code"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        feishuQrBegin: (requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileFeishuQrBeginOutput }>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/qr/feishu/begin`,
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        feishuQrPoll: (input: ExperimentalMobileFeishuQrPollInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileFeishuQrPollOutput }>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/qr/feishu/poll`,
+              body: { deviceCode: input["deviceCode"], baseUrl: input["baseUrl"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        weixinQrBegin: (requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileWeixinQrBeginOutput }>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/qr/weixin/begin`,
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        weixinQrPoll: (input: ExperimentalMobileWeixinQrPollInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileWeixinQrPollOutput }>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/qr/weixin/poll`,
+              body: { qrcodeKey: input["qrcodeKey"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        syncRemotes: (input: ExperimentalMobileSyncRemotesInput, requestOptions?: RequestOptions) =>
+          request<ExperimentalMobileSyncRemotesOutput>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/remotes`,
+              body: { remotes: input["remotes"] },
+              successStatus: 204,
+              declaredStatuses: [400, 401],
+              empty: true,
+            },
+            requestOptions,
+          ),
+        transcribe: (input: ExperimentalMobileTranscribeInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileTranscribeOutput }>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/transcribe`,
+              body: { audioBase64: input["audioBase64"], mimeType: input["mimeType"], fileName: input["fileName"] },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
+              empty: false,
+            },
+            requestOptions,
+          ).then((value) => value.data),
+        simulate: (input: ExperimentalMobileSimulateInput, requestOptions?: RequestOptions) =>
+          request<{ readonly data: ExperimentalMobileSimulateOutput }>(
+            {
+              method: "POST",
+              path: `/api/experimental/mobile/simulate`,
+              body: {
+                robotId: input["robotId"],
+                userId: input["userId"],
+                userName: input["userName"],
+                chatId: input["chatId"],
+                text: input["text"],
+                audioBase64: input["audioBase64"],
+                audioMimeType: input["audioMimeType"],
+                audioFileName: input["audioFileName"],
+                fileBase64: input["fileBase64"],
+                fileMimeType: input["fileMimeType"],
+                fileName: input["fileName"],
+                progressDelayMs: input["progressDelayMs"],
+                pushLive: input["pushLive"],
+              },
+              successStatus: 200,
+              declaredStatuses: [400, 401],
               empty: false,
             },
             requestOptions,
@@ -2757,6 +2998,11 @@ export function make(options: ClientOptions) {
         /** @deprecated Use `client.experimental.mcp.client.token`. Removed in the next minor. */
         token: client.experimental.mcp.client.token,
       },
+    },
+    project: {
+      ...client.project,
+      /** @deprecated Use `client.experimental.project.remove`. Removed in the next minor. */
+      remove: client.experimental.project.remove,
     },
     file: {
       ...client.file,

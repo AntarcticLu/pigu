@@ -49,11 +49,27 @@ export const CredentialHandler = HttpApiBuilder.group(Api, "server.credential", 
                     ? "refresh"
                     : meta.piguAction === "toggle-dsh-plugin"
                       ? "toggle-dsh-plugin"
-                      : "upsert",
+                      : meta.piguAction === "set-model-protocol"
+                        ? "set-model-protocol"
+                        : meta.piguAction === "set-model-modality"
+                          ? "set-model-modality"
+                          : meta.piguAction === "set-modality-default"
+                            ? "set-modality-default"
+                            : "upsert",
               providerID: Predicate.isString(meta.providerID) ? meta.providerID : undefined,
+              modelID: Predicate.isString(meta.modelID) ? meta.modelID : undefined,
+              protocol: Predicate.isString(meta.protocol) ? meta.protocol : undefined,
+              modality: Predicate.isString(meta.modality) ? meta.modality : undefined,
               name: Predicate.isString(meta.name) ? meta.name : ctx.payload.label,
               baseURL: Predicate.isString(meta.baseURL) ? meta.baseURL : undefined,
-              apiKey: ctx.payload.value.key,
+              apiKey:
+                meta.piguAction === "upsert" ||
+                meta.piguAction === "refresh" ||
+                meta.piguAction === "toggle-dsh-plugin"
+                  ? ctx.payload.value.key
+                  : undefined,
+              multimodalOnly: meta.multimodalOnly === "true",
+              customModels: Predicate.isString(meta.customModels) ? meta.customModels : undefined,
             }).pipe(
               Effect.provideService(Global.Service, global),
               Effect.provideService(FSUtil.Service, fs),

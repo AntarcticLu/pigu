@@ -1,11 +1,13 @@
 import { Show, createEffect, createMemo, createSignal, type Component, type JSX } from "solid-js"
 import { Button } from "@opencode/ui/button"
+import { useDialog } from "@opencode/ui/context/dialog"
 import { Dialog, DialogBody, DialogHeader, DialogTitleGroup } from "@opencode/ui/dialog"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Select } from "@opencode/ui/select"
 import { TextInput } from "@opencode/ui/text-input"
 import { displayName } from "@opencode/ui/project-avatar"
+import { createProjectActions } from "@/home/projects/actions"
 import { tr, useLanguage } from "@/runtime/i18n/language"
 import { usePlatform } from "@/runtime/platform/platform"
 import { useServer } from "@/runtime/server/current"
@@ -27,11 +29,13 @@ function ProjectBasicInfoSection(props: {
   server: ServerConnection.Any
   isLocal: boolean
   onRelocated: (project: LocalProject) => void
+  onDeleted?: () => void
 }) {
   const language = useLanguage()
   const platform = usePlatform()
   const context = useServer().ctx
   const scopeStore = useExtensionScopeStore()
+  const projectActions = createProjectActions()
   const model = createEditProjectModel({ project: props.project, server: props.server })
   const [editingName, setEditingName] = createSignal(false)
   const [pathValue, setPathValue] = createSignal(props.project.worktree)
@@ -202,6 +206,23 @@ function ProjectBasicInfoSection(props: {
           </Show>
         </div>
       </SettingsRow>
+
+      <SettingsRow
+        title={tr("删除项目", "Delete project")}
+        description={tr(
+          "从 Pigu 中移除该项目及其会话历史，磁盘上的项目源代码文件不会被删除。",
+          "Remove this project and its session history from Pigu. Source files on disk will not be deleted.",
+        )}
+      >
+        <Button
+          data-action="settings-project-delete"
+          variant="danger"
+          size="small"
+          onClick={() => projectActions.remove(props.server, props.project, props.onDeleted)}
+        >
+          {tr("删除项目…", "Delete project…")}
+        </Button>
+      </SettingsRow>
     </SettingsList>
   )
 }
@@ -210,6 +231,7 @@ export const DialogEditProject: Component<{
   project: LocalProject
   server: ServerConnection.Any
 }> = (props) => {
+  const dialog = useDialog()
   const servers = useServers()
   const [currentProject, setCurrentProject] = createSignal(props.project)
 
@@ -231,6 +253,7 @@ export const DialogEditProject: Component<{
                 server={props.server}
                 isLocal={servers.local(props.server)}
                 onRelocated={(next) => setCurrentProject(next)}
+                onDeleted={() => dialog.close()}
               />
             )}
           </Show>
@@ -252,7 +275,10 @@ export const SettingsProjects: Component<{
   const archive = useArchiveState()
 
   const projects = createMemo(() =>
-    context.projects.unique().toSorted((a, b) => {
+    context.projects
+      .unique()
+      .filter((project) => !archive.isProjectDeleted(project.worktree))
+      .toSorted((a, b) => {
       const aArchived = archive.isProjectArchived(a.worktree, 1, 0) ? 1 : 0
       const bArchived = archive.isProjectArchived(b.worktree, 1, 0) ? 1 : 0
 

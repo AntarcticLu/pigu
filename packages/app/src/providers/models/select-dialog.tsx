@@ -39,7 +39,7 @@ import { createSafeTriangle } from "@/shell/commands/safe-triangle"
 import { formatKeybindParts, matchKeybind, parseKeybind } from "@/shell/commands/command"
 import { createEventListener } from "@solid-primitives/event-listener"
 import { matchesModelSearch } from "./search"
-import { formatProtocolVariantLabel } from "./protocol"
+import { effectiveModelModality, formatProtocolVariantLabel } from "./protocol"
 import { SettingsList } from "@/settings/list"
 import {
   CONSOLE_GROUP_KEY,
@@ -484,15 +484,22 @@ function createModelSelectorController(input: {
 }) {
   const model = input.model ?? useLocal().model
 
+  const isTextModel = (item: ModelItem) => effectiveModelModality(item.provider.id, item.id) === "text"
+
   const allModels = createMemo(() =>
     model
       .list()
+      .filter(isTextModel)
       .filter((item) => model.visible({ modelID: item.id, providerID: item.provider.id }))
       .filter((item) => (input.provider() ? item.provider.id === input.provider() : true)),
   )
 
   return {
-    all: () => model.list().filter((item) => (input.provider() ? item.provider.id === input.provider() : true)),
+    all: () =>
+      model
+        .list()
+        .filter(isTextModel)
+        .filter((item) => (input.provider() ? item.provider.id === input.provider() : true)),
     models: (search: string) => {
       const query = search.trim()
 
@@ -537,11 +544,17 @@ function createModelSelectorController(input: {
       input.onSelect()
     },
     variant: (item: ModelItem) => model.variant.current({ providerID: item.provider.id, modelID: item.id }),
-    favorites: () => model.favorite.list().filter((item) => !input.provider() || item.provider.id === input.provider()),
+    favorites: () =>
+      model.favorite
+        .list()
+        .filter(isTextModel)
+        .filter((item) => !input.provider() || item.provider.id === input.provider()),
     recent: () =>
       model
         .recent()
-        .flatMap((item) => (item && (!input.provider() || item.provider.id === input.provider()) ? [item] : [])),
+        .flatMap((item) =>
+          item && isTextModel(item) && (!input.provider() || item.provider.id === input.provider()) ? [item] : [],
+        ),
     toggleFavorite: (item: ModelItem) => model.favorite.toggle({ providerID: item.provider.id, modelID: item.id }),
   }
 }

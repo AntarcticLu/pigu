@@ -1878,6 +1878,19 @@ export type ProjectUpdateOperation<E = never> = (input: ProjectUpdateInput) => E
 export interface ProjectApi<E = never> {
   readonly list: ProjectListOperation<E>
   readonly update: ProjectUpdateOperation<E>
+
+  /** @deprecated Use `client.experimental.project.remove`. Removed in the next minor. */
+  readonly remove: ExperimentalProjectRemoveOperation<E>
+}
+
+export type ExperimentalProjectRemoveInput = { readonly projectID: Project.ID }
+export type ExperimentalProjectRemoveOutput = void
+export type ExperimentalProjectRemoveOperation<E = never> = (
+  input: ExperimentalProjectRemoveInput,
+) => Effect.Effect<ExperimentalProjectRemoveOutput, E>
+
+export interface ExperimentalProjectApi<E = never> {
+  readonly remove: ExperimentalProjectRemoveOperation<E>
 }
 
 export type FormListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
@@ -2504,6 +2517,285 @@ export type ExperimentalJobListOperation<E = never> = (
   input?: ExperimentalJobListInput,
 ) => Effect.Effect<ExperimentalJobListOutput, E>
 
+export type ExperimentalMobileSettingsOutput = { readonly preventSleep: boolean; readonly active: boolean }
+export type ExperimentalMobileSettingsOperation<E = never> = () => Effect.Effect<ExperimentalMobileSettingsOutput, E>
+
+export type ExperimentalMobileUpdateSettingsInput = { readonly preventSleep?: boolean | undefined }
+export type ExperimentalMobileUpdateSettingsOutput = { readonly preventSleep: boolean; readonly active: boolean }
+export type ExperimentalMobileUpdateSettingsOperation<E = never> = (
+  input?: ExperimentalMobileUpdateSettingsInput,
+) => Effect.Effect<ExperimentalMobileUpdateSettingsOutput, E>
+
+export type ExperimentalMobileListOutput = ReadonlyArray<{
+  readonly id: string
+  readonly name: string
+  readonly platform: "feishu" | "lark" | "weixin" | "dingtalk" | "wecom" | "qqbot"
+  readonly enabled: boolean
+  readonly ownerID: string
+  readonly allowFrom: string
+  readonly adminFrom?: string | undefined
+  readonly userNames?: { readonly [x: string]: string } | undefined
+  readonly feishu?:
+    | { readonly appId: string; readonly appSecret: string; readonly domain?: string | undefined }
+    | undefined
+  readonly weixin?:
+    | { readonly token: string; readonly baseUrl?: string | undefined; readonly accountId?: string | undefined }
+    | undefined
+  readonly dingtalk?: { readonly clientId: string; readonly clientSecret: string } | undefined
+  readonly wecom?: { readonly botId: string; readonly secret: string } | undefined
+  readonly qqbot?:
+    | { readonly appId: string; readonly appSecret: string; readonly sandbox?: boolean | undefined }
+    | undefined
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly status: {
+    readonly state: "connected" | "connecting" | "error" | "stopped"
+    readonly error?: string | undefined
+  }
+  readonly migrationCode: string
+  readonly shortCode: string
+}>
+export type ExperimentalMobileListOperation<E = never> = () => Effect.Effect<ExperimentalMobileListOutput, E>
+
+export type ExperimentalMobileCreateInput = {
+  readonly name: string
+  readonly platform: "feishu" | "lark" | "weixin" | "dingtalk" | "wecom" | "qqbot"
+  readonly enabled?: boolean | undefined
+  readonly ownerID?: string | undefined
+  readonly allowFrom?: string | undefined
+  readonly adminFrom?: string | undefined
+  readonly feishu?:
+    | { readonly appId: string; readonly appSecret: string; readonly domain?: string | undefined }
+    | undefined
+  readonly weixin?:
+    | { readonly token: string; readonly baseUrl?: string | undefined; readonly accountId?: string | undefined }
+    | undefined
+  readonly dingtalk?: { readonly clientId: string; readonly clientSecret: string } | undefined
+  readonly wecom?: { readonly botId: string; readonly secret: string } | undefined
+  readonly qqbot?:
+    | { readonly appId: string; readonly appSecret: string; readonly sandbox?: boolean | undefined }
+    | undefined
+}
+export type ExperimentalMobileCreateOutput = {
+  readonly id: string
+  readonly name: string
+  readonly platform: "feishu" | "lark" | "weixin" | "dingtalk" | "wecom" | "qqbot"
+  readonly enabled: boolean
+  readonly ownerID: string
+  readonly allowFrom: string
+  readonly adminFrom?: string | undefined
+  readonly userNames?: { readonly [x: string]: string } | undefined
+  readonly feishu?:
+    | { readonly appId: string; readonly appSecret: string; readonly domain?: string | undefined }
+    | undefined
+  readonly weixin?:
+    | { readonly token: string; readonly baseUrl?: string | undefined; readonly accountId?: string | undefined }
+    | undefined
+  readonly dingtalk?: { readonly clientId: string; readonly clientSecret: string } | undefined
+  readonly wecom?: { readonly botId: string; readonly secret: string } | undefined
+  readonly qqbot?:
+    | { readonly appId: string; readonly appSecret: string; readonly sandbox?: boolean | undefined }
+    | undefined
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly status: {
+    readonly state: "connected" | "connecting" | "error" | "stopped"
+    readonly error?: string | undefined
+  }
+  readonly migrationCode: string
+  readonly shortCode: string
+}
+export type ExperimentalMobileCreateOperation<E = never> = (
+  input: ExperimentalMobileCreateInput,
+) => Effect.Effect<ExperimentalMobileCreateOutput, E>
+
+export type ExperimentalMobileUpdateInput = {
+  readonly robotID: string
+  readonly name?: string | undefined
+  readonly enabled?: boolean | undefined
+  readonly ownerID?: string | undefined
+  readonly allowFrom?: string | undefined
+  readonly adminFrom?: string | undefined
+  readonly feishu?:
+    | { readonly appId: string; readonly appSecret: string; readonly domain?: string | undefined }
+    | undefined
+  readonly weixin?:
+    | { readonly token: string; readonly baseUrl?: string | undefined; readonly accountId?: string | undefined }
+    | undefined
+  readonly dingtalk?: { readonly clientId: string; readonly clientSecret: string } | undefined
+  readonly wecom?: { readonly botId: string; readonly secret: string } | undefined
+  readonly qqbot?:
+    | { readonly appId: string; readonly appSecret: string; readonly sandbox?: boolean | undefined }
+    | undefined
+}
+export type ExperimentalMobileUpdateOutput = {
+  readonly id: string
+  readonly name: string
+  readonly platform: "feishu" | "lark" | "weixin" | "dingtalk" | "wecom" | "qqbot"
+  readonly enabled: boolean
+  readonly ownerID: string
+  readonly allowFrom: string
+  readonly adminFrom?: string | undefined
+  readonly userNames?: { readonly [x: string]: string } | undefined
+  readonly feishu?:
+    | { readonly appId: string; readonly appSecret: string; readonly domain?: string | undefined }
+    | undefined
+  readonly weixin?:
+    | { readonly token: string; readonly baseUrl?: string | undefined; readonly accountId?: string | undefined }
+    | undefined
+  readonly dingtalk?: { readonly clientId: string; readonly clientSecret: string } | undefined
+  readonly wecom?: { readonly botId: string; readonly secret: string } | undefined
+  readonly qqbot?:
+    | { readonly appId: string; readonly appSecret: string; readonly sandbox?: boolean | undefined }
+    | undefined
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly status: {
+    readonly state: "connected" | "connecting" | "error" | "stopped"
+    readonly error?: string | undefined
+  }
+  readonly migrationCode: string
+  readonly shortCode: string
+}
+export type ExperimentalMobileUpdateOperation<E = never> = (
+  input: ExperimentalMobileUpdateInput,
+) => Effect.Effect<ExperimentalMobileUpdateOutput, E>
+
+export type ExperimentalMobileDeleteInput = { readonly robotID: string }
+export type ExperimentalMobileDeleteOutput = void
+export type ExperimentalMobileDeleteOperation<E = never> = (
+  input: ExperimentalMobileDeleteInput,
+) => Effect.Effect<ExperimentalMobileDeleteOutput, E>
+
+export type ExperimentalMobileImportCodeInput = { readonly code: string }
+export type ExperimentalMobileImportCodeOutput = {
+  readonly id: string
+  readonly name: string
+  readonly platform: "feishu" | "lark" | "weixin" | "dingtalk" | "wecom" | "qqbot"
+  readonly enabled: boolean
+  readonly ownerID: string
+  readonly allowFrom: string
+  readonly adminFrom?: string | undefined
+  readonly userNames?: { readonly [x: string]: string } | undefined
+  readonly feishu?:
+    | { readonly appId: string; readonly appSecret: string; readonly domain?: string | undefined }
+    | undefined
+  readonly weixin?:
+    | { readonly token: string; readonly baseUrl?: string | undefined; readonly accountId?: string | undefined }
+    | undefined
+  readonly dingtalk?: { readonly clientId: string; readonly clientSecret: string } | undefined
+  readonly wecom?: { readonly botId: string; readonly secret: string } | undefined
+  readonly qqbot?:
+    | { readonly appId: string; readonly appSecret: string; readonly sandbox?: boolean | undefined }
+    | undefined
+  readonly createdAt: number
+  readonly updatedAt: number
+  readonly status: {
+    readonly state: "connected" | "connecting" | "error" | "stopped"
+    readonly error?: string | undefined
+  }
+  readonly migrationCode: string
+  readonly shortCode: string
+}
+export type ExperimentalMobileImportCodeOperation<E = never> = (
+  input: ExperimentalMobileImportCodeInput,
+) => Effect.Effect<ExperimentalMobileImportCodeOutput, E>
+
+export type ExperimentalMobileFeishuQrBeginOutput = {
+  readonly deviceCode: string
+  readonly qrUrl: string
+  readonly verificationUrl: string
+  readonly interval: number
+  readonly expireIn: number
+  readonly baseUrl: string
+}
+export type ExperimentalMobileFeishuQrBeginOperation<E = never> = () => Effect.Effect<
+  ExperimentalMobileFeishuQrBeginOutput,
+  E
+>
+
+export type ExperimentalMobileFeishuQrPollInput = { readonly deviceCode: string; readonly baseUrl?: string | undefined }
+export type ExperimentalMobileFeishuQrPollOutput = {
+  readonly status: "pending" | "completed" | "expired" | "denied"
+  readonly baseUrl: string
+  readonly appId?: string | undefined
+  readonly appSecret?: string | undefined
+  readonly ownerOpenId?: string | undefined
+  readonly botName?: string | undefined
+  readonly domain?: string | undefined
+  readonly message?: string | undefined
+}
+export type ExperimentalMobileFeishuQrPollOperation<E = never> = (
+  input: ExperimentalMobileFeishuQrPollInput,
+) => Effect.Effect<ExperimentalMobileFeishuQrPollOutput, E>
+
+export type ExperimentalMobileWeixinQrBeginOutput = { readonly qrcodeKey: string; readonly qrUrl: string }
+export type ExperimentalMobileWeixinQrBeginOperation<E = never> = () => Effect.Effect<
+  ExperimentalMobileWeixinQrBeginOutput,
+  E
+>
+
+export type ExperimentalMobileWeixinQrPollInput = { readonly qrcodeKey: string }
+export type ExperimentalMobileWeixinQrPollOutput = {
+  readonly status: "waiting" | "scanned" | "completed" | "expired"
+  readonly token?: string | undefined
+  readonly botId?: string | undefined
+  readonly baseUrl?: string | undefined
+  readonly userId?: string | undefined
+}
+export type ExperimentalMobileWeixinQrPollOperation<E = never> = (
+  input: ExperimentalMobileWeixinQrPollInput,
+) => Effect.Effect<ExperimentalMobileWeixinQrPollOutput, E>
+
+export type ExperimentalMobileSyncRemotesInput = {
+  readonly remotes: ReadonlyArray<{
+    readonly key: string
+    readonly name: string
+    readonly url: string
+    readonly password?: string | undefined
+  }>
+}
+export type ExperimentalMobileSyncRemotesOutput = void
+export type ExperimentalMobileSyncRemotesOperation<E = never> = (
+  input: ExperimentalMobileSyncRemotesInput,
+) => Effect.Effect<ExperimentalMobileSyncRemotesOutput, E>
+
+export type ExperimentalMobileTranscribeInput = {
+  readonly audioBase64: string
+  readonly mimeType: string
+  readonly fileName?: string | undefined
+}
+export type ExperimentalMobileTranscribeOutput = { readonly text: string }
+export type ExperimentalMobileTranscribeOperation<E = never> = (
+  input: ExperimentalMobileTranscribeInput,
+) => Effect.Effect<ExperimentalMobileTranscribeOutput, E>
+
+export type ExperimentalMobileSimulateInput = {
+  readonly robotId: string
+  readonly userId: string
+  readonly userName?: string | undefined
+  readonly chatId?: string | undefined
+  readonly text: string
+  readonly audioBase64?: string | undefined
+  readonly audioMimeType?: string | undefined
+  readonly audioFileName?: string | undefined
+  readonly fileBase64?: string | undefined
+  readonly fileMimeType?: string | undefined
+  readonly fileName?: string | undefined
+  readonly progressDelayMs?: number | undefined
+  readonly pushLive?: boolean | undefined
+}
+export type ExperimentalMobileSimulateOutput = {
+  readonly cardTitles: ReadonlyArray<string>
+  readonly cardMarkdowns: ReadonlyArray<string>
+  readonly texts: ReadonlyArray<string>
+  readonly files: ReadonlyArray<{ readonly fileName: string; readonly mimeType: string; readonly size: number }>
+  readonly progressUpdates: ReadonlyArray<string>
+}
+export type ExperimentalMobileSimulateOperation<E = never> = (
+  input: ExperimentalMobileSimulateInput,
+) => Effect.Effect<ExperimentalMobileSimulateOutput, E>
+
 export interface ExperimentalApi<E = never> {
   readonly persistentPty: {
     readonly read: ExperimentalPersistentPtyReadOperation<E>
@@ -2534,6 +2826,22 @@ export interface ExperimentalApi<E = never> {
     readonly delete: ExperimentalArtifactsDeleteOperation<E>
   }
   readonly job: { readonly list: ExperimentalJobListOperation<E> }
+  readonly mobile: {
+    readonly settings: ExperimentalMobileSettingsOperation<E>
+    readonly updateSettings: ExperimentalMobileUpdateSettingsOperation<E>
+    readonly list: ExperimentalMobileListOperation<E>
+    readonly create: ExperimentalMobileCreateOperation<E>
+    readonly update: ExperimentalMobileUpdateOperation<E>
+    readonly delete: ExperimentalMobileDeleteOperation<E>
+    readonly importCode: ExperimentalMobileImportCodeOperation<E>
+    readonly feishuQrBegin: ExperimentalMobileFeishuQrBeginOperation<E>
+    readonly feishuQrPoll: ExperimentalMobileFeishuQrPollOperation<E>
+    readonly weixinQrBegin: ExperimentalMobileWeixinQrBeginOperation<E>
+    readonly weixinQrPoll: ExperimentalMobileWeixinQrPollOperation<E>
+    readonly syncRemotes: ExperimentalMobileSyncRemotesOperation<E>
+    readonly transcribe: ExperimentalMobileTranscribeOperation<E>
+    readonly simulate: ExperimentalMobileSimulateOperation<E>
+  }
 }
 
 export type ShellListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
@@ -2972,6 +3280,15 @@ export type McpClientTokenOutput = ExperimentalMcpClientTokenOutput
 /** @deprecated Use `ExperimentalMcpClientTokenOperation`. Removed in the next minor. */
 export type McpClientTokenOperation<E = never> = ExperimentalMcpClientTokenOperation<E>
 
+/** @deprecated Use `ExperimentalProjectRemoveInput`. Removed in the next minor. */
+export type ProjectRemoveInput = ExperimentalProjectRemoveInput
+
+/** @deprecated Use `ExperimentalProjectRemoveOutput`. Removed in the next minor. */
+export type ProjectRemoveOutput = ExperimentalProjectRemoveOutput
+
+/** @deprecated Use `ExperimentalProjectRemoveOperation`. Removed in the next minor. */
+export type ProjectRemoveOperation<E = never> = ExperimentalProjectRemoveOperation<E>
+
 /** @deprecated Use `ExperimentalFileWatchInput`. Removed in the next minor. */
 export type FileWatchInput = ExperimentalFileWatchInput
 
@@ -3038,6 +3355,7 @@ export interface AppApi<E = never> {
     readonly voice: ExperimentalVoiceApi<E>
     readonly integration: ExperimentalIntegrationApi<E>
     readonly mcp: ExperimentalMcpApi<E>
+    readonly project: ExperimentalProjectApi<E>
     readonly file: ExperimentalFileApi<E>
     readonly migration: ExperimentalMigrationApi<E>
     readonly usage: ExperimentalUsageApi<E>

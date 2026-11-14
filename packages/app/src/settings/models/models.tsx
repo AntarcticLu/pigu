@@ -15,8 +15,9 @@ import { popularProviders } from "@/providers/catalog/providers"
 import { DialogServer } from "@/servers/connect/dialog"
 import { AddServerMenu } from "@/servers/registry/add-menu"
 import { SettingsList } from "@/settings/list"
-import { ModelProtocolSelect } from "@/providers/models/protocol"
+import { ModelProtocolSelect, effectiveModelModality } from "@/providers/models/protocol"
 import { providerGroupKey } from "@/providers/models/select-dialog"
+import { DialogMultimodalModels } from "@/settings/providers/multimodal-dialog"
 import { SettingsProviders } from "@/settings/providers/providers"
 import { SettingsSearchField } from "@/settings/search-field"
 import { SettingsServerDataScope } from "@/settings/server-scope"
@@ -37,24 +38,45 @@ function DeviceProvidersSection(props: {
   query: string
   deviceMatched: boolean
   onRegisterAdd: (open: () => void) => void
+  onOpenMultimodal: () => void
 }) {
+  const language = useLanguage()
   const models = useModels()
+  const textItems = createMemo(() =>
+    models
+      .list()
+      .filter((item) => item.provider.id !== "native-cli")
+      .filter((item) => effectiveModelModality(item.provider.id, item.id) === "text"),
+  )
+  const hiddenMultimodalMatchCount = createMemo(() => {
+    const lower = props.query.trim().toLowerCase()
+
+    if (!lower) return 0
+
+    return models
+      .list()
+      .filter((item) => item.provider.id !== "native-cli" && item.provider.id !== "local")
+      .filter((item) => effectiveModelModality(item.provider.id, item.id) !== "text")
+      .filter(
+        (item) =>
+          item.name.toLowerCase().includes(lower) ||
+          item.id.toLowerCase().includes(lower) ||
+          item.provider.name.toLowerCase().includes(lower),
+      ).length
+  })
   const effectiveFilter = createMemo(() => {
     const q = props.query.trim()
 
     if (!q) return ""
 
     const lower = q.toLowerCase()
-    const anyModelOrProviderMatch = models
-      .list()
-      .filter((item) => item.provider.id !== "native-cli")
-      .some(
-        (item) =>
-          item.name.toLowerCase().includes(lower) ||
-          item.id.toLowerCase().includes(lower) ||
-          item.provider.name.toLowerCase().includes(lower) ||
-          item.provider.id.toLowerCase().includes(lower),
-      )
+    const anyModelOrProviderMatch = textItems().some(
+      (item) =>
+        item.name.toLowerCase().includes(lower) ||
+        item.id.toLowerCase().includes(lower) ||
+        item.provider.name.toLowerCase().includes(lower) ||
+        item.provider.id.toLowerCase().includes(lower),
+    )
 
     if (!anyModelOrProviderMatch && props.deviceMatched) return ""
 
@@ -65,7 +87,7 @@ function DeviceProvidersSection(props: {
     get filter() {
       return effectiveFilter()
     },
-    items: (_filter) => models.list().filter((item) => item.provider.id !== "native-cli"),
+    items: (_filter) => textItems(),
     key: (x) => `${x.provider.id}:${x.id}`,
     filterKeys: ["provider.name", "name", "id"],
     sortBy: (a, b) => {
@@ -147,10 +169,25 @@ function DeviceProvidersSection(props: {
         filter={effectiveFilter()}
         onRegisterAdd={props.onRegisterAdd}
         hasMatchingModels={(providerID) =>
-          list.grouped.latest.some((group) => group.category === providerID && group.items.length > 0)
+          !effectiveFilter()
+            ? true
+            : list.grouped.latest.some((group) => group.category === providerID && group.items.length > 0)
         }
         renderModels={(providerID) => <ProviderModelsInline providerID={providerID} />}
       />
+      <Show when={hiddenMultimodalMatchCount() > 0 && list.grouped.latest.length === 0}>
+        <div class="mt-2 flex items-center justify-between gap-2 rounded-lg border border-dashed border-v2-border-border-muted px-3 py-2 text-12-regular text-v2-text-text-muted">
+          <span>
+            {language.tr(
+              `匹配到 ${hiddenMultimodalMatchCount()} 个非文本多模态模型（生图/视频/音频已收纳至「拓展」）。`,
+              `${hiddenMultimodalMatchCount()} non-text multimodal model(s) matched (managed under Extensions).`,
+            )}
+          </span>
+          <Button size="small" variant="ghost" onClick={props.onOpenMultimodal}>
+            {language.tr("前往拓展配置", "Open in Extensions")}
+          </Button>
+        </div>
+      </Show>
     </div>
   )
 }
@@ -181,6 +218,12 @@ export const SettingsModels: Component<{
 
   const isReachable = (entry: SettingsServer) =>
     settingsServerReachable(entry, global.servers.health[entry.key]) && !!entry.connection
+
+  const jumpToMultimodal = (serverKey: string) => {
+    surface.selectServer(serverKey)
+    surface.select("extensions")
+    void dialog.show(() => <DialogMultimodalModels initialServerKey={serverKey} />)
+  }
 
   const deviceMatches = (entry: SettingsServer) => {
     const q = query().trim().toLowerCase()
@@ -288,6 +331,7 @@ export const SettingsModels: Component<{
                               query={query()}
                               deviceMatched={deviceMatches(entry)}
                               onRegisterAdd={(fn) => setAddProviderHandlers(entry.key, () => fn)}
+                              onOpenMultimodal={() => jumpToMultimodal(entry.key)}
                             />
                           </SettingsServerDataScope>
                         )}

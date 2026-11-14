@@ -10,6 +10,9 @@ import { Database } from "@opencode/core/database/database"
 import { Project } from "@opencode/core/project"
 import { ProjectSchema } from "@opencode/core/project/schema"
 import { ProjectTable } from "@opencode/core/project/sql"
+import { SessionExternal } from "@opencode/core/session/external"
+import { SessionSchema } from "@opencode/core/session/schema"
+import { SessionTable } from "@opencode/core/session/sql"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Hash } from "@opencode/util/hash"
 import { initGit } from "./fixture/git"
@@ -761,6 +764,72 @@ describe("Project.resolve", () => {
           Project.ID.make(yield* Effect.promise(() => rootCommit(tmp.path))),
         )
       }).pipe(Effect.provide(counted().layer))
+    }),
+  )
+})
+
+describe("Project.remove", () => {
+  it.effect("removes project record and cascades sessions without deleting files on disk", () =>
+    Effect.gen(function* () {
+      const tmp = yield* tmpdirScoped()
+      const testHome = yield* tmpdirScoped()
+      const prevTestHome = process.env.OPENCODE_TEST_HOME
+      process.env.OPENCODE_TEST_HOME = testHome.path
+      yield* Effect.addFinalizer(() =>
+        Effect.sync(() => {
+          if (prevTestHome === undefined) {
+            delete process.env.OPENCODE_TEST_HOME
+            return
+          }
+          process.env.OPENCODE_TEST_HOME = prevTestHome
+        }),
+      )
+
+      const markerFile = path.join(tmp.path, "README.md")
+      yield* Effect.promise(() => fs.writeFile(markerFile, "# Keep me\n", "utf8"))
+
+      const db = (yield* Database.Service).db
+      const project = yield* Project.Service
+      const id = Project.ID.make("removable-project")
+      const sessionID = SessionSchema.Session.ID.make("ses_removable_1")
+
+      yield* db
+        .insert(ProjectTable)
+        .values({
+          id,
+          worktree: abs(tmp.path),
+          name: "Removable",
+          sandboxes: [],
+          time_created: 10,
+          time_updated: 10,
+          time_active: 10,
+        })
+        .run()
+
+      yield* db
+        .insert(SessionTable)
+        .values({
+          id: sessionID,
+          project_id: id,
+          slug: "removable-session",
+          directory: tmp.path,
+          title: "Test Session",
+          version: "1",
+          time_created: 10,
+          time_updated: 10,
+        })
+        .run()
+
+      yield* project.remove(id)
+      const secondAttempt = yield* Effect.flip(project.remove(id))
+      expect(secondAttempt._tag).toBe("Project.NotFoundError")
+      expect((yield* project.list()).some((item) => item.id === id)).toBe(false)
+      expect(yield* db.select().from(SessionTable)).toEqual([])
+      expect(SessionExternal.isProjectDeleted(tmp.path)).toBe(true)
+      expect(yield* Effect.promise(() => fs.readFile(markerFile, "utf8"))).toBe("# Keep me\n")
+
+      SessionExternal.unmarkProjectDeleted(tmp.path)
+      expect(SessionExternal.isProjectDeleted(tmp.path)).toBe(false)
     }),
   )
 })

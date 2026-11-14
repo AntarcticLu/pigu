@@ -12,7 +12,7 @@ import {
   onCleanup,
   untrack,
 } from "solid-js"
-import { createServerProjects, ServerConnection, useServers } from "./registry"
+import { createServerProjects, ServerConnection, serverName, useServers } from "./registry"
 import {
   createServerControllersState,
   selectServerCtx,
@@ -37,6 +37,7 @@ import { Persist, persisted } from "@/runtime/persistence/storage"
 import { createDesktopData } from "./data"
 import { ModelState } from "./persistence"
 import { useLanguage } from "@/runtime/i18n/language"
+import { usePlatform } from "@/runtime/platform/platform"
 import { showToast } from "@/shell/notifications/toast"
 import { formatServerError } from "./errors"
 import { useSettings } from "@/settings/model"
@@ -50,6 +51,7 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
   name: "Global",
   init: () => {
     const server = useServers()
+    const platform = usePlatform()
     const models = createGlobalModels()
     const notificationCoordinator = createNotificationCoordinator()
     const owner = getOwner()
@@ -114,6 +116,51 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
 
         if (hostname) server.setHostname(key, hostname)
       }
+    })
+
+    createEffect(() => {
+      const localConn = server.list.find((conn) => server.local(conn))
+
+      if (!localConn) return
+      const localCtx = selectServerCtx(controllers(), ServerConnection.key(localConn))
+
+      if (!localCtx) return
+      const remotes = server.list
+        .filter((conn) => !server.local(conn))
+        .flatMap((conn) => {
+          const http = ServerConnection.http(conn)
+
+          if (!http?.url) return []
+          const item: { key: string; name: string; url: string; password?: string } = {
+            key: ServerConnection.key(conn),
+            name: serverName(conn) || ServerConnection.key(conn),
+            url: http.url,
+          }
+
+          if (http.password) item.password = http.password
+
+          return [item]
+        })
+      void localCtx.sdk.api.experimental.mobile.syncRemotes({ remotes }).catch(() => undefined)
+    })
+
+    createEffect(() => {
+      if (!platform.setPreventSleep) return
+      const localConn = server.list.find((conn) => server.local(conn))
+
+      if (!localConn) return
+      const localCtx = selectServerCtx(controllers(), ServerConnection.key(localConn))
+
+      if (!localCtx) return
+      const syncSleep = () => {
+        void localCtx.sdk.api.experimental.mobile
+          .settings()
+          .then((settings) => platform.setPreventSleep?.(settings.active))
+          .catch(() => undefined)
+      }
+      syncSleep()
+      const timer = setInterval(syncSleep, 15_000)
+      onCleanup(() => clearInterval(timer))
     })
 
     return {

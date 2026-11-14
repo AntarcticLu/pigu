@@ -2,7 +2,7 @@ export * as Project from "./project.js"
 
 import { Cache, Context, Duration, Effect, Layer, Schedule, Schema, Scope } from "effect"
 import { ChildProcess } from "effect/process"
-import { and, asc, desc, eq, gte, isNotNull, isNull, lt, lte, ne, sql } from "drizzle-orm"
+import { and, asc, desc, eq, gte, isNotNull, isNull, like, lt, lte, ne, sql } from "drizzle-orm"
 import path from "path"
 import { AbsolutePath } from "./schema.js"
 import { Bus } from "./bus.js"
@@ -18,6 +18,7 @@ import { ProjectTable, upsertProject } from "./project/sql.js"
 import { ProjectIcon } from "./project/icon.js"
 import { WorktreeTable } from "./worktree/sql.js"
 import { SessionExternal } from "./session/external.js"
+import { SessionTable } from "./session/sql.js"
 
 export const ID = ProjectSchema.ID
 export type ID = ProjectSchema.ID
@@ -91,6 +92,8 @@ export interface ActivateOptions {
 export interface Interface {
   readonly list: (input?: ListInput) => Effect.Effect<ReadonlyArray<Info>>
   readonly update: (input: UpdateInput) => Effect.Effect<Info, NotFoundError>
+  /** Removes a Project record and its stored session history without touching source files on disk. */
+  readonly remove: (projectID: ID) => Effect.Effect<void, NotFoundError>
   /** Records Project activity for recency ordering, at most once per minute per Project. */
   readonly activate: (projectID: ID, options?: ActivateOptions) => Effect.Effect<void>
   /** Resolves the owning Project, persisting it unless `persist` is false. */
@@ -140,6 +143,8 @@ const layer = Layer.effect(
 
     const announcing = new Set<string>()
     const persist = Effect.fnUntraced(function* (project: Resolved) {
+      SessionExternal.unmarkProjectDeleted(project.canonical)
+      SessionExternal.unmarkProjectDeleted(project.directory)
       const previous = yield* db
         .select({ canonical: ProjectTable.worktree })
         .from(ProjectTable)
@@ -291,6 +296,31 @@ const layer = Layer.effect(
       const project = fromRow(row)
       yield* bus.publish(ProjectSchema.Event.Updated, project)
       return project
+    })
+
+    const remove = Effect.fn("Project.remove")(function* (projectID: ID) {
+      if (projectID === ID.global) return yield* new NotFoundError({ projectID })
+      const row = yield* db
+        .select()
+        .from(ProjectTable)
+        .where(eq(ProjectTable.id, projectID))
+        .get()
+        .pipe(Effect.orDie)
+      if (!row) return yield* new NotFoundError({ projectID })
+
+      const externalSessions = yield* db
+        .select({ id: SessionTable.id })
+        .from(SessionTable)
+        .where(and(eq(SessionTable.project_id, projectID), like(SessionTable.id, "ses_ext_%")))
+        .all()
+        .pipe(Effect.orElseSucceed(() => []))
+
+      externalSessions.forEach((item) => SessionExternal.markDeleted(item.id))
+      SessionExternal.markProjectDeleted(row.worktree)
+      row.sandboxes.forEach((sandbox) => SessionExternal.markProjectDeleted(sandbox))
+      activated.delete(projectID)
+
+      yield* db.delete(ProjectTable).where(eq(ProjectTable.id, projectID)).run().pipe(Effect.orDie)
     })
 
     const activated = new Map<ID, number>()
@@ -513,7 +543,7 @@ const layer = Layer.effect(
       )
     })
 
-    const service = Service.of({ list, update, activate, resolve, sweep })
+    const service = Service.of({ list, update, remove, activate, resolve, sweep })
     return service
   }),
 )

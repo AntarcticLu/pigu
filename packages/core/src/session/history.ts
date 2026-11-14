@@ -221,7 +221,9 @@ const messageEntries = Effect.fnUntraced(function* (
   const start = decoded[0]
   if (compaction && start && !replayable(start.message, boundary))
     return yield* messageEntries(db, sessionID, boundary, compaction.seq)
-  const entries = compaction ? yield* withRecentText(db, sessionID, decoded) : decoded
+  const bounded =
+    !compaction && sessionID.startsWith("ses_ext_") ? boundUncompactedExternal(decoded) : decoded
+  const entries = compaction ? yield* withRecentText(db, sessionID, bounded) : bounded
   // Re-expansion may cross a native checkpoint whose completion already advanced the instruction
   // epoch: the baseline supersedes the chronological updates before it. Forks seed their baseline
   // at sequence 0 but retain parent sequences, so the copied checkpoint still retires them.
@@ -232,6 +234,21 @@ const messageEntries = Effect.fnUntraced(function* (
       !(entry.message.type === "system" && native && entry.seq < native.seq) && replayable(entry.message, boundary),
   )
 })
+
+function boundUncompactedExternal(
+  entries: ReadonlyArray<{ readonly seq: number; readonly message: SessionMessage.Info }>,
+) {
+  if (entries.length <= 160) return entries
+  const firstLocal = entries.findIndex((entry) => !entry.message.id.startsWith("msg_ext_"))
+  const rawStart = entries.length - 120
+  const maxStart = firstLocal >= 0 ? Math.min(rawStart, firstLocal) : rawStart
+  if (maxStart <= 0) return entries
+  const userOffset = entries.slice(maxStart).findIndex((entry) => entry.message.type === "user")
+  const cleanStart = userOffset >= 0 ? maxStart + userOffset : maxStart
+  if (cleanStart <= 0) return entries
+  const leadingSystem = entries.slice(0, cleanStart).filter((entry) => entry.message.type === "system")
+  return [...leadingSystem, ...entries.slice(cleanStart)]
+}
 
 /**
  * A summary compaction references its kept messages by `metadata.keepID` instead of storing them, so

@@ -346,6 +346,10 @@ const icons = {
     viewBox: "0 0 14 14",
     body: `<path d="M2.13889 11.0833L6.22222 7L2.13889 2.91667M7.38888 11.0834H11.8611" stroke="currentColor"/>`,
   },
+  mobile: {
+    viewBox: "0 0 16 16",
+    body: `<rect x="4" y="1.5" width="8" height="13" rx="1.5" stroke="currentColor"/><path d="M6.5 3.5H9.5" stroke="currentColor" stroke-linecap="round"/><circle cx="8" cy="12" r="0.8" fill="currentColor"/>`,
+  },
 }
 
 /** Icon names derived from the shared artwork, with no UI or runtime dependencies. */

@@ -21,6 +21,7 @@ import { CorsConfig, isAllowedRequestOrigin } from "../cors"
 import { makeArtifact } from "./artifact"
 import { makeJob } from "./job"
 import { makeMediaGet } from "./media"
+import { makeMobile } from "./mobile"
 import { type Outbound, runPtySocket } from "./pty-socket"
 import { makeSchedule } from "./schedule"
 
@@ -32,11 +33,26 @@ export const PersistentPtyHandler = HttpApiBuilder.group(Api, "server.experiment
     const artifact = yield* makeArtifact
     const job = yield* makeJob
     const mediaGet = yield* makeMediaGet
+    const mobile = yield* makeMobile
     const schedule = yield* makeSchedule
 
     return handlers
       .handleRaw("media.get", (ctx) => mediaGet(ctx.params.hash, ctx.request))
       .handle("job.list", (ctx) => job.list(ctx.query))
+      .handle("mobile.settings", () => mobile.settings())
+      .handle("mobile.updateSettings", (ctx) => mobile.updateSettings(ctx.payload))
+      .handle("mobile.list", () => mobile.list())
+      .handle("mobile.create", (ctx) => mobile.create(ctx.payload))
+      .handle("mobile.update", (ctx) => mobile.update(ctx.params.robotID, ctx.payload))
+      .handle("mobile.delete", (ctx) => mobile.remove(ctx.params.robotID))
+      .handle("mobile.importCode", (ctx) => mobile.importCode(ctx.payload))
+      .handle("mobile.feishuQrBegin", () => mobile.feishuQrBegin())
+      .handle("mobile.feishuQrPoll", (ctx) => mobile.feishuQrPoll(ctx.payload))
+      .handle("mobile.weixinQrBegin", () => mobile.weixinQrBegin())
+      .handle("mobile.weixinQrPoll", (ctx) => mobile.weixinQrPoll(ctx.payload))
+      .handle("mobile.syncRemotes", (ctx) => mobile.syncRemotes(ctx.payload))
+      .handle("mobile.transcribe", (ctx) => mobile.transcribe(ctx.payload))
+      .handle("mobile.simulate", (ctx) => mobile.simulate(ctx.payload))
       .handle("artifacts.providers", (ctx) => artifact.providers(ctx.query, ctx.request))
       .handle("artifacts.list", (ctx) => artifact.list(ctx.query, ctx.request))
       .handle("artifacts.create", (ctx) => artifact.create(ctx.query, ctx.payload, ctx.request))

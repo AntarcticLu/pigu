@@ -8,6 +8,7 @@ import { isSortable, useSortable } from "@dnd-kit/solid/sortable"
 import { Accessibility, Feedback, PointerActivationConstraints } from "@dnd-kit/dom"
 import { RestrictToVerticalAxis } from "@dnd-kit/abstract/modifiers"
 import { Button } from "@opencode/ui/button"
+import { useDialog } from "@opencode/ui/context/dialog"
 import { Icon } from "@opencode/ui/icon"
 import { IconButton } from "@opencode/ui/icon-button"
 import { Menu } from "@opencode/ui/menu"
@@ -312,7 +313,9 @@ function ProjectList(props: {
     return conn ? ServerConnection.key(conn) : undefined
   }
 
-  const allProjects = createMemo(() => ctx()?.projects.unique() ?? [])
+  const allProjects = createMemo(() =>
+    (ctx()?.projects.unique() ?? []).filter((project) => !archive.isProjectDeleted(project.worktree)),
+  )
 
   const sessions = useQuery(() => ({
     ...homeSessionsQuery(connection(), ctx()),
@@ -353,8 +356,10 @@ function ProjectList(props: {
             ),
             { activity: false },
           )
-          .filter((session) =>
-            scopeStore.isSessionSourceEnabled(String(session.metadata?.source ?? ""), session.location.directory),
+          .filter(
+            (session) =>
+              !archive.isProjectDeleted(session.location.directory) &&
+              scopeStore.isSessionSourceEnabled(String(session.metadata?.source ?? ""), session.location.directory),
           ),
       projects: allProjects,
       projectDirectories: () => undefined,
@@ -437,7 +442,7 @@ function ProjectList(props: {
         archive.isSessionArchived(record.session, idx, projectSessions().length),
       )
 
-    const limit = () => local.sessionLimits[key()] ?? 6
+    const limit = () => local.sessionLimits[key()] ?? 12
 
     const isExpanded = () =>
       props.state.expanded[key()] ??
@@ -460,7 +465,7 @@ function ProjectList(props: {
         onToggle={() => {
           const next = !isExpanded()
 
-          if (!next) setLocal("sessionLimits", key(), 6)
+          if (!next) setLocal("sessionLimits", key(), 12)
           props.onExpand(key(), next)
         }}
       >
@@ -497,7 +502,7 @@ function ProjectList(props: {
             variant="ghost-muted"
             size="small"
             class="ms-[23px] self-start"
-            onClick={() => setLocal("sessionLimits", key(), (value) => (value ?? 6) + 6)}
+            onClick={() => setLocal("sessionLimits", key(), (value) => (value ?? 12) + 12)}
           >
             {tr("展开更多", "Show more")} ({shownSessions().length - limit()})
           </Button>
@@ -671,6 +676,8 @@ function ProjectRow(props: {
 }) {
   const language = useLanguage()
 
+  const dialog = useDialog()
+
   const [menu, setMenu] = createStore({ open: false })
 
   return (
@@ -739,7 +746,11 @@ function ProjectRow(props: {
               aria-label={language.t("common.moreOptions")}
             />
             <Menu.Portal>
-              <Menu.Content>
+              <Menu.Content
+                onCloseAutoFocus={(event) => {
+                  if (dialog.active) event.preventDefault()
+                }}
+              >
                 <ProjectMenuItems
                   server={props.server}
                   project={props.project}
@@ -753,6 +764,7 @@ function ProjectRow(props: {
                   onRevealProject={props.actions.reveal}
                   onClearNotifications={props.actions.clearNotifications}
                   onHideProject={() => props.onToggleArchive()}
+                  onDeleteProject={props.actions.remove}
                 />
               </Menu.Content>
             </Menu.Portal>

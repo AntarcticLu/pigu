@@ -288,7 +288,10 @@ export const Plugin = {
     const hook = (event: SessionHooks["context"]) =>
       Effect.sync(() => {
         const usePatch =
-          event.model.id.includes("gpt-") && !event.model.id.includes("oss") && !event.model.id.includes("gpt-4")
+          (event.model.id.includes("gpt-") || event.model.id.includes("codex")) &&
+          !event.model.id.includes("oss") &&
+          !event.model.id.includes("gpt-4") &&
+          !event.model.id.includes("gpt-3")
         if (usePatch) {
           delete event.tools.edit
           delete event.tools.write

@@ -24,12 +24,41 @@ function CustomManagedProviderIcon(props: { class?: string }) {
   return <img data-component="custom-managed-provider-icon" src={customManagedProvider} alt="" class={props.class} />
 }
 
+function inferVendorIcon(provider: ModelProvider): string | undefined {
+  const base = provider.id.replace(/-(api|media)$/, "")
+
+  if (base === "google-gemini" || base.startsWith("generativelanguage")) return "google"
+
+  if (base === "glm" || base.includes("bigmodel") || base.includes("zhipu")) return "zhipuai"
+
+  if (base.includes("z-ai")) return "zai"
+
+  if (base === "qwen" || base.includes("dashscope") || base.includes("bailian")) return "alibaba"
+
+  if (base === "kimi" || base.startsWith("kimi-") || base.includes("moonshot")) return "moonshotai"
+
+  if (base.includes("minimaxi") || base.includes("minimax")) return "minimax"
+
+  if (base.includes("siliconflow")) return "siliconflow"
+
+  if (base.includes("together")) return "togetherai"
+
+  if (base.includes("fireworks")) return "fireworks-ai"
+
+  if (base.includes("openrouter")) return "openrouter"
+
+  if (base.includes("stepfun")) return "stepfun"
+
+  return base
+}
+
 export function ProviderModelIcon(props: { provider: ModelProvider; class?: string }) {
   const icon = () =>
     [
       props.provider.canonical,
       props.provider.canonical?.replace(/-token-plan$/, ""),
       props.provider.id.replace(/^console-/, ""),
+      inferVendorIcon(props.provider),
     ].find((id): id is IconName => !!id && id !== "synthetic" && iconNames.includes(id as IconName))
 
   return (

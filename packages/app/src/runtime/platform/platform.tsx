@@ -36,6 +36,7 @@ export type FatalRendererErrorLog = {
 type PlatformBase = {
   requestMicrophone?(): Promise<boolean>
   setVoiceCallActive?(active: boolean): Promise<void>
+  setPreventSleep?(enabled: boolean): Promise<boolean>
   /** App version */
   version?: string
 

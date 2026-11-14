@@ -8,6 +8,18 @@ export function detect(bytes: Uint8Array) {
   if (startsWith(bytes, [0x25, 0x50, 0x44, 0x46, 0x2d])) return "application/pdf"
   if (startsWith(bytes, [0x52, 0x49, 0x46, 0x46]) && startsWith(bytes.subarray(8), [0x57, 0x45, 0x42, 0x50]))
     return "image/webp"
+  if (startsWith(bytes, [0x52, 0x49, 0x46, 0x46]) && startsWith(bytes.subarray(8), [0x57, 0x41, 0x56, 0x45]))
+    return "audio/wav"
+  if (startsWith(bytes, [0x4f, 0x67, 0x67, 0x53])) return "audio/ogg"
+  if (startsWith(bytes, [0x66, 0x4c, 0x61, 0x43])) return "audio/flac"
+  if (startsWith(bytes, [0x23, 0x21, 0x41, 0x4d, 0x52])) return "audio/amr"
+  if (startsWith(bytes, [0x49, 0x44, 0x33]) || isMpegAudioFrame(bytes)) return "audio/mpeg"
+  if (startsWith(bytes, [0x1a, 0x45, 0xdf, 0xa3])) {
+    const header = ascii(bytes, 0, Math.min(bytes.length, 96))
+    if (header.includes("webm")) {
+      return /V_VP8|V_VP9|V_AV1/.test(header) ? "video/webm" : "audio/webm"
+    }
+  }
   if (bytes.length >= 12 && ascii(bytes, 4, 8) === "ftyp") {
     // AVIF, HEIC, QuickTime and M4A share MP4's container; the major brand tells them apart, and generic HEIF brands
     // list `avif`/`avis` among the compatible brands that follow the minor version.
@@ -47,6 +59,12 @@ function ascii(bytes: Uint8Array, start: number, end: number) {
 
 function startsWith(bytes: Uint8Array, prefix: number[]) {
   return prefix.every((value, index) => bytes[index] === value)
+}
+
+function isMpegAudioFrame(bytes: Uint8Array) {
+  if (bytes.length < 2 || bytes[0] !== 0xff) return false
+  const second = bytes[1]!
+  return (second & 0xe0) === 0xe0 && (second & 0x18) !== 0x08 && (second & 0x06) !== 0x00
 }
 
 function isText(bytes: Uint8Array) {

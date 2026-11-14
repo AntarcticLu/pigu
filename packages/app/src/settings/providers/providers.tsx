@@ -129,11 +129,36 @@ export const SettingsProviders: Component<{
     ])
   }
 
+  const VENDOR_PRESETS = [
+    { id: "openai", label: "OpenAI", name: "OpenAI", baseURL: "https://api.openai.com/v1" },
+    { id: "anthropic", label: "Anthropic", name: "Anthropic", baseURL: "https://api.anthropic.com/v1" },
+    {
+      id: "google",
+      label: "Gemini",
+      name: "Google Gemini",
+      baseURL: "https://generativelanguage.googleapis.com/v1beta",
+    },
+    { id: "deepseek", label: "DeepSeek", name: "DeepSeek", baseURL: "https://api.deepseek.com/v1" },
+    { id: "kimi", label: "Kimi", name: "Kimi", baseURL: "https://api.moonshot.cn/v1" },
+    { id: "zhipu", label: "智谱 GLM", name: "智谱 GLM", baseURL: "https://open.bigmodel.cn/api/paas/v4" },
+    {
+      id: "qwen",
+      label: "通义千问",
+      name: "阿里云百炼",
+      baseURL: "https://dashscope.aliyuncs.com/compatible-mode/v1",
+    },
+    { id: "minimax", label: "MiniMax", name: "MiniMax", baseURL: "https://api.minimaxi.com/v1" },
+    { id: "volcengine", label: "火山方舟", name: "火山方舟", baseURL: "https://ark.cn-beijing.volces.com/api/v3" },
+    { id: "openrouter", label: "OpenRouter", name: "OpenRouter", baseURL: "https://openrouter.ai/api/v1" },
+    { id: "siliconflow", label: "硅基流动", name: "硅基流动", baseURL: "https://api.siliconflow.cn/v1" },
+  ] as const
+
   const openManageProvider = (initial?: {
     providerID?: string
     name?: string
     baseURL?: string
     apiKey?: string
+    customModels?: string
   }) => {
     const isEditing = !!initial?.providerID
     void dialog.show(() => {
@@ -141,12 +166,14 @@ export const SettingsProviders: Component<{
         name: string
         baseURL: string
         apiKey: string
+        customModels: string
         saving: boolean
         error?: string
       }>({
         name: initial?.name ?? "",
         baseURL: initial?.baseURL ?? "",
         apiKey: initial?.apiKey ?? "",
+        customModels: initial?.customModels ?? "",
         saving: false,
       })
 
@@ -155,6 +182,7 @@ export const SettingsProviders: Component<{
         const cleanURL = form.baseURL.trim()
         const cleanKey = form.apiKey.trim()
         const cleanName = form.name.trim()
+        const cleanModels = form.customModels.trim()
 
         if (!cleanURL) {
           setForm("error", language.tr("请输入 API 地址 (Base URL)", "Please enter API Base URL"))
@@ -171,18 +199,24 @@ export const SettingsProviders: Component<{
         setForm({ saving: true, error: undefined })
 
         try {
+          const metadata: Record<string, string> = {
+            piguAction: "upsert",
+            baseURL: cleanURL,
+          }
+
+          if (initial?.providerID) metadata.providerID = initial.providerID
+
+          if (cleanName) metadata.name = cleanName
+
+          if (cleanModels) metadata.customModels = cleanModels
+
           await serverSdk.api.credential.create({
             integrationID: "pigu",
             label: cleanName || cleanURL,
             value: {
               type: "key",
               key: cleanKey,
-              metadata: {
-                piguAction: "upsert",
-                ...(initial?.providerID ? { providerID: initial.providerID } : {}),
-                ...(cleanName ? { name: cleanName } : {}),
-                baseURL: cleanURL,
-              },
+              metadata,
             },
           })
           await refreshProviderData()
@@ -204,7 +238,7 @@ export const SettingsProviders: Component<{
       }
 
       return (
-        <Dialog containerClass="!w-[min(calc(100vw_-_16px),520px)] !rounded-[12px] !bg-v2-background-bg-base">
+        <Dialog containerClass="!w-[min(calc(100vw_-_16px),540px)] !rounded-[12px] !bg-v2-background-bg-base">
           <DialogHeader closeLabel={language.t("common.close")}>
             <DialogTitle>
               {isEditing
@@ -213,7 +247,32 @@ export const SettingsProviders: Component<{
             </DialogTitle>
           </DialogHeader>
           <DialogBody class="px-5 pb-5 pt-2">
-            <form data-component="provider-manage-form" class="flex flex-col gap-4" onSubmit={(e) => void submit(e)}>
+            <form data-component="provider-manage-form" class="flex flex-col gap-3.5" onSubmit={(e) => void submit(e)}>
+              <Show when={!isEditing}>
+                <div class="flex flex-col gap-1.5">
+                  <span class="text-[12px] font-[500] leading-4 text-v2-text-text-muted">
+                    {language.tr("常用厂商快捷填充", "Quick Presets")}
+                  </span>
+                  <div class="flex flex-wrap gap-1.5">
+                    <For each={VENDOR_PRESETS}>
+                      {(preset) => (
+                        <button
+                          type="button"
+                          onClick={() => setForm({ name: preset.name, baseURL: preset.baseURL, error: undefined })}
+                          class={`cursor-pointer rounded-md border px-2 py-1 text-[11.5px] font-[480] transition-colors ${
+                            form.baseURL.trim() === preset.baseURL
+                              ? "border-v2-border-border-hover bg-v2-background-bg-layer-03 text-v2-text-text-base"
+                              : "border-v2-border-border-base bg-v2-background-bg-layer-02 text-v2-text-text-muted hover:border-v2-border-border-hover hover:text-v2-text-text-base"
+                          }`}
+                        >
+                          {preset.label}
+                        </button>
+                      )}
+                    </For>
+                  </div>
+                </div>
+              </Show>
+
               <div class="flex flex-col gap-1.5">
                 <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
                   {language.tr("供应商名称", "Provider Name")}
@@ -257,6 +316,22 @@ export const SettingsProviders: Component<{
                   }
                   value={form.apiKey}
                   onChange={(value) => setForm({ apiKey: value, error: undefined })}
+                />
+              </div>
+
+              <div class="flex flex-col gap-1.5">
+                <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
+                  {language.tr("补充模型 ID（可选）", "Additional Model IDs (optional)")}
+                </label>
+                <TextField
+                  data-input="manage-provider-models"
+                  type="text"
+                  placeholder={language.tr(
+                    "自动拉取 /models；火山接入点等无列表接口可手动填写，逗号分隔（如 ep-xxx, deepseek-chat）",
+                    "Auto-fetched via /models; add comma-separated IDs (e.g. ep-xxx, deepseek-chat) if needed",
+                  )}
+                  value={form.customModels}
+                  onChange={(value) => setForm({ customModels: value, error: undefined })}
                 />
               </div>
 

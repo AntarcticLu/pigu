@@ -21,6 +21,7 @@ import { settingsServerReachable, useSettingsServers, useSettingsServersLoaded }
 import { SettingsWorkspaces } from "./workspaces/workspaces"
 import { SettingsProjects } from "./workspaces/projects"
 import { SettingsExtensions } from "./providers/extensions"
+import { SettingsMobile } from "./mobile/mobile"
 import { SettingsAbout } from "./about/about"
 import { SettingsServerDataScope } from "./server-scope"
 import { SettingsNavigation, type SettingsNavGroup } from "./navigation"
@@ -32,6 +33,7 @@ import { PluginSettingsPages } from "@/runtime/plugin/settings-page-view"
 import "@/settings/settings.css"
 
 const rootClientTabs = [
+  { value: "mobile", icon: pageIcons.mobile, zh: "手机端", en: "Mobile" },
   { value: "general", icon: pageIcons.general, zh: "通用", en: "General" },
   { value: "shortcuts", icon: pageIcons.shortcuts, zh: "快捷键", en: "Shortcuts" },
 ] as const
@@ -227,6 +229,9 @@ function RootSettings() {
           provider={state.modelProvider}
           onReveal={() => setState("modelProvider", undefined)}
         />
+      </Tabs.Content>
+      <Tabs.Content value="mobile" class="settings-panel">
+        <SettingsMobile active={activeTab() === "mobile"} />
       </Tabs.Content>
       <Tabs.Content value="general" class="settings-panel">
         <SettingsGeneral />

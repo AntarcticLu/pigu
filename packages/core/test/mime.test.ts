@@ -14,4 +14,14 @@ describe("Mime.detect", () => {
     expect(Mime.detect(ftyp("00000014667479707174202000000200717420200000000877696465"))).toBe("video/quicktime")
     expect(Mime.detect(ftyp("0000001c667479704d344120000002004d34412069736f6d69736f3200000008"))).toBe("audio/mp4")
   })
+
+  test("detects common voice and audio containers (wav, ogg, flac, amr, mp3, webm)", () => {
+    expect(Mime.detect(ftyp("524946462400000057415645666d7420"))).toBe("audio/wav")
+    expect(Mime.detect(ftyp("4f67675300020000000000000000"))).toBe("audio/ogg")
+    expect(Mime.detect(ftyp("664c614300000022"))).toBe("audio/flac")
+    expect(Mime.detect(ftyp("2321414d520a3c"))).toBe("audio/amr")
+    expect(Mime.detect(ftyp("49443304000000000000"))).toBe("audio/mpeg")
+    expect(Mime.detect(ftyp("fffb906400000000"))).toBe("audio/mpeg")
+    expect(Mime.detect(ftyp("1a45dfa39f4286810142f7810142f2810442f381084282847765626d00"))).toBe("audio/webm")
+  })
 })

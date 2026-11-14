@@ -257,6 +257,8 @@ export const dict = {
   "ui.sessionTurn.retry.attemptRetryingNow": "尝试 {{attempt}} - 重试",
   "ui.messagePart.compaction.started": "会话压缩已开始",
   "ui.messagePart.compaction.running": "正在压缩",
+  "ui.messagePart.compaction.done": "已压缩",
+  "ui.messagePart.compaction.queued": "会话压缩排队中",
   "ui.messagePart.compaction.failed": "会话压缩失败",
   "ui.messagePart.compaction.cancelled": "会话压缩已取消",
   "ui.messagePart.compaction.interrupted": "会话压缩被中断",

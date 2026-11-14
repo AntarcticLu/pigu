@@ -83,6 +83,7 @@ export type IconName =
   | "mcp"
   | "menu"
   | "minus"
+  | "mobile"
   | "models"
   | "monitor"
   | "new-session"

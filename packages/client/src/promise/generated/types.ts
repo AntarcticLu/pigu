@@ -349,6 +349,62 @@ export type JobStatus = "running" | "completed" | "error" | "cancelled"
 
 export type JobTime = { started: number; completed?: number }
 
+export type MobileSettings = { preventSleep: boolean; active: boolean }
+
+export type MobilePlatformType = "feishu" | "lark" | "weixin" | "dingtalk" | "wecom" | "qqbot"
+
+export type MobileFeishuCredentials = { appId: string; appSecret: string; domain?: string | undefined }
+
+export type MobileWeixinCredentials = { token: string; baseUrl?: string | undefined; accountId?: string | undefined }
+
+export type MobileDingTalkCredentials = { clientId: string; clientSecret: string }
+
+export type MobileWeComCredentials = { botId: string; secret: string }
+
+export type MobileQQBotCredentials = { appId: string; appSecret: string; sandbox?: boolean | undefined }
+
+export type MobileRobotStatus = { state: "connected" | "connecting" | "error" | "stopped"; error?: string | undefined }
+
+export type MobileFeishuQrBeginResponse = {
+  deviceCode: string
+  qrUrl: string
+  verificationUrl: string
+  interval: number
+  expireIn: number
+  baseUrl: string
+}
+
+export type MobileFeishuQrPollResponse = {
+  status: "pending" | "completed" | "expired" | "denied"
+  baseUrl: string
+  appId?: string | undefined
+  appSecret?: string | undefined
+  ownerOpenId?: string | undefined
+  botName?: string | undefined
+  domain?: string | undefined
+  message?: string | undefined
+}
+
+export type MobileWeixinQrBeginResponse = { qrcodeKey: string; qrUrl: string }
+
+export type MobileWeixinQrPollResponse = {
+  status: "waiting" | "scanned" | "completed" | "expired"
+  token?: string | undefined
+  botId?: string | undefined
+  baseUrl?: string | undefined
+  userId?: string | undefined
+}
+
+export type MobileTranscribeAudioResponse = { text: string }
+
+export type MobileSimulateInboundResponse = {
+  cardTitles: Array<string>
+  cardMarkdowns: Array<string>
+  texts: Array<string>
+  files: Array<{ fileName: string; mimeType: string; size: number }>
+  progressUpdates: Array<string>
+}
+
 export type ReferenceGitSource = { type: "git"; repository: string; branch?: string }
 
 export type VcsBranch = { current?: string; default?: string }
@@ -973,6 +1029,27 @@ export type JobImage = {
   time: JobTime
   path: string
   model: string
+}
+
+export type MobileRobotView = {
+  id: string
+  name: string
+  platform: MobilePlatformType
+  enabled: boolean
+  ownerID: string
+  allowFrom: string
+  adminFrom?: string | undefined
+  userNames?: { [x: string]: string } | undefined
+  feishu?: MobileFeishuCredentials | undefined
+  weixin?: MobileWeixinCredentials | undefined
+  dingtalk?: MobileDingTalkCredentials | undefined
+  wecom?: MobileWeComCredentials | undefined
+  qqbot?: MobileQQBotCredentials | undefined
+  createdAt: number
+  updatedAt: number
+  status: MobileRobotStatus
+  migrationCode: string
+  shortCode: string
 }
 
 export type VcsInfo = { provider?: string; branch: VcsBranch }
@@ -4214,6 +4291,10 @@ export type ProjectUpdateInput = {
 
 export type ProjectUpdateOutput = Project
 
+export type ExperimentalProjectRemoveInput = { readonly projectID: string }
+
+export type ExperimentalProjectRemoveOutput = void
+
 export type FormListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
 
 export type FormListOutput = { location: LocationPublicRef; data: Array<FormInfo> }
@@ -4702,6 +4783,115 @@ export type ExperimentalJobListInput = {
 
 export type ExperimentalJobListOutput = { data: Array<JobInfo> }["data"]
 
+export type ExperimentalMobileSettingsOutput = { data: MobileSettings }["data"]
+
+export type ExperimentalMobileUpdateSettingsInput = { readonly preventSleep?: boolean | undefined }
+
+export type ExperimentalMobileUpdateSettingsOutput = { data: MobileSettings }["data"]
+
+export type ExperimentalMobileListOutput = { data: Array<MobileRobotView> }["data"]
+
+export type ExperimentalMobileCreateInput = {
+  readonly name: string
+  readonly platform: "feishu" | "lark" | "weixin" | "dingtalk" | "wecom" | "qqbot"
+  readonly enabled?: boolean | undefined
+  readonly ownerID?: string | undefined
+  readonly allowFrom?: string | undefined
+  readonly adminFrom?: string | undefined
+  readonly feishu?:
+    | { readonly appId: string; readonly appSecret: string; readonly domain?: string | undefined }
+    | undefined
+  readonly weixin?:
+    | { readonly token: string; readonly baseUrl?: string | undefined; readonly accountId?: string | undefined }
+    | undefined
+  readonly dingtalk?: { readonly clientId: string; readonly clientSecret: string } | undefined
+  readonly wecom?: { readonly botId: string; readonly secret: string } | undefined
+  readonly qqbot?:
+    | { readonly appId: string; readonly appSecret: string; readonly sandbox?: boolean | undefined }
+    | undefined
+}
+
+export type ExperimentalMobileCreateOutput = { data: MobileRobotView }["data"]
+
+export type ExperimentalMobileUpdateInput = {
+  readonly robotID: string
+  readonly name?: string | undefined
+  readonly enabled?: boolean | undefined
+  readonly ownerID?: string | undefined
+  readonly allowFrom?: string | undefined
+  readonly adminFrom?: string | undefined
+  readonly feishu?:
+    | { readonly appId: string; readonly appSecret: string; readonly domain?: string | undefined }
+    | undefined
+  readonly weixin?:
+    | { readonly token: string; readonly baseUrl?: string | undefined; readonly accountId?: string | undefined }
+    | undefined
+  readonly dingtalk?: { readonly clientId: string; readonly clientSecret: string } | undefined
+  readonly wecom?: { readonly botId: string; readonly secret: string } | undefined
+  readonly qqbot?:
+    | { readonly appId: string; readonly appSecret: string; readonly sandbox?: boolean | undefined }
+    | undefined
+}
+
+export type ExperimentalMobileUpdateOutput = { data: MobileRobotView }["data"]
+
+export type ExperimentalMobileDeleteInput = { readonly robotID: string }
+
+export type ExperimentalMobileDeleteOutput = void
+
+export type ExperimentalMobileImportCodeInput = { readonly code: string }
+
+export type ExperimentalMobileImportCodeOutput = { data: MobileRobotView }["data"]
+
+export type ExperimentalMobileFeishuQrBeginOutput = { data: MobileFeishuQrBeginResponse }["data"]
+
+export type ExperimentalMobileFeishuQrPollInput = { readonly deviceCode: string; readonly baseUrl?: string | undefined }
+
+export type ExperimentalMobileFeishuQrPollOutput = { data: MobileFeishuQrPollResponse }["data"]
+
+export type ExperimentalMobileWeixinQrBeginOutput = { data: MobileWeixinQrBeginResponse }["data"]
+
+export type ExperimentalMobileWeixinQrPollInput = { readonly qrcodeKey: string }
+
+export type ExperimentalMobileWeixinQrPollOutput = { data: MobileWeixinQrPollResponse }["data"]
+
+export type ExperimentalMobileSyncRemotesInput = {
+  readonly remotes: ReadonlyArray<{
+    readonly key: string
+    readonly name: string
+    readonly url: string
+    readonly password?: string | undefined
+  }>
+}
+
+export type ExperimentalMobileSyncRemotesOutput = void
+
+export type ExperimentalMobileTranscribeInput = {
+  readonly audioBase64: string
+  readonly mimeType: string
+  readonly fileName?: string | undefined
+}
+
+export type ExperimentalMobileTranscribeOutput = { data: MobileTranscribeAudioResponse }["data"]
+
+export type ExperimentalMobileSimulateInput = {
+  readonly robotId: string
+  readonly userId: string
+  readonly userName?: string | undefined
+  readonly chatId?: string | undefined
+  readonly text: string
+  readonly audioBase64?: string | undefined
+  readonly audioMimeType?: string | undefined
+  readonly audioFileName?: string | undefined
+  readonly fileBase64?: string | undefined
+  readonly fileMimeType?: string | undefined
+  readonly fileName?: string | undefined
+  readonly progressDelayMs?: number | undefined
+  readonly pushLive?: boolean | undefined
+}
+
+export type ExperimentalMobileSimulateOutput = { data: MobileSimulateInboundResponse }["data"]
+
 export type ShellListInput = { readonly location?: { readonly directory?: string | undefined } | undefined }
 
 export type ShellListOutput = { location: LocationPublicRef; data: Array<ShellInfo1> }
@@ -4971,6 +5161,12 @@ export type McpClientTokenInput = ExperimentalMcpClientTokenInput
 
 /** @deprecated Use `ExperimentalMcpClientTokenOutput`. Removed in the next minor. */
 export type McpClientTokenOutput = ExperimentalMcpClientTokenOutput
+
+/** @deprecated Use `ExperimentalProjectRemoveInput`. Removed in the next minor. */
+export type ProjectRemoveInput = ExperimentalProjectRemoveInput
+
+/** @deprecated Use `ExperimentalProjectRemoveOutput`. Removed in the next minor. */
+export type ProjectRemoveOutput = ExperimentalProjectRemoveOutput
 
 /** @deprecated Use `ExperimentalFileWriteInput`. Removed in the next minor. */
 export type FileWriteInput = ExperimentalFileWriteInput
