@@ -47,6 +47,15 @@ describe("request transport fields", () => {
     expect(response.text).toBe("Hello")
     expect(recorder.seen.map((request) => request.url)).toEqual(["https://openai.test/v1/chat/completions?trace=1"])
     expect(recorder.seen[0]?.headers.get("x-shared")).toBe("call")
+    expect(recorder.seen[0]?.headers.get("accept-encoding")).toBe("identity")
+
+    await ai.generate({
+      model: openai.chat("gpt-4o-mini"),
+      prompt: "Say hello.",
+      fetch: recorder.fetch,
+      headers: { "Accept-Encoding": "gzip" },
+    })
+    expect(recorder.seen[1]?.headers.get("accept-encoding")).toBe("gzip")
     await ai.dispose()
   })
 
@@ -69,6 +78,7 @@ describe("request transport fields", () => {
     expect(response.images).toHaveLength(1)
     expect(recorder.seen[0]?.url).toBe("https://openai.test/v1/images/generations")
     expect(recorder.seen[0]?.headers.get("x-call")).toBe("yes")
+    expect(recorder.seen[0]?.headers.get("accept-encoding")).toBeNull()
     await ai.dispose()
   })
 })

@@ -80,10 +80,16 @@ export const httpJson = <Body, Frame>(input: HttpJsonInput<Body, Frame>): HttpJs
   prepare: (prepareInput) =>
     Effect.gen(function* () {
       const parts = yield* jsonRequestParts({ ...prepareInput })
+      // Reverse proxies (Cloudflare, Caddy, Nginx) buffer gzip-compressed SSE streams across chunks, stalling
+      // silent reasoning periods unless uncompressed streaming is requested explicitly.
+      const headers =
+        input.framing.id === "sse" && !Headers.has(parts.headers, "accept-encoding")
+          ? Headers.set(parts.headers, "accept-encoding", "identity")
+          : parts.headers
       const request = ProviderShared.jsonPost({
         url: parts.url,
         body: parts.bodyText,
-        headers: parts.headers,
+        headers,
         encoding: prepareInput.request.http?.encoding,
       })
       return {

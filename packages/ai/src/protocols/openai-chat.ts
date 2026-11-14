@@ -355,6 +355,7 @@ interface PendingToolDelta {
 export interface ParserState {
   readonly providerMetadataKey: string
   readonly tools: ToolStream.State<number>
+  readonly finishedTools: ReadonlyMap<number, string>
   readonly custom: ReadonlyMap<string, OpenAIFreeform.Custom>
   /** Stream indexes of custom tool calls, whose JSON fragment closes when the call finishes. */
   readonly customCalls: ReadonlySet<number>
@@ -756,7 +757,8 @@ const detectMaxTokensField = (
     p === "deepseek" ||
     url.includes("deepseek.com") ||
     p === "moonshotai" ||
-    url.includes("api.moonshot.ai") ||
+    p === "moonshotai-cn" ||
+    url.includes("api.moonshot.") ||
     p === "togetherai" ||
     url.includes("api.together.") ||
     p === "zai" ||
@@ -765,6 +767,16 @@ const detectMaxTokensField = (
     p === "zhipuai-coding-plan" ||
     url.includes("api.z.ai") ||
     url.includes("open.bigmodel.cn") ||
+    p === "siliconflow" ||
+    p === "siliconflow-cn" ||
+    url.includes("siliconflow.") ||
+    p === "volcengine" ||
+    url.includes("volces.com") ||
+    p === "mistral" ||
+    url.includes("api.mistral.ai") ||
+    url.includes("qianfan.baidubce.com") ||
+    url.includes("api.stepfun.com") ||
+    url.includes("api.baichuan-ai.com") ||
     p === "nvidia" ||
     url.includes("integrate.api.nvidia.com") ||
     p === "cerebras" ||
@@ -972,14 +984,25 @@ const mapUsage = (usage: OpenAIChatEvent["usage"], providerMetadataKey: string):
   })
 }
 
+const hasToolDeltaContent = (tool: OpenAIChatToolCallDelta) =>
+  Boolean(tool.id) ||
+  Boolean(tool.function?.name) ||
+  Boolean(tool.function?.arguments) ||
+  Boolean(tool.custom?.input)
+
 const toolIndexByID = (
   tools: ParserState["tools"],
   pendingTools: ParserState["pendingTools"],
+  finishedTools: ParserState["finishedTools"],
   id: string | undefined,
 ) => {
   if (!id) return undefined
   const entry = Object.entries({ ...pendingTools, ...tools }).find(([, tool]) => tool?.id === id)
-  return entry ? Number(entry[0]) : undefined
+  if (entry) return Number(entry[0])
+  for (const [index, finishedID] of finishedTools) {
+    if (finishedID === id) return index
+  }
+  return undefined
 }
 
 const reasoningDelta = (
@@ -1123,13 +1146,8 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     const reasoning = reasoningDelta(delta, state.reasoningField)
     if (
       state.finishReason !== undefined &&
-      toolDeltas.some(
-        (tool) =>
-          Boolean(tool.id) ||
-          Boolean(tool.function?.name) ||
-          Boolean(tool.function?.arguments) ||
-          Boolean(tool.custom?.input),
-      )
+      state.finishReason.normalized !== "tool-calls" &&
+      toolDeltas.some(hasToolDeltaContent)
     )
       return yield* ProviderShared.eventError(
         ADAPTER,
@@ -1167,11 +1185,18 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     // Compatible providers may omit indexes. Prefer durable identity, then use
     // batch position for parallel deltas or the latest call for sparse chunks.
     for (const [position, tool] of toolDeltas.entries()) {
-      const matched = toolIndexByID(tools, pendingTools, tool.id || undefined)
+      const matched = toolIndexByID(tools, pendingTools, state.finishedTools, tool.id || undefined)
       const fallback = toolDeltas.length > 1 ? position : (latestToolIndex ?? position)
       const fallbackTool = tools[fallback] ?? pendingTools[fallback]
+      const fallbackID = fallbackTool?.id ?? state.finishedTools.get(fallback)
       const index =
-        tool.index ?? matched ?? (tool.id && fallbackTool?.id && fallbackTool.id !== tool.id ? nextToolIndex : fallback)
+        tool.index ?? matched ?? (tool.id && fallbackID && fallbackID !== tool.id ? nextToolIndex : fallback)
+      if (state.finishedTools.has(index) && hasToolDeltaContent(tool))
+        return yield* ProviderShared.eventError(
+          ADAPTER,
+          "OpenAI Chat received content after the finish reason",
+          ProviderShared.encodeJson(event),
+        )
       const current = tools[index]
       const pending = pendingTools[index]
       const id = current?.id ?? pending?.id ?? (tool.id || undefined)
@@ -1227,12 +1252,15 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
     }
 
     const incompleteTools = finishReason?.normalized === "content-filter" || finishReason?.normalized === "length"
-    if (
+    // Some OpenAI-compatible gateways (e.g. Gemini-to-OpenAI Chat stream adapters)
+    // emit `finish_reason: "tool_calls"` on each parallel tool call chunk instead
+    // of once after all tool deltas. Confirm open tools on each `tool_calls`
+    // finish chunk while still rejecting mutations to already-finished tool slots.
+    const confirmTools =
       finishReason !== undefined &&
       !incompleteTools &&
-      state.finishReason === undefined &&
-      Object.keys(pendingTools).length
-    )
+      (state.finishReason === undefined || (state.finishReason.normalized === "tool-calls" && Boolean(rawFinishReason)))
+    if (confirmTools && Object.keys(pendingTools).length)
       return yield* ProviderShared.eventError(
         ADAPTER,
         "OpenAI Chat tool call delta is missing id or name",
@@ -1240,22 +1268,23 @@ const step = (state: ParserState, event: OpenAIChatEvent) =>
       )
 
     // Filtering or truncation terminates the response without confirming pending tool calls.
-    const finished =
-      finishReason !== undefined &&
-      !incompleteTools &&
-      state.finishReason === undefined &&
-      Object.keys(tools).length > 0
-        ? yield* finishTools(tools, customCalls)
-        : undefined
+    const finished = confirmTools && Object.keys(tools).length > 0 ? yield* finishTools(tools, customCalls) : undefined
+    const finishedTools = finished
+      ? new Map([
+          ...state.finishedTools,
+          ...Object.entries(tools).flatMap(([key, tool]) => (tool ? [[Number(key), tool.id] as const] : [])),
+        ])
+      : state.finishedTools
 
     return [
       {
         providerMetadataKey: state.providerMetadataKey,
         tools: finished?.tools ?? tools,
+        finishedTools,
         custom: state.custom,
         customCalls,
         pendingTools,
-        toolCallEvents: finished?.events ?? state.toolCallEvents,
+        toolCallEvents: finished ? [...state.toolCallEvents, ...finished.events] : state.toolCallEvents,
         usage,
         finishReason: state.finishReason ?? finishReason,
         lifecycle,
@@ -1288,11 +1317,17 @@ export const finishEvents = Effect.fnUntraced(function* (state: ParserState) {
         route: ADAPTER,
       }),
     })
+  const incompleteTools =
+    state.finishReason?.normalized === "content-filter" || state.finishReason?.normalized === "length"
+  if (state.finishReason !== undefined && !incompleteTools && Object.keys(state.pendingTools).length > 0)
+    return yield* ProviderShared.eventError(ADAPTER, "OpenAI Chat tool call delta is missing id or name")
   const events: LLMEvent[] = []
-  const toolCallEvents =
-    state.finishReason === undefined && Object.keys(state.tools).length > 0
+  const trailingToolCallEvents =
+    !incompleteTools && Object.keys(state.tools).length > 0
       ? (yield* finishTools(state.tools, state.customCalls)).events
-      : state.toolCallEvents
+      : []
+  const toolCallEvents =
+    trailingToolCallEvents.length > 0 ? [...state.toolCallEvents, ...trailingToolCallEvents] : state.toolCallEvents
   const hasToolCalls = toolCallEvents.length > 0
   const reason = state.finishReason
     ? {
@@ -1344,6 +1379,7 @@ export const protocol = Protocol.make({
     initial: (request) => ({
       providerMetadataKey: request.model.route.providerMetadataKey ?? request.model.provider,
       tools: ToolStream.empty<number>(),
+      finishedTools: new Map<number, string>(),
       custom: OpenAIFreeform.tools(request),
       customCalls: new Set<number>(),
       pendingTools: {},

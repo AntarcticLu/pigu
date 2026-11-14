@@ -694,6 +694,53 @@ describe("OpenAI-compatible Chat route", () => {
     }),
   )
 
+  it.effect("assembles parallel tool calls streamed across consecutive tool_calls finish chunks", () =>
+    Effect.gen(function* () {
+      const response = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              deltaChunk({ reasoning_content: "Checking both files." }),
+              deltaChunk(
+                {
+                  tool_calls: [
+                    {
+                      index: 0,
+                      id: "call_1",
+                      function: { name: "read", arguments: '{"filePath":"package.json"}' },
+                    },
+                  ],
+                },
+                "tool_calls",
+              ),
+              deltaChunk(
+                {
+                  tool_calls: [
+                    {
+                      index: 1,
+                      id: "call_2",
+                      function: { name: "read", arguments: '{"filePath":"README.md"}' },
+                    },
+                  ],
+                },
+                "tool_calls",
+              ),
+              usageChunk({ prompt_tokens: 14, completion_tokens: 9, total_tokens: 23 }),
+            ),
+          ),
+        ),
+      )
+
+      expect(response.reasoning).toBe("Checking both files.")
+      expect(response.finishReason).toEqual({ normalized: "tool-calls", raw: "tool_calls" })
+      expect(response.usage).toMatchObject({ inputTokens: 14, outputTokens: 9, totalTokens: 23 })
+      expect(response.toolCalls).toMatchObject([
+        { id: "call_1", name: "read", input: { filePath: "package.json" } },
+        { id: "call_2", name: "read", input: { filePath: "README.md" } },
+      ])
+    }),
+  )
+
   it.effect("rejects tool changes after a terminal chunk", () =>
     Effect.gen(function* () {
       const error = yield* LLMClient.generate(request).pipe(
@@ -715,6 +762,56 @@ describe("OpenAI-compatible Chat route", () => {
       expect(decodeJson(error.reason.body ?? "")).toMatchObject({
         choices: [{ delta: { tool_calls: [{ id: "call_1" }] } }],
       })
+
+      const mutatedFinished = yield* LLMClient.generate(request).pipe(
+        Effect.provide(
+          fixedResponse(
+            sseEvents(
+              deltaChunk(
+                { tool_calls: [{ index: 0, id: "call_1", function: { name: "lookup", arguments: "{}" } }] },
+                "tool_calls",
+              ),
+              deltaChunk({ tool_calls: [{ index: 0, function: { arguments: '{"extra":1}' } }] }),
+            ),
+          ),
+        ),
+        Effect.flip,
+      )
+
+      expect(mutatedFinished.message).toContain("OpenAI Chat received content after the finish reason")
+      expect(mutatedFinished.reason._tag).toBe("InvalidProviderOutput")
+    }),
+  )
+
+  it.effect("uses max_tokens for Moonshot CN, SiliconFlow, Volcengine Ark, Mistral, and Qianfan endpoints", () =>
+    Effect.gen(function* () {
+      const endpoints = [
+        { provider: "kimi-custom", baseURL: "https://api.moonshot.cn/v1", model: "kimi-k2.5", strict: false },
+        { provider: "sf-custom", baseURL: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-V3" },
+        { provider: "ark-custom", baseURL: "https://ark.cn-beijing.volces.com/api/v3", model: "doubao-seed-2-0-pro" },
+        { provider: "mistral-custom", baseURL: "https://api.mistral.ai/v1", model: "mistral-large-latest" },
+        { provider: "qianfan-custom", baseURL: "https://qianfan.baidubce.com/v2", model: "ernie-4.5-turbo" },
+      ]
+
+      yield* Effect.forEach(endpoints, (entry) =>
+        Effect.gen(function* () {
+          const prepared = yield* compileRequest(
+            ai.request({
+              model: OpenAICompatibleChat.route
+                .with({ provider: entry.provider, endpoint: { baseURL: entry.baseURL } })
+                .model({ id: entry.model }),
+              prompt: "Hello",
+              maxTokens: 128,
+              tools: [ToolDefinition.make({ name: "lookup", description: "Lookup", inputSchema: { type: "object" } })],
+            }),
+          )
+          expect(prepared.body).toMatchObject({ max_tokens: 128 })
+          expect(prepared.body).not.toHaveProperty("max_completion_tokens")
+          if (entry.strict === false) {
+            expect(prepared.body.tools?.[0]?.function).not.toHaveProperty("strict")
+          }
+        }),
+      )
     }),
   )
 })

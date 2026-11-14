@@ -1463,7 +1463,11 @@ export const step = (state: ParserState, event: NormalizedEvent) => {
         : onOutputTextDone(state, { ...event, text: value }, event.item_id),
     )
   }
-  if (event.type === "response.reasoning.delta" || event.type === "response.reasoning_summary_text.delta") {
+  if (
+    event.type === "response.reasoning.delta" ||
+    event.type === "response.reasoning_summary_text.delta" ||
+    event.type === "response.reasoning_text.delta"
+  ) {
     if (event.item_id === undefined) return ProviderShared.eventError(state.id, `${event.type} is missing item_id`)
     return Effect.succeed(onReasoningDelta(state, event, event.item_id))
   }

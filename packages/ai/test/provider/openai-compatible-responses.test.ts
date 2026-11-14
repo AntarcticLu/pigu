@@ -450,6 +450,7 @@ describe("Open Responses-compatible route", () => {
           { type: "response.reasoning.done", text: "Preserved" },
           { type: "response.reasoning_summary_text.delta", delta: "Preserved" },
           { type: "response.reasoning_summary_text.done", text: "Preserved" },
+          { type: "response.reasoning_text.delta", delta: "Preserved" },
           { type: "response.reasoning_text.done", text: "Preserved" },
         ],
       },
