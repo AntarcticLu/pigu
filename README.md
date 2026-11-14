@@ -37,7 +37,7 @@ curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
 ### Windows（免安装便携版）
 
 1. 前往 [**GitHub Releases**](https://github.com/AntarcticLu/pigu/releases) 下载最新 **`pigu-windows-x64.zip`**。
-2. 解压到任意文件夹，双击 **`Pigu.exe`** 即可启动桌面端（内置命令行位于 `bin\pigu.exe`）。
+2. 解压到任意文件夹，双击 **`Pigu.exe`** 即可启动桌面端（内置命令行位于 `bin\pigu.cmd`）。
 3. 升级时直接解压覆盖原目录即可，账号配置与历史会话独立保存在系统用户目录中。
 
 ---

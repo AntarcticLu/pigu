@@ -312,16 +312,24 @@ download_and_install() {
     if [ "$os" = "windows" ]; then
         installed_binary="$APP.exe"
     fi
-    if [ -f "$tmp_dir/package/bin/$binary_name" ]; then
-        mv "$tmp_dir/package/bin/$binary_name" "$INSTALL_DIR/$installed_binary"
+    local staged_binary="$INSTALL_DIR/.${installed_binary}.tmp.$$"
+    if [ "$os" = "darwin" ] && [ -f "$tmp_dir/Pigu.app/Contents/Resources/opencode-cli" ]; then
+        cp -f "$tmp_dir/Pigu.app/Contents/Resources/opencode-cli" "$staged_binary"
+    elif [ -f "$tmp_dir/package/bin/$binary_name" ]; then
+        cp -fL "$tmp_dir/package/bin/$binary_name" "$staged_binary"
     elif [ -f "$tmp_dir/bin/$binary_name" ]; then
-        mv "$tmp_dir/bin/$binary_name" "$INSTALL_DIR/$installed_binary"
+        cp -fL "$tmp_dir/bin/$binary_name" "$staged_binary"
     elif [ -f "$tmp_dir/$binary_name" ]; then
-        mv "$tmp_dir/$binary_name" "$INSTALL_DIR/$installed_binary"
+        cp -fL "$tmp_dir/$binary_name" "$staged_binary"
     elif [ -f "$tmp_dir/pigu" ]; then
-        mv "$tmp_dir/pigu" "$INSTALL_DIR/$installed_binary"
+        cp -fL "$tmp_dir/pigu" "$staged_binary"
+    else
+        print_message error "Could not find $binary_name in downloaded archive." >&2
+        rm -rf "$tmp_dir"
+        exit 1
     fi
-    chmod 755 "$INSTALL_DIR/$installed_binary"
+    chmod 755 "$staged_binary"
+    mv -f "$staged_binary" "$INSTALL_DIR/$installed_binary"
     # If the macOS archive also includes Pigu.app, install/overwrite it in /Applications
     if [ "$os" = "darwin" ] && [ -d "$tmp_dir/Pigu.app" ]; then
         local app_dest="/Applications/Pigu.app"
@@ -344,9 +352,13 @@ install_from_binary() {
         MINGW*|MSYS*|CYGWIN*) installed_binary="$APP.exe" ;;
     esac
     if [ "$binary_path" != "$INSTALL_DIR/$installed_binary" ]; then
-        cp "$binary_path" "$INSTALL_DIR/$installed_binary"
+        local staged_binary="$INSTALL_DIR/.${installed_binary}.tmp.$$"
+        cp -fL "$binary_path" "$staged_binary"
+        chmod 755 "$staged_binary"
+        mv -f "$staged_binary" "$INSTALL_DIR/$installed_binary"
+    else
+        chmod 755 "$INSTALL_DIR/$installed_binary"
     fi
-    chmod 755 "$INSTALL_DIR/$installed_binary"
 }
 
 install_legacy_shim() {

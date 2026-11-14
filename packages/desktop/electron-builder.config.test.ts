@@ -47,13 +47,13 @@ function trimFilter(dir: string, config: Configuration) {
   ]).createFilter()
 }
 
-test.each(channels)("channel identity for $channel", ({ channel, appId, feed }) => {
+test.each(channels)("channel identity for $channel", ({ channel, appId }) => {
   const config = load(channel)
   expect(config.appId).toBe(appId)
-  // Every published channel updates from its own feed on the update service.
+  // Pigu desktop updates from the repository's GitHub Releases download endpoint.
   expect(config.publish).toEqual({
     provider: "generic",
-    url: `https://opencode.ai/update/api/${feed}/desktop/opencode/`,
+    url: "https://github.com/AntarcticLu/pigu/releases/latest/download/",
     channel: "latest",
   })
   expect(config.extraMetadata?.desktopName).toBe(`${appId}.desktop`)
@@ -90,7 +90,7 @@ test("legacy Linux launcher stays hidden", async () => {
 
 test.each(channels)("macOS bundle for $channel", ({ channel }) => {
   const config = load(channel)
-  expect(config.mac?.icon).toBe(channel === "prod" ? "resources/icons/icon.icon" : "resources/icons/icon.icns")
+  expect(config.mac?.icon).toBe("resources/icons/icon.icns")
   expect(config.dmg?.icon).toBe(channel === "prod" ? "resources/icons/icon.icns" : undefined)
   // The prod override must keep the rest of the shared macOS settings.
   expect(config.mac?.target).toEqual(["dmg", "zip"])
@@ -114,7 +114,7 @@ test("the production Icon Composer package references its bundled artwork", asyn
 })
 
 test("shared packaging defaults", async () => {
-  const config = load("dev")
+  const config = load("dev", "darwin-arm64")
   // Packaging runs in secretless build jobs; the release workflow signs and notarizes afterwards.
   expect(config.mac?.sign).toBeUndefined()
   expect(config.mac?.notarize).toBeUndefined()
@@ -125,15 +125,24 @@ test("shared packaging defaults", async () => {
   expect(config.nsis?.include).toBe(include)
   expect(await Bun.file(include).exists()).toBe(true)
   expect(config.files).toContain("!resources/opencode-cli*")
+  expect(config.files).toContain("!out/**/*.map")
   expect(config.extraResources).toEqual([
-    { from: "resources/", to: "", filter: ["opencode-cli", "opencode-cli.exe", "opencode-cli.version"] },
+    { from: "resources/", to: "", filter: ["opencode-cli", "opencode-cli.version"] },
+  ])
+  expect(load("dev", "windows-x64").extraResources).toEqual([
+    { from: "resources/", to: "", filter: ["opencode-cli.exe", "opencode-cli.version"] },
   ])
 })
 
-test("trims external dependencies without excluding runtime files", () => {
+test("trims external dependencies and build sourcemaps without excluding runtime files", () => {
   const fileStats = statSync(import.meta.filename)
   const dirStats = statSync(import.meta.dirname)
   const filter = trimFilter(import.meta.dirname, load("dev"))
+
+  expect(filter(path.join(import.meta.dirname, "out/renderer/assets/main.js.map"), fileStats)).toBe(false)
+  expect(filter(path.join(import.meta.dirname, "out/main/index.js.map"), fileStats)).toBe(false)
+  expect(filter(path.join(import.meta.dirname, "out/renderer/assets/main.js"), fileStats)).toBe(true)
+  expect(filter(path.join(import.meta.dirname, "out/main/index.js"), fileStats)).toBe(true)
 
   for (const prefix of ["node_modules/", "node_modules/parent/node_modules/"]) {
     const included = (file: string, stats = fileStats) => filter(path.join(import.meta.dirname, prefix, file), stats)

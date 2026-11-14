@@ -57,10 +57,10 @@ jobs:
         run: |
           mkdir -p release-stage/bin
           tar -xf dist/desktop/opencode-desktop-mac-*.app.tar -C release-stage
-          cp packages/cli/dist/cli-${{ matrix.cli_target }}/bin/opencode release-stage/bin/opencode
-          chmod 755 release-stage/bin/opencode
+          app_bundle=$(cd release-stage && ls -d *.app | head -n 1)
+          ln -sf "../${app_bundle}/Contents/Resources/opencode-cli" release-stage/bin/opencode
           ln -sf opencode release-stage/bin/pigu
-          tar -czf pigu-${{ matrix.target }}.tar.gz -C release-stage .
+          GZIP=-9 tar -czf pigu-${{ matrix.target }}.tar.gz -C release-stage .
       - uses: actions/upload-artifact@v4
         with:
           name: pigu-${{ matrix.target }}
@@ -109,7 +109,7 @@ jobs:
           cp packages/cli/dist/cli-${{ matrix.cli_target }}/bin/opencode release-stage/bin/opencode
           chmod 755 release-stage/bin/opencode
           ln -sf opencode release-stage/bin/pigu
-          tar -czf pigu-${{ matrix.target }}.tar.gz -C release-stage .
+          GZIP=-9 tar -czf pigu-${{ matrix.target }}.tar.gz -C release-stage .
       - uses: actions/upload-artifact@v4
         with:
           name: pigu-${{ matrix.target }}
@@ -158,10 +158,27 @@ jobs:
       - name: Create Windows Portable ZIP
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force -Path "dist/desktop/app/bin" | Out-Null
-          Copy-Item "packages/cli/dist/cli-windows-x64-baseline/bin/opencode.exe" "dist/desktop/app/bin/pigu.exe" -Force
-          Copy-Item "packages/cli/dist/cli-windows-x64-baseline/bin/opencode.exe" "dist/desktop/app/bin/opencode.exe" -Force
-          Compress-Archive -Path "dist/desktop/app/*" -DestinationPath "pigu-windows-x64.zip" -Force
+          $binDir = Join-Path $PWD "dist/desktop/app/bin"
+          $zipPath = Join-Path $PWD "pigu-windows-x64.zip"
+          New-Item -ItemType Directory -Force -Path $binDir | Out-Null
+          $utf8NoBom = [System.Text.UTF8Encoding]::new($false)
+          $cmdShim = "@echo off`r`n`"%~dp0..\resources\opencode-cli.exe`" %*`r`nexit /b %ERRORLEVEL%`r`n"
+          $shShim = "#!/bin/sh`nbasedir=`$(CDPATH= cd -- `"`$(dirname -- `"`$0`")`" && pwd)`nexec `"`$basedir/../resources/opencode-cli.exe`" `"`$@`"`n"
+          [System.IO.File]::WriteAllText((Join-Path $binDir "pigu.cmd"), $cmdShim, $utf8NoBom)
+          [System.IO.File]::WriteAllText((Join-Path $binDir "opencode.cmd"), $cmdShim, $utf8NoBom)
+          [System.IO.File]::WriteAllText((Join-Path $binDir "pigu"), $shShim, $utf8NoBom)
+          [System.IO.File]::WriteAllText((Join-Path $binDir "opencode"), $shShim, $utf8NoBom)
+          if (Get-Command 7z -ErrorAction SilentlyContinue) {
+            Push-Location "dist/desktop/app"
+            try {
+              7z a -tzip -mx=9 $zipPath *
+              if ($LASTEXITCODE -ne 0) { throw "7z exited with code $LASTEXITCODE" }
+            } finally {
+              Pop-Location
+            }
+          } else {
+            Compress-Archive -Path "dist/desktop/app/*" -DestinationPath $zipPath -Force
+          }
       - uses: actions/upload-artifact@v4
         with:
           name: pigu-windows-x64

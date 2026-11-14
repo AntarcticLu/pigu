@@ -91,6 +91,7 @@ const getBase = (appId: string): Configuration => {
       "!**/node_modules/@zip.js/zip.js/{index.cjs,index.min.js,index-fflate.js,deno.json,eslint.config.mjs}",
       // Nothing executes type declarations or source maps, and every entry costs startup time: the
       // main process parses the whole asar header before it runs any JavaScript.
+      "!out/**/*.map",
       "!**/node_modules/**/*.d.{ts,cts,mts}",
       "!**/node_modules/**/*.d.{ts,cts,mts}.map",
       "!**/node_modules/**/*.{js,cjs,mjs}.map",
@@ -105,7 +106,7 @@ const getBase = (appId: string): Configuration => {
       {
         from: "resources/",
         to: "",
-        filter: ["opencode-cli", "opencode-cli.exe", "opencode-cli.version"],
+        filter: [target.os === "win32" ? "opencode-cli.exe" : "opencode-cli", "opencode-cli.version"],
       },
     ],
     afterPack: async (context) => {
