@@ -119,6 +119,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
 }
 
+function nvmNodeBinDirs(home: string) {
+  const nvmRoots = [
+    ...(process.env.NVM_DIR ? [path.resolve(process.env.NVM_DIR)] : []),
+    path.join(home, ".nvm"),
+    "/usr/local/nvm",
+  ]
+  return [...new Set(nvmRoots)].flatMap((root) => {
+    const versionsDir = path.join(root, "versions", "node")
+    if (!fs.existsSync(versionsDir)) return []
+    return fs
+      .readdirSync(versionsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => entry.name)
+      .sort((a, b) => b.localeCompare(a, undefined, { numeric: true }))
+      .map((ver) => path.join(versionsDir, ver, "bin"))
+  })
+}
+
 function globalBinDirs() {
   const home = os.homedir()
   const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming")
@@ -131,7 +149,6 @@ function globalBinDirs() {
           path.join(localAppData, "pnpm"),
           path.join(localAppData, "Microsoft", "WinGet", "Links"),
           path.join(home, "scoop", "shims"),
-          path.join(home, ".cargo", "bin"),
           path.join(localAppData, "Programs", "claude-code"),
           path.join(localAppData, "Programs", "Claude"),
           path.join(localAppData, "Programs", "Codex"),
@@ -146,13 +163,26 @@ function globalBinDirs() {
 
   return [
     ...winDirs,
+    ...nvmNodeBinDirs(home),
     path.join(home, ".mounty", "AL", "node", "bin"),
     path.join(home, ".local", "bin"),
+    path.join(home, ".pigu", "bin"),
+    path.join(home, ".pigu", "bun", "bin"),
     path.join(home, ".opencode", "bin"),
     path.join(home, ".claude", "local"),
     path.join(home, ".claude", "bin"),
     path.join(home, ".codex", "bin"),
     path.join(home, ".bun", "bin"),
+    path.join(home, ".npm-global", "bin"),
+    path.join(home, ".volta", "bin"),
+    path.join(home, ".fnm", "aliases", "default", "bin"),
+    path.join(home, ".local", "share", "fnm", "aliases", "default", "bin"),
+    path.join(home, ".local", "share", "pnpm"),
+    path.join(home, ".local", "share", "mise", "shims"),
+    path.join(home, ".asdf", "shims"),
+    path.join(home, ".cargo", "bin"),
+    path.join(home, "miniconda3", "bin"),
+    path.join(home, "anaconda3", "bin"),
     "/opt/homebrew/bin",
     "/usr/local/bin",
     "/usr/bin",
@@ -1740,8 +1770,36 @@ function resolveDafeiyuHelperBinary(home: string): string | undefined {
   return undefined
 }
 
+function readOpencodeConfigRecord(home: string): Record<string, unknown> | undefined {
+  const envDir = process.env.OPENCODE_CONFIG_DIR?.trim()
+  const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming")
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local")
+  const candidates = [
+    ...(envDir
+      ? [path.join(path.resolve(envDir), "opencode.json"), path.join(path.resolve(envDir), "config.json")]
+      : []),
+    path.join(home, ".config", "pigu", "opencode.json"),
+    path.join(home, ".config", "pigu", "config.json"),
+    path.join(home, ".config", "opencode", "opencode.json"),
+    path.join(home, ".config", "opencode", "config.json"),
+    path.join(home, ".opencode", "opencode.json"),
+    path.join(appData, "opencode", "opencode.json"),
+    path.join(localAppData, "opencode", "opencode.json"),
+  ]
+  return candidates.flatMap((file) => {
+    const parsed = readJsonRecordSafe(file)
+    return parsed ? [parsed] : []
+  })[0]
+}
+
 function dshPluginStatePath(home: string): string {
-  return path.join(home, ".config", "opencode", "dsh-plugins.json")
+  const envDir = process.env.OPENCODE_CONFIG_DIR?.trim()
+  const candidates = [
+    ...(envDir ? [path.join(path.resolve(envDir), "dsh-plugins.json")] : []),
+    path.join(home, ".config", "pigu", "dsh-plugins.json"),
+    path.join(home, ".config", "opencode", "dsh-plugins.json"),
+  ]
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? path.join(home, ".config", "opencode", "dsh-plugins.json")
 }
 
 function readDisabledDshPlugins(home: string): Set<string> {
@@ -2031,14 +2089,7 @@ function isChatTextModelId(raw: string): boolean {
 }
 
 function resolveDshModelRoute(home: string, subModel: string | undefined): DshModelRoute | undefined {
-  const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming")
-  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local")
-  const cfg =
-    readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json")) ??
-    readJsonRecordSafe(path.join(home, ".config", "opencode", "config.json")) ??
-    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json")) ??
-    readJsonRecordSafe(path.join(appData, "opencode", "opencode.json")) ??
-    readJsonRecordSafe(path.join(localAppData, "opencode", "opencode.json"))
+  const cfg = readOpencodeConfigRecord(home)
   if (!cfg) return undefined
 
   const rawProviders = isRecord(cfg.provider) ? cfg.provider : isRecord(cfg.providers) ? cfg.providers : {}
@@ -3276,6 +3327,28 @@ function discoverCodexRecentRolloutModels(codexRoot: string): readonly string[] 
   return [...new Set(found)]
 }
 
+function discoverCodexRelayModels(home: string, rawBaseUrl: string | undefined): readonly string[] {
+  if (!rawBaseUrl) return []
+  const relayOrigin = URL.parse(rawBaseUrl.trim())?.origin
+  if (!relayOrigin) return []
+  const cfg = readOpencodeConfigRecord(home)
+  if (!cfg) return []
+  const providers = isRecord(cfg.provider) ? cfg.provider : isRecord(cfg.providers) ? cfg.providers : {}
+  return Object.values(providers).flatMap((providerVal) => {
+    if (!isRecord(providerVal) || !isRecord(providerVal.models)) return []
+    const opts = isRecord(providerVal.options)
+      ? providerVal.options
+      : isRecord(providerVal.settings)
+        ? providerVal.settings
+        : undefined
+    const baseUrl = typeof opts?.baseURL === "string" ? opts.baseURL.trim() : ""
+    if (!baseUrl || URL.parse(baseUrl)?.origin !== relayOrigin) return []
+    return Object.keys(providerVal.models).filter(
+      (id) => /^(gpt-|codex-|o[134](?:-|$))/i.test(id) && isChatTextModelId(id),
+    )
+  })
+}
+
 function discoverCodexConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
   const codexRoot = process.env.CODEX_HOME ? path.resolve(process.env.CODEX_HOME) : path.join(home, ".codex")
   if (!fs.existsSync(codexRoot)) return { models: [] }
@@ -3286,6 +3359,7 @@ function discoverCodexConfigModels(home: string): { defaultModel?: string; model
       return {
         topModel: undefined as string | undefined,
         activeProfileModel: undefined as string | undefined,
+        activeProviderBaseUrl: undefined as string | undefined,
         profileModels: [] as string[],
         nuxModels: [] as string[],
       }
@@ -3300,8 +3374,12 @@ function discoverCodexConfigModels(home: string): { defaultModel?: string; model
     const activeProfile = topLines
       .map((line) => parseTomlQuotedAssignment(line, "profile"))
       .find((val): val is string => Boolean(val))
+    const activeModelProvider = topLines
+      .map((line) => parseTomlQuotedAssignment(line, "model_provider"))
+      .find((val): val is string => Boolean(val))
 
     const profileMap = new Map<string, string>()
+    const providerBaseUrls = new Map<string, string>()
     const nuxModels: string[] = []
     let currentSection = ""
 
@@ -3316,6 +3394,12 @@ function discoverCodexConfigModels(home: string): { defaultModel?: string; model
         const profName = profMatch[1].replace(/^["']|["']$/g, "").trim()
         const modelVal = parseTomlQuotedAssignment(line, "model")
         if (profName && modelVal) profileMap.set(profName, modelVal)
+      }
+      const provMatch = /^model_providers\.(.+)$/.exec(currentSection)
+      if (provMatch?.[1]) {
+        const provName = provMatch[1].replace(/^["']|["']$/g, "").trim()
+        const baseVal = parseTomlQuotedAssignment(line, "base_url")
+        if (provName && baseVal) providerBaseUrls.set(provName, baseVal)
       }
       if (currentSection === "tui.model_availability_nux") {
         const nuxKey = /^\s*(?:"([^"]+)"|'([^']+)')\s*=\s*\d+/.exec(line)
@@ -3332,10 +3416,13 @@ function discoverCodexConfigModels(home: string): { defaultModel?: string; model
     return {
       topModel,
       activeProfileModel: activeProfile ? profileMap.get(activeProfile) : undefined,
+      activeProviderBaseUrl: activeModelProvider ? providerBaseUrls.get(activeModelProvider) : undefined,
       profileModels: [...profileMap.values()],
       nuxModels,
     }
   })()
+
+  const relayModels = discoverCodexRelayModels(home, configParsed.activeProviderBaseUrl)
 
   const sqliteModels = discoverCodexSqliteModels(codexRoot)
   const rolloutModels = sqliteModels.length > 0 ? [] : discoverCodexRecentRolloutModels(codexRoot)
@@ -3376,6 +3463,7 @@ function discoverCodexConfigModels(home: string): { defaultModel?: string; model
     configParsed.topModel ??
     configParsed.activeProfileModel ??
     atomSelectedModel ??
+    relayModels[0] ??
     sqliteModels[0] ??
     rolloutModels[0]
 
@@ -3384,6 +3472,7 @@ function discoverCodexConfigModels(home: string): { defaultModel?: string; model
       ...(defaultModel ? [defaultModel] : []),
       ...(configParsed.topModel ? [configParsed.topModel] : []),
       ...(configParsed.activeProfileModel ? [configParsed.activeProfileModel] : []),
+      ...relayModels,
       ...sqliteModels,
       ...rolloutModels,
       ...configParsed.profileModels,
@@ -3452,10 +3541,7 @@ function discoverClaudeRelayModels(home: string, rawBaseUrl: string | undefined)
   if (!rawBaseUrl) return []
   const relayOrigin = URL.parse(rawBaseUrl.trim())?.origin
   if (!relayOrigin) return []
-  const cfg =
-    readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json")) ??
-    readJsonRecordSafe(path.join(home, ".config", "opencode", "config.json")) ??
-    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json"))
+  const cfg = readOpencodeConfigRecord(home)
   if (!cfg) return []
   const providers = isRecord(cfg.provider) ? cfg.provider : isRecord(cfg.providers) ? cfg.providers : {}
   return Object.values(providers).flatMap((providerVal) => {
@@ -3563,14 +3649,7 @@ function discoverPiConfigModels(home: string): { defaultModel?: string; models: 
 }
 
 function discoverOpencodeConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
-  const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming")
-  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local")
-  const cfg =
-    readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json")) ??
-    readJsonRecordSafe(path.join(home, ".config", "opencode", "config.json")) ??
-    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json")) ??
-    readJsonRecordSafe(path.join(appData, "opencode", "opencode.json")) ??
-    readJsonRecordSafe(path.join(localAppData, "opencode", "opencode.json"))
+  const cfg = readOpencodeConfigRecord(home)
   if (!cfg) return { models: [] }
   const rawDefaultModel = typeof cfg.model === "string" ? cfg.model.trim() : undefined
   const defaultModel = rawDefaultModel && isChatTextModelId(rawDefaultModel) ? rawDefaultModel : undefined

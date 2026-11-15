@@ -1,4 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
+import { createHash } from "node:crypto"
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
 import { homedir } from "node:os"
 import path from "node:path"
 import { Effect, Option, Schema } from "effect"
@@ -27,7 +28,98 @@ const LocalConfigFile = Schema.fromJsonString(
   }),
 )
 
+const LocalJsonObject = Schema.fromJsonString(Schema.Record(Schema.String, Schema.Json))
+
 const decodeLocalConfig = Schema.decodeUnknownOption(LocalConfigFile)
+const decodeLocalJsonObject = Schema.decodeUnknownOption(LocalJsonObject)
+
+type LocalArchiveKind = "bundle" | "release"
+export type RemoteOs = "linux" | "darwin"
+export type RemoteArch = "x64" | "arm64"
+export type RemotePlatform = `${RemoteOs}-${RemoteArch}`
+
+type LocalArchive = {
+  readonly kind: LocalArchiveKind
+  readonly platform: RemotePlatform
+  readonly filePath: string
+  readonly sha256: string
+  readonly mtimeMs: number
+}
+
+const remotePlatforms: ReadonlyArray<RemotePlatform> = ["linux-x64", "linux-arm64", "darwin-x64", "darwin-arm64"]
+
+function computeFileSha256(filePath: string) {
+  return createHash("sha256").update(readFileSync(filePath)).digest("hex")
+}
+
+function resolveLocalArchiveForPlatform(cacheDir: string, platform: RemotePlatform): LocalArchive | undefined {
+  const candidates: ReadonlyArray<{ readonly kind: LocalArchiveKind; readonly filePath: string }> = [
+    { kind: "bundle", filePath: path.join(cacheDir, `pigu-bundle-${platform}.tar.gz`) },
+    { kind: "release", filePath: path.join(cacheDir, `pigu-${platform}.tar.gz`) },
+  ]
+  const found = candidates
+    .flatMap((item) => {
+      const st = statSync(item.filePath, { throwIfNoEntry: false })
+      if (!st || !st.isFile() || st.size <= 0) return []
+      return [
+        {
+          kind: item.kind,
+          platform,
+          filePath: item.filePath,
+          mtimeMs: st.mtimeMs,
+          sha256: computeFileSha256(item.filePath),
+        },
+      ]
+    })
+    .sort((a, b) => b.mtimeMs - a.mtimeMs)
+  return found[0]
+}
+
+function resolveLocalArchives(cacheDir = path.join(homedir(), ".pigu", "cache")) {
+  return new Map(
+    remotePlatforms.flatMap((platform) => {
+      const archive = resolveLocalArchiveForPlatform(cacheDir, platform)
+      return archive ? [[platform, archive] as const] : []
+    }),
+  )
+}
+
+export function parseRemotePlatform(output: string): RemotePlatform {
+  const rawOs = output
+    .split(/\r?\n/)
+    .findLast((line) => line.startsWith("OPENCODE_SSH_REMOTE_OS="))
+    ?.slice("OPENCODE_SSH_REMOTE_OS=".length)
+    .trim()
+    .toLowerCase()
+  const rawArch = output
+    .split(/\r?\n/)
+    .findLast((line) => line.startsWith("OPENCODE_SSH_REMOTE_ARCH="))
+    ?.slice("OPENCODE_SSH_REMOTE_ARCH=".length)
+    .trim()
+    .toLowerCase()
+  const os: RemoteOs = rawOs?.startsWith("darwin") ? "darwin" : "linux"
+  const arch: RemoteArch = rawArch === "aarch64" || rawArch === "arm64" ? "arm64" : "x64"
+  return `${os}-${arch}`
+}
+
+export function parseRemoteArch(output: string): RemoteArch {
+  return parseRemotePlatform(output).endsWith("-arm64") ? "arm64" : "x64"
+}
+
+function readLocalCompanionConfigBase64(filename: string) {
+  const home = homedir()
+  const candidates = [
+    path.join(home, ".config", "pigu", filename),
+    path.join(home, ".config", "opencode", filename),
+  ]
+  const found = candidates.flatMap((file) => {
+    if (!existsSync(file)) return []
+    const decoded = Option.getOrUndefined(decodeLocalJsonObject(readFileSync(file, "utf8")))
+    return decoded ? [decoded] : []
+  })[0]
+  if (!found) return ""
+  return Buffer.from(`${JSON.stringify(found, null, 2)}\n`, "utf8").toString("base64")
+}
 
 function readLocalCloudProviderConfigBase64() {
   const home = homedir()
@@ -62,51 +154,119 @@ function readLocalCloudProviderConfigBase64() {
   return Buffer.from(`${payload}\n`, "utf8").toString("base64")
 }
 
-function remoteConfigSyncScript() {
+const bundleWrapperBody = [
+  "#!/usr/bin/env bash",
+  'export OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"',
+  'if [ "${1:-}" != "run" ]; then',
+  '  export OPENCODE_DB="${OPENCODE_DB:-opencode-local.db}"',
+  '  export OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/pigu}"',
+  "fi",
+  'exec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"',
+].join("\\n")
+
+const releaseWrapperBody = [
+  "#!/usr/bin/env bash",
+  'if [ "${1:-}" != "run" ]; then',
+  '  export OPENCODE_DB="${OPENCODE_DB:-opencode-local.db}"',
+  '  export OPENCODE_CONFIG_DIR="${OPENCODE_CONFIG_DIR:-$HOME/.config/pigu}"',
+  "fi",
+  'exec "$HOME/.pigu/libexec/pigu-bin" "$@"',
+].join("\\n")
+
+const syncShimsSnippet = `mkdir -p "$HOME/.local/bin" "$HOME/.opencode/bin"
+for shim in "$HOME/.local/bin/pigu" "$HOME/.opencode/bin/pigu" "$HOME/.opencode/bin/opencode"; do
+  rm -f "$shim"
+  cp "$HOME/.pigu/bin/pigu" "$shim"
+  chmod 755 "$shim"
+done
+if [ -w "/usr/local/bin" ]; then
+  for sys_shim in "/usr/local/bin/pigu" "/usr/local/bin/opencode"; do
+    rm -f "$sys_shim" 2>/dev/null || true
+    cp "$HOME/.pigu/bin/pigu" "$sys_shim" 2>/dev/null || true
+    chmod 755 "$sys_shim" 2>/dev/null || true
+  done
+fi`
+
+export function remoteConfigSyncScript() {
   const b64 = readLocalCloudProviderConfigBase64()
-  const wrapperCheck = `if [ -f "$HOME/.pigu/bin/pigu" ] && ! grep -q 'OPENCODE_CONFIG_DIR=' "$HOME/.pigu/bin/pigu" 2>/dev/null; then
-  printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexport OPENCODE_DB="opencode-local.db"\\nexport OPENCODE_CONFIG_DIR="$HOME/.config/pigu"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
+  const multimodalB64 = readLocalCompanionConfigBase64("pigu-multimodal.json")
+  const protocolsB64 = readLocalCompanionConfigBase64("pigu-model-protocols.json")
+  // Only upgrade legacy JS-bundle wrapper scripts; never overwrite compiled ELF binaries.
+  const wrapperCheck = `if [ -f "$HOME/.pigu/app/index.js" ] && [ -x "$HOME/.pigu/bun/bin/bun" ] && grep -q '\\.pigu/app/index\\.js' "$HOME/.pigu/bin/pigu" 2>/dev/null && ! grep -q 'OPENCODE_CONFIG_DIR=' "$HOME/.pigu/bin/pigu" 2>/dev/null; then
+  printf '${bundleWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
   chmod 755 "$HOME/.pigu/bin/pigu"
-  cp "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu" 2>/dev/null || true
-  cp "$HOME/.pigu/bin/pigu" "/usr/local/bin/pigu" 2>/dev/null || true
+  ${syncShimsSnippet}
   pigu_config_changed=1
 fi`
-  if (!b64) {
+  if (!b64 && !multimodalB64 && !protocolsB64) {
     return `pigu_config_changed=0\n${wrapperCheck}`
   }
-  return `pigu_config_changed=0
-${wrapperCheck}
-mkdir -p "$HOME/.config/pigu" "$HOME/.config/opencode"
-if [ -x "$HOME/.pigu/bun/bin/bun" ]; then
-  if "$HOME/.pigu/bun/bin/bun" -e '
+
+  const mergeJs = `
     import fs from "node:fs";
-    const incoming = JSON.parse(Buffer.from("${b64}", "base64").toString("utf8"));
+    const dirs = [...new Set([process.env.HOME + "/.config/pigu", process.env.HOME + "/.config/opencode"])];
     let changed = false;
-    for (const dir of ["/root/.config/pigu", "/root/.config/opencode", process.env.HOME + "/.config/pigu", process.env.HOME + "/.config/opencode"]) {
+    const providerB64 = "${b64}";
+    const multimodalB64 = "${multimodalB64}";
+    const protocolsB64 = "${protocolsB64}";
+    for (const dir of dirs) {
       try { fs.mkdirSync(dir, { recursive: true }); } catch {}
-      const target = dir + "/opencode.json";
-      const prevRaw = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
-      let current = {};
-      try { current = prevRaw ? JSON.parse(prevRaw) : {}; } catch {}
-      const merged = {
-        ...incoming,
-        ...current,
-        provider: { ...(current.provider ?? {}), ...(incoming.provider ?? {}) },
-        model: current.model ?? incoming.model,
-      };
-      const nextRaw = JSON.stringify(merged, null, 2) + "\\n";
-      if (nextRaw !== prevRaw) {
-        fs.writeFileSync(target, nextRaw, { mode: 0o600 });
+      if (providerB64) {
+        const incoming = JSON.parse(Buffer.from(providerB64, "base64").toString("utf8"));
+        const target = dir + "/opencode.json";
+        const prevRaw = fs.existsSync(target) ? fs.readFileSync(target, "utf8") : "";
+        let current = {};
+        try { current = prevRaw ? JSON.parse(prevRaw) : {}; } catch {}
+        const merged = {
+          ...incoming,
+          ...current,
+          provider: { ...(current.provider ?? {}), ...(incoming.provider ?? {}) },
+          model: current.model ?? incoming.model,
+        };
+        const nextRaw = JSON.stringify(merged, null, 2) + "\\n";
+        if (nextRaw !== prevRaw) {
+          fs.writeFileSync(target, nextRaw, { mode: 0o600 });
+          changed = true;
+        }
+      }
+      for (const [name, rawB64] of [["pigu-multimodal.json", multimodalB64], ["pigu-model-protocols.json", protocolsB64]]) {
+        if (!rawB64) continue;
+        const target = dir + "/" + name;
+        if (fs.existsSync(target)) continue;
+        const text = Buffer.from(rawB64, "base64").toString("utf8");
+        fs.writeFileSync(target, text, { mode: 0o600 });
         changed = true;
       }
     }
     if (changed) process.exit(10);
-  '; then
+  `
+
+  return `pigu_config_changed=0
+${wrapperCheck}
+mkdir -p "$HOME/.config/pigu" "$HOME/.config/opencode"
+js_runner=""
+if [ -x "$HOME/.pigu/bun/bin/bun" ]; then
+  js_runner="$HOME/.pigu/bun/bin/bun"
+elif [ -x "$HOME/.bun/bin/bun" ]; then
+  js_runner="$HOME/.bun/bin/bun"
+elif command -v bun >/dev/null 2>&1; then
+  js_runner="$(command -v bun)"
+elif command -v node >/dev/null 2>&1; then
+  js_runner="$(command -v node)"
+fi
+if [ -n "$js_runner" ]; then
+  if "$js_runner" --input-type=module -e ${quote(mergeJs)} 2>/dev/null || "$js_runner" -e ${quote(mergeJs)} 2>/dev/null; then
     :
   elif [ $? -eq 10 ]; then
     pigu_config_changed=1
   fi
-elif [ ! -f "$HOME/.config/opencode/opencode.json" ]; then
+elif [ -x "$HOME/.pigu/libexec/pigu-bin" ]; then
+  if BUN_BE_BUN=1 "$HOME/.pigu/libexec/pigu-bin" -e ${quote(mergeJs)} 2>/dev/null; then
+    :
+  elif [ $? -eq 10 ]; then
+    pigu_config_changed=1
+  fi
+elif [ -n "${b64}" ] && [ ! -f "$HOME/.config/opencode/opencode.json" ]; then
   printf '%s' '${b64}' | base64 -d > "$HOME/.config/opencode/opencode.json" 2>/dev/null || true
   cp "$HOME/.config/opencode/opencode.json" "$HOME/.config/pigu/opencode.json" 2>/dev/null || true
   chmod 600 "$HOME/.config/opencode/opencode.json" "$HOME/.config/pigu/opencode.json" 2>/dev/null || true
@@ -114,9 +274,39 @@ elif [ ! -f "$HOME/.config/opencode/opencode.json" ]; then
 fi`
 }
 
+type ExpectedPlatformHashes = Partial<Record<RemotePlatform, string>>
+
+const emitRemotePlatformMarkers = `printf 'OPENCODE_SSH_REMOTE_OS=%s\\n' "$(uname -s 2>/dev/null || printf 'Linux')"
+  printf 'OPENCODE_SSH_REMOTE_ARCH=%s\\n' "$(uname -m 2>/dev/null || printf 'x86_64')"`
+
+function archiveFreshnessCheckSnippet(expected?: ExpectedPlatformHashes) {
+  const lx64 = expected?.["linux-x64"] ?? ""
+  const larm = expected?.["linux-arm64"] ?? ""
+  const dx64 = expected?.["darwin-x64"] ?? ""
+  const darm = expected?.["darwin-arm64"] ?? ""
+  if (!lx64 && !larm && !dx64 && !darm) return ""
+  return `remote_os_raw=$(uname -s 2>/dev/null || printf 'Linux')
+remote_arch=$(uname -m 2>/dev/null || printf 'x86_64')
+case "$remote_os_raw:$remote_arch" in
+  Linux*:x86_64|Linux*:amd64|linux*:x86_64|linux*:amd64) expected_sha=${quote(lx64)} ;;
+  Linux*:aarch64|Linux*:arm64|linux*:aarch64|linux*:arm64) expected_sha=${quote(larm)} ;;
+  Darwin*:x86_64|Darwin*:amd64|darwin*:x86_64|darwin*:amd64) expected_sha=${quote(dx64)} ;;
+  Darwin*:aarch64|Darwin*:arm64|darwin*:aarch64|darwin*:arm64) expected_sha=${quote(darm)} ;;
+  *) expected_sha='' ;;
+esac
+if [ -n "$expected_sha" ] && [ "$(cat "$HOME/.pigu/.installed-sha256" 2>/dev/null || true)" != "$expected_sha" ]; then
+  printf 'OPENCODE_SSH_REMOTE_OS=%s\\n' "$remote_os_raw"
+  printf 'OPENCODE_SSH_REMOTE_ARCH=%s\\n' "$remote_arch"
+  printf 'OPENCODE_SSH_ARCHIVE_OUTDATED=1\\n'
+  exit 0
+fi
+`
+}
+
 export const discoverScript = `set -eu
 ${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
 if [ -z "$cli" ]; then
+  ${emitRemotePlatformMarkers}
   printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
   exit 0
 fi
@@ -126,28 +316,35 @@ if [ "$status" = stopped ]; then
 fi
 ${registrationScript}`
 
-export function startScript(version: string, replace = false) {
+export function startScript(version: string, replace = false, expectedHashes?: ExpectedPlatformHashes) {
   void RemoteCli.requireVersion(version)
 
   return `set -eu
 ${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
 if [ -z "$cli" ]; then
+  ${emitRemotePlatformMarkers}
   printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
   exit 0
 fi
-${remoteConfigSyncScript()}
-"$cli" service ${replace ? "restart" : "start"}
+${archiveFreshnessCheckSnippet(expectedHashes)}${remoteConfigSyncScript()}
+status=$("$cli" service status 2>/dev/null || printf 'stopped\\n')
+if [ "$status" = stopped ]; then
+  "$cli" service start
+elif [ "${replace ? "1" : "0"}" = 1 ] || [ "$pigu_config_changed" = 1 ]; then
+  "$cli" service restart
+fi
 ${registrationScript}`
 }
 
-function discoverWithSyncScript() {
+export function discoverWithSyncScript(expectedHashes?: ExpectedPlatformHashes) {
   return `set -eu
 ${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
 if [ -z "$cli" ]; then
+  ${emitRemotePlatformMarkers}
   printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
   exit 0
 fi
-${remoteConfigSyncScript()}
+${archiveFreshnessCheckSnippet(expectedHashes)}${remoteConfigSyncScript()}
 status=$("$cli" service status 2>/dev/null || printf 'stopped\\n')
 if [ "$status" = stopped ]; then
   "$cli" service start
@@ -202,51 +399,84 @@ function connectionAddress(address: string, password: string) {
   }
 }
 
-const autoInstallBundleScript = `set -eu
-mkdir -p "$HOME/.pigu/bun" "$HOME/.pigu/app" "$HOME/.pigu/bin" "$HOME/.local/bin"
-cat > "$HOME/.pigu/bundle.tar.gz"
+export function autoInstallBundleScript(sha256 = "") {
+  return `set -eu
+mkdir -p "$HOME/.pigu/bun" "$HOME/.pigu/bin"
+stage_bundle="$HOME/.pigu/bundle.$$.tar.gz"
+stage_app="$HOME/.pigu/app.next.$$"
+rm -rf "$stage_app"
+mkdir -p "$stage_app"
+trap 'rm -rf "$stage_bundle" "$stage_app" "$HOME/.pigu/bun.$$.tgz"' EXIT
+cat > "$stage_bundle"
 if [ ! -x "$HOME/.pigu/bun/bin/bun" ]; then
-  curl -fsSL https://registry.npmmirror.com/@oven/bun-linux-x64/-/bun-linux-x64-1.4.4.tgz -o "$HOME/.pigu/bun.tgz" || curl -fsSL https://registry.npmjs.org/@oven/bun-linux-x64/-/bun-linux-x64-1.4.4.tgz -o "$HOME/.pigu/bun.tgz"
-  tar -xzf "$HOME/.pigu/bun.tgz" -C "$HOME/.pigu/bun" --strip-components=1
+  arch=$(uname -m 2>/dev/null || printf 'x86_64')
+  os_raw=$(uname -s 2>/dev/null || printf 'Linux')
+  case "$os_raw" in
+    Darwin*|darwin*) bun_os="darwin" ;;
+    *) bun_os="linux" ;;
+  esac
+  case "$arch" in
+    aarch64|arm64) bun_pkg="bun-\${bun_os}-aarch64" ;;
+    *) bun_pkg="bun-\${bun_os}-x64" ;;
+  esac
+  curl -fsSL "https://registry.npmmirror.com/@oven/\${bun_pkg}/-/\${bun_pkg}-1.4.4.tgz" -o "$HOME/.pigu/bun.$$.tgz" || curl -fsSL "https://registry.npmjs.org/@oven/\${bun_pkg}/-/\${bun_pkg}-1.4.4.tgz" -o "$HOME/.pigu/bun.$$.tgz"
+  tar -xzf "$HOME/.pigu/bun.$$.tgz" -C "$HOME/.pigu/bun" --strip-components=1
   chmod +x "$HOME/.pigu/bun/bin/bun"
-  rm -f "$HOME/.pigu/bun.tgz"
+  rm -f "$HOME/.pigu/bun.$$.tgz"
 fi
-tar -xzf "$HOME/.pigu/bundle.tar.gz" -C "$HOME/.pigu/app"
-rm -f "$HOME/.pigu/bundle.tar.gz"
-chmod +x "$HOME/.pigu/app/opencode-pty" 2>/dev/null || true
-printf '#!/usr/bin/env bash\\nexport OPENCODE_PTY_BIN="$HOME/.pigu/app/opencode-pty"\\nexport OPENCODE_DB="opencode-local.db"\\nexport OPENCODE_CONFIG_DIR="$HOME/.config/pigu"\\nexec "$HOME/.pigu/bun/bin/bun" "$HOME/.pigu/app/index.js" "$@"\\n' > "$HOME/.pigu/bin/pigu"
+tar -xzf "$stage_bundle" -C "$stage_app"
+rm -f "$stage_bundle"
+chmod +x "$stage_app/opencode-pty" 2>/dev/null || true
+rm -rf "$HOME/.pigu/app.prev"
+if [ -d "$HOME/.pigu/app" ]; then
+  mv "$HOME/.pigu/app" "$HOME/.pigu/app.prev"
+fi
+mv "$stage_app" "$HOME/.pigu/app"
+rm -rf "$HOME/.pigu/app.prev"
+printf '${bundleWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
 chmod 755 "$HOME/.pigu/bin/pigu"
-cp "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu"
-`
+${syncShimsSnippet}
+${sha256 ? `printf '%s\\n' ${quote(sha256)} > "$HOME/.pigu/.installed-sha256"\n` : ""}`
+}
 
-const autoInstallReleaseArchiveScript = `set -eu
-mkdir -p "$HOME/.opencode/bin" "$HOME/.pigu/bin" "$HOME/.local/bin"
-stage=$(mktemp -d "\${TMPDIR:-/tmp}/pigu-ssh-install.XXXXXX")
+export function autoInstallReleaseArchiveScript(sha256 = "") {
+  return `set -eu
+mkdir -p "$HOME/.pigu/libexec" "$HOME/.pigu/bin"
+stage=$(mktemp -d "$HOME/.pigu/.install-XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 cat > "$stage/pigu-linux.tar.gz"
 tar -xzf "$stage/pigu-linux.tar.gz" -C "$stage"
+bin_src=""
 if [ -f "$stage/bin/opencode" ]; then
-  cp -f "$stage/bin/opencode" "$HOME/.opencode/bin/opencode"
+  bin_src="$stage/bin/opencode"
 elif [ -f "$stage/opencode" ]; then
-  cp -f "$stage/opencode" "$HOME/.opencode/bin/opencode"
+  bin_src="$stage/opencode"
+elif [ -f "$stage/package/bin/opencode" ]; then
+  bin_src="$stage/package/bin/opencode"
 fi
-chmod 755 "$HOME/.opencode/bin/opencode"
-cp -f "$HOME/.opencode/bin/opencode" "$HOME/.opencode/bin/pigu"
-cp -f "$HOME/.opencode/bin/opencode" "$HOME/.pigu/bin/pigu"
-cp -f "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/pigu"
-chmod 755 "$HOME/.opencode/bin/pigu" "$HOME/.pigu/bin/pigu" "$HOME/.local/bin/pigu"
-`
+if [ -z "$bin_src" ]; then
+  exit 1
+fi
+chmod 755 "$bin_src"
+mv -f "$bin_src" "$HOME/.pigu/libexec/pigu-bin"
+printf '${releaseWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
+chmod 755 "$HOME/.pigu/bin/pigu"
+${syncShimsSnippet}
+${sha256 ? `printf '%s\\n' ${quote(sha256)} > "$HOME/.pigu/.installed-sha256"\n` : ""}`
+}
 
 const remoteGitHubInstallScript = `set -eu
 if [ -f /etc/network_turbo ] && [ -z "\${http_proxy:-}" ]; then
   . /etc/network_turbo >/dev/null 2>&1 || true
 fi
 curl -fsSL --connect-timeout 15 --max-time 180 https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
-mkdir -p "$HOME/.pigu/bin" "$HOME/.local/bin"
+mkdir -p "$HOME/.pigu/libexec" "$HOME/.pigu/bin"
 if [ -x "$HOME/.opencode/bin/opencode" ]; then
-  cp -f "$HOME/.opencode/bin/opencode" "$HOME/.opencode/bin/pigu" 2>/dev/null || true
-  cp -f "$HOME/.opencode/bin/opencode" "$HOME/.pigu/bin/pigu" 2>/dev/null || true
-  cp -f "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/pigu" 2>/dev/null || true
+  cp -f "$HOME/.opencode/bin/opencode" "$HOME/.pigu/libexec/pigu-bin"
+  chmod 755 "$HOME/.pigu/libexec/pigu-bin"
+  printf '${releaseWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
+  chmod 755 "$HOME/.pigu/bin/pigu"
+  ${syncShimsSnippet}
 fi
 `
 
@@ -264,26 +494,25 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
       stdin: script,
     })
 
-  const firstOutput = yield* run(input.replace ? startScript(input.version, true) : discoverWithSyncScript())
+  const localArchives = resolveLocalArchives()
+  const expectedHashes: ExpectedPlatformHashes = Object.fromEntries(
+    [...localArchives.entries()].map(([platform, archive]) => [platform, archive.sha256]),
+  )
 
-  const installRemoteFallback = Effect.fnUntraced(function* () {
-    const cacheDir = path.join(homedir(), ".pigu", "cache")
-    const cachedBundle = path.join(cacheDir, "pigu-bundle-linux-x64.tar.gz")
-    if (existsSync(cachedBundle)) {
-      const archive = new Uint8Array(readFileSync(cachedBundle))
-      yield* runSsh({
-        args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallBundleScript)}`],
-        env: input.env,
-        stdin: archive,
-      }).pipe(Effect.mapError(() => new SshFailure("install")))
-      return
-    }
+  const firstOutput = yield* run(
+    input.replace ? startScript(input.version, true, expectedHashes) : discoverWithSyncScript(expectedHashes),
+  )
 
-    const cachedRelease = path.join(cacheDir, "pigu-linux-x64.tar.gz")
-    if (existsSync(cachedRelease)) {
-      const archive = new Uint8Array(readFileSync(cachedRelease))
+  const installRemoteFallback = Effect.fnUntraced(function* (platform: RemotePlatform) {
+    const selected = localArchives.get(platform)
+    if (selected) {
+      const archive = new Uint8Array(readFileSync(selected.filePath))
+      const script =
+        selected.kind === "bundle"
+          ? autoInstallBundleScript(selected.sha256)
+          : autoInstallReleaseArchiveScript(selected.sha256)
       yield* runSsh({
-        args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallReleaseArchiveScript)}`],
+        args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(script)}`],
         env: input.env,
         stdin: archive,
       }).pipe(Effect.mapError(() => new SshFailure("install")))
@@ -296,9 +525,11 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
     )
     if (directSuccess) return
 
+    const cacheDir = path.join(homedir(), ".pigu", "cache")
+    const cachedRelease = path.join(cacheDir, `pigu-${platform}.tar.gz`)
     const http = yield* HttpClient.HttpClient
     const bytes = yield* http
-      .get("https://github.com/AntarcticLu/pigu/releases/latest/download/pigu-linux-x64.tar.gz")
+      .get(`https://github.com/AntarcticLu/pigu/releases/latest/download/pigu-${platform}.tar.gz`)
       .pipe(
         Effect.flatMap(HttpClientResponse.filterStatusOk),
         Effect.flatMap((res) => res.arrayBuffer),
@@ -307,27 +538,31 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
         Effect.mapError(() => new SshFailure("install")),
       )
 
+    const downloadedSha = createHash("sha256").update(bytes).digest("hex")
     yield* Effect.sync(() => {
       mkdirSync(cacheDir, { recursive: true })
       writeFileSync(cachedRelease, bytes)
     }).pipe(Effect.ignore)
 
     yield* runSsh({
-      args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallReleaseArchiveScript)}`],
+      args: [...sshArgs(input.target), input.target.host, `sh -c ${quote(autoInstallReleaseArchiveScript(downloadedSha))}`],
       env: input.env,
       stdin: bytes,
     }).pipe(Effect.mapError(() => new SshFailure("install")))
   })
 
+  const needsInstallOrUpdate =
+    firstOutput.includes("OPENCODE_SSH_CLI_MISSING=1") || firstOutput.includes("OPENCODE_SSH_ARCHIVE_OUTDATED=1")
+
   const resolveOutput = Effect.fnUntraced(function* () {
-    if (!firstOutput.includes("OPENCODE_SSH_CLI_MISSING=1")) return firstOutput
-    yield* installRemoteFallback()
-    return yield* run(startScript(input.version, false))
+    if (!needsInstallOrUpdate) return firstOutput
+    yield* installRemoteFallback(parseRemotePlatform(firstOutput))
+    return yield* run(startScript(input.version, true))
   })
 
   const output = yield* resolveOutput()
 
-  if (output.includes("OPENCODE_SSH_CLI_MISSING=1")) {
+  if (output.includes("OPENCODE_SSH_CLI_MISSING=1") || output.includes("OPENCODE_SSH_ARCHIVE_OUTDATED=1")) {
     return yield* Effect.fail(new SshFailure("install"))
   }
 
