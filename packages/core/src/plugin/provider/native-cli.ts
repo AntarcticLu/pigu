@@ -65,6 +65,7 @@ const HEADER_MODEL_VARIANT = "x-pigu-model-variant"
 const EngineRecordSchema = Schema.Struct({
   sessionId: Schema.optional(Schema.String),
   filePath: Schema.optional(Schema.String),
+  syncedFileSize: Schema.optional(Schema.Number),
 })
 
 const SessionCliStateSchema = Schema.Struct({
@@ -414,19 +415,25 @@ function findCodexSessionFile(home: string, sessionId: string) {
     .at(0)
 }
 
-function findAgySessionFile(home: string, sessionId: string) {
-  const transcript = path.join(
-    home,
-    ".gemini",
-    "antigravity",
-    "brain",
-    sessionId,
-    ".system_generated",
-    "logs",
-    "transcript.jsonl",
-  )
+function findAgyTranscriptInBase(baseDir: string, sessionId: string) {
+  const logsDir = path.join(baseDir, "brain", sessionId, ".system_generated", "logs")
+  const full = path.join(logsDir, "transcript_full.jsonl")
+  if (fs.existsSync(full)) return full
+  const compact = path.join(logsDir, "transcript.jsonl")
+  return fs.existsSync(compact) ? compact : undefined
+}
 
-  return fs.existsSync(transcript) ? transcript : undefined
+function isAgyCliSession(home: string, sessionId: string) {
+  const cliBase = path.join(home, ".gemini", "antigravity-cli")
+  if (findAgyTranscriptInBase(cliBase, sessionId)) return true
+  return fs.existsSync(path.join(cliBase, "conversations", `${sessionId}.pb`))
+}
+
+function findAgySessionFile(home: string, sessionId: string) {
+  return (
+    findAgyTranscriptInBase(path.join(home, ".gemini", "antigravity-cli"), sessionId) ??
+    findAgyTranscriptInBase(path.join(home, ".gemini", "antigravity"), sessionId)
+  )
 }
 
 function findPiSessionFile(home: string, sessionId: string) {
@@ -742,12 +749,18 @@ function writeFallbackContextJsonl(
   return filePath
 }
 
-function makeEmptyUsage(inputTokens = 0, outputTokens = 0, reasoningTokens = 0): LanguageModelV3Usage {
+function makeEmptyUsage(
+  inputTokens = 0,
+  outputTokens = 0,
+  reasoningTokens = 0,
+  cacheReadTokens = 0,
+): LanguageModelV3Usage {
+  const totalInput = inputTokens + cacheReadTokens
   return {
     inputTokens: {
-      total: inputTokens,
+      total: totalInput,
       noCache: inputTokens,
-      cacheRead: 0,
+      cacheRead: cacheReadTokens,
       cacheWrite: 0,
     },
     outputTokens: {
@@ -770,6 +783,7 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
     inputTokens: 0,
     outputTokens: 0,
     reasoningTokens: 0,
+    cacheReadTokens: 0,
   }
 
   const ensureMetadata = () => {
@@ -832,7 +846,12 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
     controller.enqueue({
       type: "finish",
       finishReason: { unified: "stop", raw: "stop" },
-      usage: makeEmptyUsage(state.inputTokens, state.outputTokens, state.reasoningTokens),
+      usage: makeEmptyUsage(
+        state.inputTokens,
+        state.outputTokens,
+        state.reasoningTokens,
+        state.cacheReadTokens,
+      ),
     })
   }
 
@@ -981,6 +1000,17 @@ async function runStreamJsonProcess(input: {
       if (row.event === "step_update" && isRecord(row.step_update)) {
         const step = row.step_update
 
+        if (
+          step.step_type === "tool" &&
+          step.state === "ACTIVE" &&
+          typeof step.tool_name === "string" &&
+          step.tool_name
+        ) {
+          input.emitter.pushReasoning(`\n[${input.engineLabel} 原生工具: ${step.tool_name}]\n`)
+
+          return
+        }
+
         if (typeof step.thinking_delta === "string" && step.thinking_delta) {
           input.emitter.pushReasoning(step.thinking_delta)
         }
@@ -1004,6 +1034,8 @@ async function runStreamJsonProcess(input: {
           if (typeof res.usage.output_tokens === "number") input.emitter.state.outputTokens = res.usage.output_tokens
           if (typeof res.usage.thinking_tokens === "number")
             input.emitter.state.reasoningTokens = res.usage.thinking_tokens
+          if (typeof res.usage.cache_read_tokens === "number")
+            input.emitter.state.cacheReadTokens = res.usage.cache_read_tokens
         }
 
         if (!input.emitter.state.hasText && typeof res.response === "string" && res.response.trim()) {
@@ -2138,6 +2170,241 @@ async function runDshProcess(input: {
   })
 }
 
+function stringifyToolOutputForSummary(output: unknown): string {
+  if (typeof output === "string") return output.slice(0, 600)
+  if (!isRecord(output)) return ""
+  if (typeof output.value === "string") return output.value.slice(0, 600)
+  if (Array.isArray(output.value)) {
+    return output.value
+      .flatMap((item) => (isRecord(item) && typeof item.text === "string" ? [item.text] : []))
+      .join("\n")
+      .slice(0, 600)
+  }
+  return ""
+}
+
+function buildStatelessNonPrimaryPrompt(prompt: LanguageModelV3Prompt, kind: string): string {
+  const lastUserIdx = prompt.findLastIndex((msg) => msg.role === "user")
+  if (lastUserIdx < 0) return ""
+
+  const finalInstruction = extractMessageText(prompt[lastUserIdx]!)
+  const systemNotes =
+    kind === "compaction"
+      ? ""
+      : prompt
+          .filter((msg) => msg.role === "system")
+          .map((msg) => msg.content.trim())
+          .filter(Boolean)
+          .join("\n\n")
+
+  const priorBlocks = prompt.slice(0, lastUserIdx).flatMap((msg) => {
+    if (msg.role === "system") return []
+    if (msg.role === "user") {
+      const text = extractMessageText(msg)
+      return text ? [`[User]:\n${text}`] : []
+    }
+    if (msg.role === "assistant") {
+      const parts = msg.content.flatMap((part) => {
+        if (part.type === "text" && part.text.trim()) return [part.text.trim()]
+        if (part.type === "tool-call") return [`[Tool call: ${part.toolName}]`]
+        return []
+      })
+      return parts.length > 0 ? [`[Assistant]:\n${parts.join("\n")}`] : []
+    }
+    if (msg.role === "tool") {
+      const results = msg.content.flatMap((part) => {
+        if (part.type !== "tool-result") return []
+        const summary = stringifyToolOutputForSummary(part.output).trim()
+        return summary ? [`[Tool result (${part.toolName})]: ${summary}`] : [`[Tool result (${part.toolName})]`]
+      })
+      return results.length > 0 ? [results.join("\n")] : []
+    }
+    return []
+  })
+
+  const maxTranscriptChars = process.platform === "win32" ? 20_000 : 120_000
+  const rawTranscript = priorBlocks.join("\n\n")
+  const boundedTranscript =
+    rawTranscript.length <= maxTranscriptChars
+      ? rawTranscript
+      : `${rawTranscript.slice(0, Math.floor(maxTranscriptChars * 0.35))}\n\n... [middle transcript omitted for CLI argument limit] ...\n\n${rawTranscript.slice(-Math.floor(maxTranscriptChars * 0.6))}`
+
+  return [
+    ...(systemNotes ? [systemNotes] : []),
+    ...(boundedTranscript
+      ? ["<conversation_to_summarize>", boundedTranscript, "</conversation_to_summarize>"]
+      : []),
+    finalInstruction,
+  ]
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+function cleanupEphemeralCliSession(home: string, engine: LocalEngine, sessionId: string | undefined) {
+  if (!sessionId) return
+  Option.liftThrowable(() => {
+    if (engine === "agy") {
+      const cliBase = path.join(home, ".gemini", "antigravity-cli")
+      const brainDir = path.join(cliBase, "brain", sessionId)
+      const convPb = path.join(cliBase, "conversations", `${sessionId}.pb`)
+      if (fs.existsSync(brainDir)) fs.rmSync(brainDir, { recursive: true, force: true })
+      if (fs.existsSync(convPb)) fs.rmSync(convPb, { force: true })
+      const summaryDb = path.join(cliBase, "conversation_summaries.db")
+      if (fs.existsSync(summaryDb)) {
+        const db = new Database(summaryDb)
+        db.prepare("DELETE FROM conversation_summaries WHERE conversation_id = ?").run(sessionId)
+        db.close()
+      }
+      return
+    }
+    const file = findEngineSessionFile(home, engine, sessionId)
+    if (file && fs.existsSync(file) && !file.endsWith("opencode.db")) {
+      fs.rmSync(file, { force: true })
+    }
+  })()
+}
+
+async function dispatchLocalEngineRun(input: {
+  readonly currentEngine: LocalEngine
+  readonly binary: string
+  readonly cwd: string
+  readonly home: string
+  readonly prompt: string
+  readonly cliAttachmentFlags: ReadonlyArray<string>
+  readonly sessionId?: string
+  readonly filePath?: string
+  readonly canResume: boolean
+  readonly subModel?: string
+  readonly variant?: string
+  readonly signal: AbortSignal
+  readonly emitter: ReturnType<typeof createStreamEmitter>
+}): Promise<{ sessionId?: string }> {
+  if (input.currentEngine === "claude" || input.currentEngine === "agy" || input.currentEngine === "cursor") {
+    return runStreamJsonProcess({
+      engineLabel: input.currentEngine,
+      mode: input.currentEngine,
+      binary: input.binary,
+      cwd: input.cwd,
+      home: input.home,
+      prompt: input.prompt,
+      extraFlags: input.cliAttachmentFlags,
+      sessionId: input.sessionId,
+      resume: input.canResume,
+      subModel: input.subModel,
+      variant: input.variant,
+      signal: input.signal,
+      emitter: input.emitter,
+    })
+  }
+
+  if (input.currentEngine === "codex") {
+    return runCodexProcess({
+      binary: input.binary,
+      cwd: input.cwd,
+      home: input.home,
+      prompt: input.prompt,
+      imageFlags: input.cliAttachmentFlags,
+      sessionId: input.sessionId,
+      resume: input.canResume,
+      subModel: input.subModel,
+      variant: input.variant,
+      signal: input.signal,
+      emitter: input.emitter,
+    })
+  }
+
+  if (input.currentEngine === "pi") {
+    const piArgs = [
+      "-p",
+      ...(input.subModel ? ["--model", input.subModel] : []),
+      ...(input.variant ? ["--thinking", input.variant] : []),
+      ...(input.canResume && input.filePath ? ["--session", input.filePath] : []),
+      input.prompt,
+    ]
+
+    return runPlainCliProcess({
+      engineLabel: "pi",
+      binary: input.binary,
+      args: piArgs,
+      cwd: input.cwd,
+      home: input.home,
+      sessionId: input.sessionId,
+      signal: input.signal,
+      emitter: input.emitter,
+    })
+  }
+
+  if (input.currentEngine === "opencode") {
+    const opencodeSubModel =
+      input.subModel && input.subModel.includes("/")
+        ? input.subModel
+        : discoverOpencodeConfigModels(input.home).defaultModel
+    const modelArg = opencodeSubModel
+      ? input.variant && input.variant !== "default"
+        ? `${opencodeSubModel}#${input.variant}`
+        : opencodeSubModel
+      : undefined
+    const opencodeArgs = [
+      "run",
+      "--format",
+      "json",
+      "--auto",
+      ...(modelArg ? ["-m", modelArg] : []),
+      ...(input.canResume && input.sessionId ? ["--session", input.sessionId] : []),
+      ...input.cliAttachmentFlags,
+      input.prompt,
+    ]
+
+    return runOpencodeProcess({
+      binary: input.binary,
+      args: opencodeArgs,
+      cwd: input.cwd,
+      home: input.home,
+      sessionId: input.sessionId,
+      signal: input.signal,
+      emitter: input.emitter,
+    })
+  }
+
+  if (input.currentEngine === "grok") {
+    return runPlainCliProcess({
+      engineLabel: "grok",
+      binary: input.binary,
+      args: [...(input.subModel ? ["-m", input.subModel] : []), "-p", input.prompt],
+      cwd: input.cwd,
+      home: input.home,
+      sessionId: input.sessionId,
+      signal: input.signal,
+      emitter: input.emitter,
+    })
+  }
+
+  if (input.currentEngine === "deepseek-harness") {
+    return runDshProcess({
+      binary: input.binary,
+      cwd: input.cwd,
+      home: input.home,
+      prompt: input.prompt,
+      sessionId: input.sessionId,
+      resume: input.canResume,
+      subModel: input.subModel,
+      signal: input.signal,
+      emitter: input.emitter,
+    })
+  }
+
+  return runPlainCliProcess({
+    engineLabel: "workbuddy",
+    binary: input.binary,
+    args: [...(input.subModel ? ["--model", input.subModel] : []), "-p", input.prompt],
+    cwd: input.cwd,
+    home: input.home,
+    sessionId: input.sessionId,
+    signal: input.signal,
+    emitter: input.emitter,
+  })
+}
+
 function getEngineRecord(
   saved: SessionCliState,
   engine: LocalEngine,
@@ -2221,7 +2488,38 @@ class LocalLanguageModel implements LanguageModelV3 {
           }
 
           if (kind !== "primary") {
-            emitter.pushText(userText.slice(0, 200))
+            const currentEngine = normalizeEngine(this.modelId)
+            const subModel = extractSubModel(this.modelId)
+            const binary = resolveEngineBinary(currentEngine)
+            const statelessPrompt = buildStatelessNonPrimaryPrompt(options.prompt, kind)
+
+            if (!binary || !statelessPrompt) {
+              emitter.pushText(userText.slice(0, 200))
+              emitter.finish()
+              controller.close()
+
+              return
+            }
+
+            const statelessDir = path.join(os.tmpdir(), "pigu-local-stateless")
+            fs.mkdirSync(statelessDir, { recursive: true })
+            const statelessFlags = currentEngine === "agy" ? ["--disable-slash-commands"] : []
+
+            const ephemeralResult = await dispatchLocalEngineRun({
+              currentEngine,
+              binary,
+              cwd: statelessDir,
+              home,
+              prompt: statelessPrompt,
+              cliAttachmentFlags: statelessFlags,
+              canResume: false,
+              subModel,
+              variant: kind === "compaction" ? "low" : variant,
+              signal,
+              emitter,
+            })
+
+            cleanupEphemeralCliSession(home, currentEngine, ephemeralResult.sessionId)
             emitter.finish()
             controller.close()
 
@@ -2260,26 +2558,38 @@ class LocalLanguageModel implements LanguageModelV3 {
           const effectiveLastEngine = saved.lastEngine ?? initialExternalSource
           const currentRecord = getEngineRecord(saved, currentEngine, initialExternalSource, parsedMetadata, home)
 
+          const hasCompactionReset =
+            saved.lastPromptCount !== undefined &&
+            priorTurns.length < saved.lastPromptCount &&
+            (priorTurns[0]?.text.includes("<conversation-checkpoint>") ?? false)
+
+          const rawCanResume =
+            currentEngine === "agy"
+              ? Boolean(currentRecord.sessionId && isAgyCliSession(home, currentRecord.sessionId))
+              : Boolean(currentRecord.sessionId && currentRecord.filePath && fs.existsSync(currentRecord.filePath))
+
+          const canResume = rawCanResume && !(hasCompactionReset && !sessionID.startsWith("ses_ext_"))
+
           const isSameEngineWithoutGap =
             priorTurns.length === 0 ||
-            (saved.lastPromptCount === undefined && effectiveLastEngine === currentEngine) ||
-            (saved.lastPromptCount !== undefined &&
-              effectiveLastEngine === currentEngine &&
-              saved.lastPromptCount === priorTurns.length)
+            (canResume &&
+              ((saved.lastPromptCount === undefined && effectiveLastEngine === currentEngine) ||
+                (saved.lastPromptCount !== undefined &&
+                  effectiveLastEngine === currentEngine &&
+                  saved.lastPromptCount === priorTurns.length)))
 
           const contextFileToRead = (() => {
             if (isSameEngineWithoutGap) return undefined
 
-            if (
-              saved.lastPromptCount === undefined &&
-              parsedMetadata?.filePath &&
-              fs.existsSync(parsedMetadata.filePath) &&
-              priorTurns.length === 0
-            ) {
+            if (priorTurns.length > 0) {
+              return writeFallbackContextJsonl(home, sessionID || "temp", priorTurns)
+            }
+
+            if (parsedMetadata?.filePath && fs.existsSync(parsedMetadata.filePath)) {
               return parsedMetadata.filePath
             }
 
-            return writeFallbackContextJsonl(home, sessionID || "temp", priorTurns)
+            return undefined
           })()
 
           const inlineContext = (() => {
@@ -2304,139 +2614,32 @@ class LocalLanguageModel implements LanguageModelV3 {
               ].join("\n")
             : promptUserTurn
 
-          const canResume = Boolean(
-            currentRecord.sessionId && currentRecord.filePath && fs.existsSync(currentRecord.filePath),
-          )
           const cliAttachmentFlags = buildCliAttachmentFlags(currentEngine, attachments)
 
-          const runResult = await (async () => {
-            if (currentEngine === "claude" || currentEngine === "agy" || currentEngine === "cursor") {
-              return runStreamJsonProcess({
-                engineLabel: currentEngine,
-                mode: currentEngine,
-                binary,
-                cwd,
-                home,
-                prompt: finalPrompt,
-                extraFlags: cliAttachmentFlags,
-                sessionId: currentRecord.sessionId,
-                resume: canResume,
-                subModel,
-                variant,
-                signal,
-                emitter,
-              })
-            }
+          const runResult = await dispatchLocalEngineRun({
+            currentEngine,
+            binary,
+            cwd,
+            home,
+            prompt: finalPrompt,
+            cliAttachmentFlags,
+            sessionId: canResume ? currentRecord.sessionId : undefined,
+            filePath: canResume ? currentRecord.filePath : undefined,
+            canResume,
+            subModel,
+            variant,
+            signal,
+            emitter,
+          })
 
-            if (currentEngine === "codex") {
-              return runCodexProcess({
-                binary,
-                cwd,
-                home,
-                prompt: finalPrompt,
-                imageFlags: cliAttachmentFlags,
-                sessionId: currentRecord.sessionId,
-                resume: canResume,
-                subModel,
-                variant,
-                signal,
-                emitter,
-              })
-            }
-
-            if (currentEngine === "pi") {
-              const piArgs = [
-                "-p",
-                ...(subModel ? ["--model", subModel] : []),
-                ...(variant ? ["--thinking", variant] : []),
-                ...(canResume && currentRecord.filePath ? ["--session", currentRecord.filePath] : []),
-                finalPrompt,
-              ]
-
-              return runPlainCliProcess({
-                engineLabel: "pi",
-                binary,
-                args: piArgs,
-                cwd,
-                home,
-                sessionId: currentRecord.sessionId,
-                signal,
-                emitter,
-              })
-            }
-
-            if (currentEngine === "opencode") {
-              const opencodeSubModel =
-                subModel && subModel.includes("/") ? subModel : discoverOpencodeConfigModels(home).defaultModel
-              const modelArg = opencodeSubModel
-                ? variant && variant !== "default"
-                  ? `${opencodeSubModel}#${variant}`
-                  : opencodeSubModel
-                : undefined
-              const opencodeArgs = [
-                "run",
-                "--format",
-                "json",
-                "--auto",
-                ...(modelArg ? ["-m", modelArg] : []),
-                ...(canResume && currentRecord.sessionId ? ["--session", currentRecord.sessionId] : []),
-                ...cliAttachmentFlags,
-                finalPrompt,
-              ]
-
-              return runOpencodeProcess({
-                binary,
-                args: opencodeArgs,
-                cwd,
-                home,
-                sessionId: currentRecord.sessionId,
-                signal,
-                emitter,
-              })
-            }
-
-            if (currentEngine === "grok") {
-              return runPlainCliProcess({
-                engineLabel: "grok",
-                binary,
-                args: [...(subModel ? ["-m", subModel] : []), "-p", finalPrompt],
-                cwd,
-                home,
-                sessionId: currentRecord.sessionId,
-                signal,
-                emitter,
-              })
-            }
-
-            if (currentEngine === "deepseek-harness") {
-              return runDshProcess({
-                binary,
-                cwd,
-                home,
-                prompt: finalPrompt,
-                sessionId: currentRecord.sessionId,
-                resume: canResume,
-                subModel,
-                signal,
-                emitter,
-              })
-            }
-
-            return runPlainCliProcess({
-              engineLabel: "workbuddy",
-              binary,
-              args: [...(subModel ? ["--model", subModel] : []), "-p", finalPrompt],
-              cwd,
-              home,
-              sessionId: currentRecord.sessionId,
-              signal,
-              emitter,
-            })
-          })()
-
-          const nextSessionId = runResult.sessionId ?? currentRecord.sessionId
+          const nextSessionId = runResult.sessionId ?? (canResume ? currentRecord.sessionId : undefined)
           const nextFilePath =
-            findEngineSessionFile(home, currentEngine, nextSessionId) ?? currentRecord.filePath
+            findEngineSessionFile(home, currentEngine, nextSessionId) ??
+            (canResume ? currentRecord.filePath : undefined)
+          const nextSyncedSize =
+            nextFilePath && fs.existsSync(nextFilePath)
+              ? (fs.statSync(nextFilePath, { throwIfNoEntry: false })?.size ?? undefined)
+              : undefined
 
           if (sessionID) {
             const nextEngines = {
@@ -2444,6 +2647,7 @@ class LocalLanguageModel implements LanguageModelV3 {
               [currentEngine]: {
                 sessionId: nextSessionId,
                 filePath: nextFilePath,
+                ...(nextSyncedSize !== undefined ? { syncedFileSize: nextSyncedSize } : {}),
               },
             }
 
@@ -2559,10 +2763,12 @@ type AgyModelSpec = {
 }
 
 const DEFAULT_AGY_MODELS: readonly AgyModelSpec[] = [
-  { id: "gemini-2.5-pro", efforts: ["low", "medium", "high"] },
-  { id: "gemini-2.5-flash", efforts: ["low", "medium", "high"] },
-  { id: "claude-sonnet-4-6", efforts: ["low", "medium", "high"] },
-  { id: "claude-opus-4-6", efforts: ["low", "medium", "high"] },
+  { id: "gemini-4-carbon", efforts: ["low", "medium", "high"] },
+  { id: "gemini-4-argon", efforts: ["low", "medium", "high"] },
+  { id: "gemini-4-hydrogen", efforts: ["low", "medium", "high", "xhigh"] },
+  { id: "gemini-3.8-flash", efforts: ["low", "medium", "high"] },
+  { id: "claude-sonnet-5-5", efforts: ["low", "medium", "high"] },
+  { id: "claude-opus-5-5", efforts: ["low", "medium", "high"] },
   { id: "gpt-oss-120b", efforts: [] },
 ]
 
@@ -2614,10 +2820,13 @@ function discoverAgyModels(home: string): readonly AgyModelSpec[] {
 
 let agyRefreshInFlight = false
 
+const AGY_MODELS_CACHE_TTL_MS = 6 * 60 * 60 * 1000
+
 function refreshAgyModelsCache(home: string, onUpdated: () => void) {
   if (agyRefreshInFlight) return
   const cachePath = path.join(home, ".gemini", "antigravity", "pigu-models-cache.json")
-  if (fs.existsSync(cachePath)) return
+  const cacheStat = fs.statSync(cachePath, { throwIfNoEntry: false })
+  if (cacheStat && Date.now() - cacheStat.mtimeMs < AGY_MODELS_CACHE_TTL_MS) return
   const binary = resolveEngineBinary("agy")
   if (!binary) return
   agyRefreshInFlight = true

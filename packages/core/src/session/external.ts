@@ -50,7 +50,7 @@ import type { MessagesInput } from "./store.js"
 
 export type { SourceApp }
 
-const EXTERNAL_PARSER_VERSION = 3
+const EXTERNAL_PARSER_VERSION = 4
 const SEQ_BASE = 1_000_000
 const REVIVAL_GRACE_MS = 5_000
 
@@ -1920,6 +1920,48 @@ function detectSourceFromSessionID(
   return knownSources.find((src) => sessionID.startsWith(`ses_ext_${src}_`))
 }
 
+function extractPluginEngineSyncedSize(
+  kvValue: unknown,
+  source: SourceApp,
+  filePath: string,
+): number {
+  if (!isRecord(kvValue) || !filePath) return 0
+  const engines = isRecord(kvValue.engines) ? kvValue.engines : undefined
+  const rawEngineRec = engines ? engines[source] : undefined
+  const engineRec = isRecord(rawEngineRec) ? rawEngineRec : undefined
+  if (!engineRec) return 0
+  const recPath = asString(engineRec.filePath)
+  const recSize = typeof engineRec.syncedFileSize === "number" ? engineRec.syncedFileSize : 0
+  if (!recPath || recSize <= 0) return 0
+  return path.resolve(recPath) === path.resolve(filePath) ? recSize : 0
+}
+
+function filterOutPiguMirroredEntries(
+  entries: ReadonlyArray<ExternalEntry>,
+  latestNativeUser: { readonly text: string; readonly timeCreated: number; readonly maxNativeUpdated: number } | undefined,
+): ReadonlyArray<ExternalEntry> {
+  if (!latestNativeUser || entries.length === 0) return entries
+  const filtered: ExternalEntry[] = []
+  let skippingMirroredTurn = false
+
+  for (const entry of entries) {
+    if (entry.kind === "user") {
+      const samePrompt = entry.text.trim() === latestNativeUser.text.trim()
+      const withinPiguTurnWindow =
+        entry.time >= latestNativeUser.timeCreated - 5_000 &&
+        entry.time <= latestNativeUser.maxNativeUpdated + 5_000
+      skippingMirroredTurn = samePrompt && withinPiguTurnWindow
+      if (!skippingMirroredTurn) filtered.push(entry)
+      continue
+    }
+    if (!skippingMirroredTurn) {
+      filtered.push(entry)
+    }
+  }
+
+  return filtered
+}
+
 const appendForwardJsonlEntries = Effect.fnUntraced(function* (input: {
   readonly db: Database.Interface["db"]
   readonly sessionID: SessionSchema.ID
@@ -1931,20 +1973,75 @@ const appendForwardJsonlEntries = Effect.fnUntraced(function* (input: {
   readonly model: { readonly id: string; readonly providerID: string } | null
 }) {
   if (!isIncrementalJsonlPath(input.filePath) || input.syncedFileSize <= 0) return input.currentUpdated
-  const forward = readJsonlForwardSync(input.filePath, input.syncedFileSize)
-  if (forward.endOffset <= input.syncedFileSize) return input.currentUpdated
 
-  const newEntries =
+  const kvRow = yield* input.db
+    .select({ key: KVTable.key, value: KVTable.value })
+    .from(KVTable)
+    .where(like(KVTable.key, `plugin:%:session:${input.sessionID}`))
+    .get()
+    .pipe(Effect.orElseSucceed(() => undefined))
+
+  const pluginSyncedSize = extractPluginEngineSyncedSize(kvRow?.value, input.source, input.filePath)
+  const effectiveSyncedSize = Math.max(input.syncedFileSize, pluginSyncedSize)
+
+  const forward = readJsonlForwardSync(input.filePath, effectiveSyncedSize)
+  if (forward.endOffset <= effectiveSyncedSize) {
+    if (effectiveSyncedSize > input.syncedFileSize) {
+      yield* input.db
+        .update(SessionTable)
+        .set({
+          metadata: {
+            ...input.currentMetadata,
+            parserVersion: EXTERNAL_PARSER_VERSION,
+            syncedFileSize: effectiveSyncedSize,
+            syncedMtimeMs: forward.mtimeMs || input.currentUpdated,
+          },
+          time_updated: sql`${SessionTable.time_updated}`,
+        })
+        .where(eq(SessionTable.id, input.sessionID))
+        .run()
+        .pipe(Effect.ignoreCause)
+    }
+    return input.currentUpdated
+  }
+
+  const rawEntries =
     forward.lines.length > 0 ? parseSliceBySource(input.source, forward.lines, forward.mtimeMs) : []
+
+  const nativeTailRows = yield* input.db
+    .select({
+      type: SessionMessageTable.type,
+      time_created: SessionMessageTable.time_created,
+      time_updated: SessionMessageTable.time_updated,
+      text: sql<unknown>`json_extract(${SessionMessageTable.data}, '$.text')`,
+    })
+    .from(SessionMessageTable)
+    .where(and(eq(SessionMessageTable.session_id, input.sessionID), notLike(SessionMessageTable.id, "msg_ext_%")))
+    .all()
+    .pipe(Effect.orElseSucceed(() => []))
+
+  const lastNativeUserRow = nativeTailRows.findLast((r) => r.type === "user" && typeof r.text === "string")
+  const maxNativeUpdated = nativeTailRows.reduce((acc, r) => Math.max(acc, r.time_updated), 0)
+  const newEntries = filterOutPiguMirroredEntries(
+    rawEntries,
+    lastNativeUserRow && typeof lastNativeUserRow.text === "string"
+      ? {
+          text: lastNativeUserRow.text,
+          timeCreated: lastNativeUserRow.time_created,
+          maxNativeUpdated: Math.max(lastNativeUserRow.time_created, maxNativeUpdated),
+        }
+      : undefined,
+  )
 
   const defaultAgent = Agent.ID.make("build")
   const sessionModel = input.model
     ? { providerID: Provider.ID.make(input.model.providerID), id: Model.ID.make(input.model.id) }
     : localModelForSource(input.source)
 
-  let latestTime = Math.max(input.currentUpdated, forward.mtimeMs)
+  let latestTime = input.currentUpdated
 
   if (newEntries.length > 0) {
+    latestTime = Math.max(latestTime, forward.mtimeMs)
     const maxRow = yield* input.db
       .select({ maxSeq: sql<number | null>`max(${SessionMessageTable.seq})` })
       .from(SessionMessageTable)
@@ -1969,7 +2066,35 @@ const appendForwardJsonlEntries = Effect.fnUntraced(function* (input: {
       yield* input.db.insert(SessionMessageTable).values(batch).onConflictDoNothing().run().pipe(Effect.ignoreCause)
     }
 
-    yield* Bus.reserveSequence(input.db, input.sessionID, rows.length).pipe(Effect.ignoreCause)
+    yield* Bus.reserveSequence(input.db, input.sessionID, baseSeq + rows.length).pipe(Effect.ignoreCause)
+
+    const addedPromptTurns = newEntries.filter((e) => e.kind === "user" || e.kind === "assistant").length
+    if (addedPromptTurns > 0 && kvRow && isRecord(kvRow.value) && typeof kvRow.value.lastPromptCount === "number") {
+      const prevEngines = isRecord(kvRow.value.engines) ? kvRow.value.engines : {}
+      const rawSrcRec = prevEngines[input.source]
+      const prevSrcRec = isRecord(rawSrcRec) ? rawSrcRec : undefined
+      const updatedKvVal = {
+        ...kvRow.value,
+        lastPromptCount: kvRow.value.lastPromptCount + addedPromptTurns,
+        ...(prevSrcRec
+          ? {
+              engines: {
+                ...prevEngines,
+                [input.source]: {
+                  ...prevSrcRec,
+                  syncedFileSize: forward.endOffset,
+                },
+              },
+            }
+          : {}),
+      }
+      yield* input.db
+        .update(KVTable)
+        .set({ value: updatedKvVal, time_updated: Date.now() })
+        .where(eq(KVTable.key, kvRow.key))
+        .run()
+        .pipe(Effect.ignoreCause)
+    }
   }
 
   const nextMeta = {
@@ -1983,8 +2108,8 @@ const appendForwardJsonlEntries = Effect.fnUntraced(function* (input: {
     .update(SessionTable)
     .set({
       metadata: nextMeta,
-      time_updated: latestTime,
-      time_idle: latestTime,
+      time_updated: newEntries.length > 0 ? latestTime : sql`${SessionTable.time_updated}`,
+      ...(newEntries.length > 0 ? { time_idle: latestTime } : {}),
     })
     .where(eq(SessionTable.id, input.sessionID))
     .run()
@@ -2003,6 +2128,7 @@ const prepareMessagesReadInternal = Effect.fnUntraced(function* (input: {
       id: SessionTable.id,
       model: SessionTable.model,
       time_updated: SessionTable.time_updated,
+      time_suspended: SessionTable.time_suspended,
       metadata: SessionTable.metadata,
     })
     .from(SessionTable)
@@ -2017,7 +2143,7 @@ const prepareMessagesReadInternal = Effect.fnUntraced(function* (input: {
   if (!source || !filePath || !nodeFs.existsSync(filePath)) return
 
   const syncedSize = typeof meta.syncedFileSize === "number" ? meta.syncedFileSize : 0
-  if (!input.request.cursor || input.request.cursor.direction === "previous") {
+  if (row.time_suspended === null && (!input.request.cursor || input.request.cursor.direction === "previous")) {
     yield* appendForwardJsonlEntries({
       db: input.db,
       sessionID: row.id,
@@ -2185,6 +2311,7 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
 }) {
   const home = effectiveHomeDir()
   const deletedProjectDirs = loadDeletedProjectDirs(home)
+  const deletedSessionsMap = loadDeletedSessionsMap(home)
   const isBlocked = (sessionID: string, activityTimeMs: number) =>
     checkOrReviveDeletedSession(sessionID, activityTimeMs, home)
 
@@ -2195,6 +2322,7 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
       model: SessionTable.model,
       directory: SessionTable.directory,
       time_updated: SessionTable.time_updated,
+      time_suspended: SessionTable.time_suspended,
       metadata: SessionTable.metadata,
     })
     .from(SessionTable)
@@ -2209,6 +2337,14 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
     .all()
     .pipe(Effect.orElseSucceed(() => []))
   const nativeSessionIDs = new Set<string>(nativeSessionRows.map((r) => String(r.id)))
+  const externalFileByID = new Map<string, string>(
+    existingRows.map((r) => {
+      const m = isRecord(r.metadata) ? r.metadata : {}
+      const fp = asString(m.filePath)
+      return [String(r.id), fp ? path.resolve(fp) : ""]
+    }),
+  )
+  const allKnownOwnerIDs = new Set<string>([...nativeSessionIDs, ...externalFileByID.keys()])
 
   const kvRows = yield* input.db
     .select({ key: KVTable.key, value: KVTable.value })
@@ -2224,26 +2360,34 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
     const markerIdx = kvRow.key.indexOf(marker)
     if (markerIdx < 0) continue
     const ownerID = kvRow.key.slice(markerIdx + marker.length)
-    if (!ownerID || ownerID.startsWith("ses_ext_") || !nativeSessionIDs.has(ownerID)) continue
+    const isActiveOwner =
+      Boolean(ownerID) &&
+      (allKnownOwnerIDs.has(ownerID) || (ownerID.startsWith("ses_ext_") && !deletedSessionsMap.has(ownerID)))
+    if (!isActiveOwner) continue
     if (!isRecord(kvRow.value)) continue
+    const ownerOwnFile = externalFileByID.get(ownerID) ?? ""
 
-    const legacyClaudeID = asString(kvRow.value.claudeSessionId)
-    if (legacyClaudeID) ownedChildExternalIDs.add(makeSessionID("claude", legacyClaudeID))
-    const legacyClaudeFile = asString(kvRow.value.claudeFilePath)
-    if (legacyClaudeFile) ownedChildFilePaths.add(path.resolve(legacyClaudeFile))
-    const legacyCodexID = asString(kvRow.value.codexSessionId)
-    if (legacyCodexID) ownedChildExternalIDs.add(makeSessionID("codex", legacyCodexID))
-    const legacyCodexFile = asString(kvRow.value.codexFilePath)
-    if (legacyCodexFile) ownedChildFilePaths.add(path.resolve(legacyCodexFile))
+    const registerChild = (src: SourceApp, childSessionID: string | undefined, childFilePath: string | undefined) => {
+      const childExtID = childSessionID ? makeSessionID(src, childSessionID) : ""
+      if (childExtID && childExtID !== ownerID) {
+        ownedChildExternalIDs.add(childExtID)
+      }
+      if (childFilePath) {
+        const resolvedChild = path.resolve(childFilePath)
+        if ((!childExtID || childExtID !== ownerID) && resolvedChild !== ownerOwnFile) {
+          ownedChildFilePaths.add(resolvedChild)
+        }
+      }
+    }
+
+    registerChild("claude", asString(kvRow.value.claudeSessionId), asString(kvRow.value.claudeFilePath))
+    registerChild("codex", asString(kvRow.value.codexSessionId), asString(kvRow.value.codexFilePath))
 
     const engines = isRecord(kvRow.value.engines) ? kvRow.value.engines : undefined
     if (!engines) continue
     for (const [src, engineVal] of Object.entries(engines)) {
       if (!knownSources.includes(src as SourceApp) || !isRecord(engineVal)) continue
-      const childSessionID = asString(engineVal.sessionId)
-      if (childSessionID) ownedChildExternalIDs.add(makeSessionID(src as SourceApp, childSessionID))
-      const childFilePath = asString(engineVal.filePath)
-      if (childFilePath) ownedChildFilePaths.add(path.resolve(childFilePath))
+      registerChild(src as SourceApp, asString(engineVal.sessionId), asString(engineVal.filePath))
     }
   }
   const isOwnedChildSession = (id: string, filePath: string) =>
@@ -2312,7 +2456,7 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
       const source = detectSourceFromSessionID(row.id, meta)
       const syncedSize = typeof meta.syncedFileSize === "number" ? meta.syncedFileSize : 0
 
-      if (source && filePath && isIncrementalJsonlPath(filePath) && syncedSize > 0) {
+      if (row.time_suspended === null && source && filePath && isIncrementalJsonlPath(filePath) && syncedSize > 0) {
         const currentStat = nodeFs.statSync(filePath, { throwIfNoEntry: false })
         if (currentStat && currentStat.size > syncedSize) {
           const updatedTime = yield* appendForwardJsonlEntries({
@@ -2409,7 +2553,7 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
       existing: checkedExternalIDs,
       isBlocked,
     }),
-  ])
+  ], { concurrency: "unbounded" })
 
   const all = [...codex, ...claude, ...agy, ...pi, ...opencode, ...cursor, ...grok, ...dsh, ...workbuddy].filter(
     (s) => !isOwnedChildSession(s.id, s.filePath),
@@ -2516,7 +2660,27 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
       }
     }
 
-    yield* Bus.reserveSequence(input.db, session.id, Math.max(1, messageRows.length)).pipe(Effect.ignoreCause)
+    yield* Bus.reserveSequence(input.db, session.id, SEQ_BASE + Math.max(1, messageRows.length)).pipe(
+      Effect.ignoreCause,
+    )
+  }
+
+  // Repair sequence watermarks for any pre-existing external sessions whose event_sequence was below SEQ_BASE.
+  const existingMaxSeqRows = yield* input.db
+    .select({
+      sessionID: SessionMessageTable.session_id,
+      maxSeq: sql<number>`max(${SessionMessageTable.seq})`,
+    })
+    .from(SessionMessageTable)
+    .where(like(SessionMessageTable.session_id, "ses_ext_%"))
+    .groupBy(SessionMessageTable.session_id)
+    .all()
+    .pipe(Effect.orElseSucceed(() => []))
+
+  for (const maxItem of existingMaxSeqRows) {
+    if (typeof maxItem.maxSeq === "number" && maxItem.maxSeq > 0) {
+      yield* Bus.reserveSequence(input.db, maxItem.sessionID, maxItem.maxSeq).pipe(Effect.ignoreCause)
+    }
   }
 
   // Ensure any remaining v1 sessions whose backing file no longer exists still get marked checked so we don't rescan forever.
@@ -2571,10 +2735,14 @@ export const sync = Effect.fn("SessionExternal.sync")(function* (input: {
   })
 
   yield* runSyncInternal(input).pipe(
+    Effect.tap(() =>
+      Effect.sync(() => {
+        initialSyncCompleted = true
+      }),
+    ),
     Effect.ignoreCause,
     Effect.ensuring(
       Effect.sync(() => {
-        initialSyncCompleted = true
         lastSyncAt = Date.now()
         inFlightSync = undefined
         resolveDone?.()

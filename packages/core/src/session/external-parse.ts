@@ -746,7 +746,14 @@ export function normalizeExternalToolCall(input: {
 
 function isContinuationLine(source: SourceApp, line: string): boolean {
   if (source === "agy") {
-    return line.includes('"type":"GENERIC"') || line.includes('"type": "GENERIC"')
+    return (
+      line.includes('"type":"GENERIC"') ||
+      line.includes('"type": "GENERIC"') ||
+      line.includes('"type":"SYSTEM_MESSAGE"') ||
+      line.includes('"type": "SYSTEM_MESSAGE"') ||
+      line.includes('"type":"CHECKPOINT"') ||
+      line.includes('"type": "CHECKPOINT"')
+    )
   }
   if (source === "claude") {
     return line.includes('"tool_result"')
@@ -988,6 +995,25 @@ function cleanAgyCompactionSummary(raw: string): string {
   return withoutPreamble || raw.trim()
 }
 
+function extractAgyUserText(content: string | undefined): {
+  readonly userText: string
+  readonly hasRequestTag: boolean
+} {
+  if (!content) return { userText: "", hasRequestTag: false }
+  const withoutSummary = content.replace(/<CONTEXT_SUMMARY>[\s\S]*?<\/CONTEXT_SUMMARY>/gi, "")
+  const reqMatch = /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/.exec(withoutSummary)
+  const raw = reqMatch ? reqMatch[1]! : withoutSummary
+  return {
+    userText: stripIdeMetadataTags(raw),
+    hasRequestTag: Boolean(reqMatch),
+  }
+}
+
+function isAgyAuxiliaryRow(row: Record<string, unknown> | undefined): boolean {
+  const rowType = asString(row?.type)
+  return rowType === "SYSTEM_MESSAGE" || rowType === "ERROR_MESSAGE"
+}
+
 export function parseAgyLines(
   lines: ReadonlyArray<string>,
   fallbackTime: number,
@@ -1030,25 +1056,45 @@ export function parseAgyLines(
         .join("\n\n")
       const rawSummary = content?.trim() || fallbackCheckpoint
       if (rawSummary) {
+        let prevIdx = i - 1
+        while (prevIdx >= 0 && isAgyAuxiliaryRow(orderedRows[prevIdx])) {
+          prevIdx -= 1
+        }
+        const prevRow = prevIdx >= 0 ? orderedRows[prevIdx] : undefined
+        const isManualCompact =
+          asString(prevRow?.type) === "USER_INPUT" &&
+          extractAgyUserText(asString(prevRow?.content)).userText === "/compact"
+
         const inTokens = asNumber(row.input_tokens) ?? 0
         const outTokens = asNumber(row.output_tokens) ?? 0
         const cacheRead = asNumber(row.cache_read_tokens) ?? 0
-        entries.push({
+        const nextCompaction: ExternalEntry = {
           kind: "compaction",
-          reason: "manual",
+          reason: isManualCompact ? "manual" : "auto",
           summary: cleanAgyCompactionSummary(rawSummary),
           ...(inTokens + outTokens + cacheRead > 0
-            ? { tokens: { input: Math.max(0, Math.floor(inTokens)), output: Math.max(0, Math.floor(outTokens)), cacheRead: Math.max(0, Math.floor(cacheRead)) } }
+            ? {
+                tokens: {
+                  input: Math.max(0, Math.floor(inTokens)),
+                  output: Math.max(0, Math.floor(outTokens)),
+                  cacheRead: Math.max(0, Math.floor(cacheRead)),
+                },
+              }
             : {}),
           time,
-        })
+        }
+        if (entries.at(-1)?.kind === "compaction") {
+          entries[entries.length - 1] = nextCompaction
+          continue
+        }
+        entries.push(nextCompaction)
       }
       continue
     }
 
     if (rowType === "USER_INPUT") {
-      const reqMatch = content ? /<USER_REQUEST>\s*([\s\S]*?)\s*<\/USER_REQUEST>/.exec(content) : null
-      const userText = (reqMatch ? reqMatch[1]! : (content ?? "")).trim()
+      const extracted = extractAgyUserText(content)
+      const userText = extracted.userText
       const files = Array.isArray(row.media)
         ? row.media.flatMap((m) => {
             if (!isRecord(m) || typeof m.uri !== "string") return []
@@ -1057,10 +1103,15 @@ export function parseAgyLines(
           })
         : []
 
+      let nextSignificantIdx = i + 1
+      while (nextSignificantIdx < orderedRows.length && isAgyAuxiliaryRow(orderedRows[nextSignificantIdx])) {
+        nextSignificantIdx += 1
+      }
       const isBareCompactCmd =
-        userText === "/compact" && asString(orderedRows[i + 1]?.type) === "CHECKPOINT"
-      const isSystemResumeOnly = !reqMatch && userText.startsWith("<CONTEXT_SUMMARY>")
-      const isInterruptionNoise = /^Error:\s*The stream was interrupted\./.test(userText) && userText.includes("<SYSTEM_MESSAGE>")
+        userText === "/compact" && asString(orderedRows[nextSignificantIdx]?.type) === "CHECKPOINT"
+      const isSystemResumeOnly = !extracted.hasRequestTag && (content ?? "").trimStart().startsWith("<CONTEXT_SUMMARY>")
+      const isInterruptionNoise =
+        /^Error:\s*The stream was interrupted\./.test(userText) && (content ?? "").includes("<SYSTEM_MESSAGE>")
 
       if (!isBareCompactCmd && !isSystemResumeOnly && !isInterruptionNoise && (userText || files.length > 0)) {
         entries.push({

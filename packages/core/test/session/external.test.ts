@@ -1,5 +1,6 @@
 import SqliteDatabase from "bun:sqlite"
 import { describe, expect } from "bun:test"
+import { eq } from "drizzle-orm"
 import fs from "fs/promises"
 import path from "path"
 import { Effect } from "effect"
@@ -12,10 +13,13 @@ import { Project } from "@opencode/core/project"
 import { Session } from "@opencode/core/session"
 import { SessionExecution } from "@opencode/core/session/execution"
 import { SessionExternal } from "@opencode/core/session/external"
+import { SessionMessage } from "@opencode/core/session/message"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
+import { SessionMessageTable } from "@opencode/core/session/sql"
 import { SessionStore } from "@opencode/core/session/store"
 import { AbsolutePath } from "@opencode/core/schema"
+import { Agent } from "@opencode/schema/agent"
 import { Model } from "@opencode/schema/model"
 import { Provider } from "@opencode/schema/provider"
 import { LayerNode } from "@opencode/util/effect/layer-node"
@@ -850,5 +854,378 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
         }),
       )
     }),
+  )
+
+  it.live(
+    "handles Antigravity /compact + SYSTEM_MESSAGE + CHECKPOINT, bidirectional same-session sync without duplicates, and bridged child exclusion",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped("ext-agy-switch-")
+        const home = path.join(tmp.path, "home")
+        const repoDir = path.join(tmp.path, "agy-switch-repo")
+        const cliConvID = "5bd2e301-714c-4b76-b37c-8edbd3127b97"
+        const desktopConvID = "aa00bb11-2233-4455-6677-8899aabbccdd"
+        const bridgedChildID = "ff99ee88-7766-5544-3322-1100fedcba98"
+        const cliLogPath = path.join(
+          home,
+          ".gemini",
+          "antigravity-cli",
+          "brain",
+          cliConvID,
+          ".system_generated",
+          "logs",
+          "transcript_full.jsonl",
+        )
+        const bridgedChildLogPath = path.join(
+          home,
+          ".gemini",
+          "antigravity-cli",
+          "brain",
+          bridgedChildID,
+          ".system_generated",
+          "logs",
+          "transcript_full.jsonl",
+        )
+        const desktopLogPath = path.join(
+          home,
+          ".gemini",
+          "antigravity",
+          "brain",
+          desktopConvID,
+          ".system_generated",
+          "logs",
+          "transcript_full.jsonl",
+        )
+
+        yield* Effect.promise(async () => {
+          await fs.mkdir(path.join(repoDir, ".git"), { recursive: true })
+          await fs.mkdir(path.dirname(cliLogPath), { recursive: true })
+          await fs.mkdir(path.dirname(bridgedChildLogPath), { recursive: true })
+          await fs.mkdir(path.dirname(desktopLogPath), { recursive: true })
+
+          const cliLines = [
+            JSON.stringify({
+              step_index: 1,
+              type: "USER_INPUT",
+              source: "USER_EXPLICIT",
+              created_at: "2026-11-15T00:00:00Z",
+              content: `<user_information>\nActive Workspaces:\n- ${repoDir}\n</user_information>\n<USER_REQUEST>\nSetup sandbox\n</USER_REQUEST>`,
+            }),
+            JSON.stringify({
+              step_index: 2,
+              type: "PLANNER_RESPONSE",
+              source: "MODEL",
+              created_at: "2026-11-15T00:00:02Z",
+              content: "Sandbox ready.",
+            }),
+            // Auto rolling checkpoint (no preceding /compact command)
+            JSON.stringify({
+              step_index: 3,
+              type: "CHECKPOINT",
+              source: "SYSTEM",
+              created_at: "2026-11-15T00:01:00Z",
+              input_tokens: 180000,
+              output_tokens: 2100,
+              content: "<summary>\nAuto checkpoint summary.\n</summary>",
+            }),
+            JSON.stringify({
+              step_index: 4,
+              type: "USER_INPUT",
+              source: "USER_EXPLICIT",
+              created_at: "2026-11-15T00:01:30Z",
+              content: "<USER_REQUEST>\nVerify build\n</USER_REQUEST>",
+            }),
+            JSON.stringify({
+              step_index: 5,
+              type: "PLANNER_RESPONSE",
+              source: "MODEL",
+              created_at: "2026-11-15T00:01:35Z",
+              content: "Build verified.",
+            }),
+            // Post-checkpoint user input containing <CONTEXT_SUMMARY> (which also embeds <USER_REQUEST> in history) + manual /compact + SYSTEM_MESSAGE + CHECKPOINT
+            JSON.stringify({
+              step_index: 6,
+              type: "USER_INPUT",
+              source: "USER_EXPLICIT",
+              created_at: "2026-11-15T00:02:00Z",
+              content: `<CONTEXT_SUMMARY>\nPrevious <USER_REQUEST>Setup sandbox</USER_REQUEST>\n</CONTEXT_SUMMARY>\n<USER_REQUEST>\n/compact\n</USER_REQUEST>`,
+            }),
+            JSON.stringify({
+              step_index: 7,
+              type: "SYSTEM_MESSAGE",
+              source: "SYSTEM",
+              created_at: "2026-11-15T00:02:01Z",
+              content: "Context verification system prompt",
+            }),
+            JSON.stringify({
+              step_index: 8,
+              type: "CHECKPOINT",
+              source: "SYSTEM",
+              created_at: "2026-11-15T00:02:03Z",
+              input_tokens: 42000,
+              output_tokens: 950,
+              content: "<summary>\nManual compact summary.\n</summary>",
+            }),
+            // Bridged user input with <conversation_context> inside <USER_REQUEST>
+            JSON.stringify({
+              step_index: 9,
+              type: "USER_INPUT",
+              source: "USER_EXPLICIT",
+              created_at: "2026-11-15T00:03:00Z",
+              content: `<USER_REQUEST>\n<conversation_context>\nUser: cloud turn\n</conversation_context>\nContinue after cloud turn\n</USER_REQUEST>`,
+            }),
+            JSON.stringify({
+              step_index: 10,
+              type: "PLANNER_RESPONSE",
+              source: "MODEL",
+              created_at: "2026-11-15T00:03:02Z",
+              content: "Continued seamlessly.",
+            }),
+          ]
+          await fs.writeFile(cliLogPath, `${cliLines.join("\n")}\n`, "utf8")
+
+          await fs.writeFile(
+            desktopLogPath,
+            `${[
+              JSON.stringify({
+                step_index: 1,
+                type: "USER_INPUT",
+                source: "USER_EXPLICIT",
+                created_at: "2026-11-15T00:04:00Z",
+                content: `<user_information>\nActive Workspaces:\n- ${repoDir}\n</user_information>\n<USER_REQUEST>\nDesktop main session\n</USER_REQUEST>`,
+              }),
+              JSON.stringify({
+                step_index: 2,
+                type: "PLANNER_RESPONSE",
+                source: "MODEL",
+                created_at: "2026-11-15T00:04:01Z",
+                content: "Desktop reply.",
+              }),
+            ].join("\n")}\n`,
+            "utf8",
+          )
+
+          await fs.writeFile(
+            bridgedChildLogPath,
+            `${[
+              JSON.stringify({
+                step_index: 1,
+                type: "USER_INPUT",
+                source: "USER_EXPLICIT",
+                created_at: "2026-11-15T00:05:00Z",
+                content: `<user_information>\nActive Workspaces:\n- ${repoDir}\n</user_information>\n<USER_REQUEST>\n<conversation_context>\nUser: Desktop main session\n</conversation_context>\nFollow-up from Pigu\n</USER_REQUEST>`,
+              }),
+              JSON.stringify({
+                step_index: 2,
+                type: "PLANNER_RESPONSE",
+                source: "MODEL",
+                created_at: "2026-11-15T00:05:01Z",
+                content: "Helper child reply.",
+              }),
+            ].join("\n")}\n`,
+            "utf8",
+          )
+        })
+
+        yield* withTestHome(
+          home,
+          Effect.gen(function* () {
+            const session = yield* Session.Service
+            const dbSvc = yield* Database.Service
+            const cliSesID = SessionExternal.makeSessionID("agy", cliConvID)
+            const desktopSesID = SessionExternal.makeSessionID("agy", desktopConvID)
+            const bridgedChildSesID = SessionExternal.makeSessionID("agy", bridgedChildID)
+
+            // Record bridgedChildID as owned by desktopSesID (external owner != child)
+            yield* dbSvc.db
+              .insert(KVTable)
+              .values({
+                key: `plugin:pigu.provider.local:session:${desktopSesID}`,
+                value: {
+                  lastEngine: "agy",
+                  lastPromptCount: 4,
+                  engines: {
+                    agy: {
+                      sessionId: bridgedChildID,
+                      filePath: bridgedChildLogPath,
+                    },
+                  },
+                },
+                time_created: Date.now(),
+                time_updated: Date.now(),
+              })
+              .run()
+
+            SessionExternal.resetForTesting()
+            const listed = yield* session.list({ limit: 30 })
+            expect(listed.data.some((s) => s.id === cliSesID)).toBe(true)
+            expect(listed.data.some((s) => s.id === desktopSesID)).toBe(true)
+            expect(listed.data.some((s) => s.id === bridgedChildSesID)).toBe(false)
+
+            const initialMsgs = (yield* session.messages({ sessionID: cliSesID, order: "desc", limit: 20 })).toReversed()
+            // Zero leaked "/compact" bubble; auto checkpoint + manual checkpoint both preserved cleanly
+            expect(initialMsgs.map((m) => m.type)).toEqual([
+              "user",
+              "assistant",
+              "compaction",
+              "user",
+              "assistant",
+              "compaction",
+              "user",
+              "assistant",
+            ])
+
+            const autoCompaction = initialMsgs[2]
+            if (autoCompaction?.type === "compaction" && autoCompaction.status === "completed") {
+              expect(autoCompaction.reason).toBe("auto")
+            }
+            const manualCompaction = initialMsgs[5]
+            if (manualCompaction?.type === "compaction" && manualCompaction.status === "completed") {
+              expect(manualCompaction.reason).toBe("manual")
+              expect(manualCompaction.summary).toContain("Manual compact summary.")
+            }
+            const bridgedUser = initialMsgs[6]
+            if (bridgedUser?.type === "user") {
+              expect(bridgedUser.text).toBe("Continue after cloud turn")
+            }
+
+            // Simulate continuing cliSesID inside Pigu via local/agy --conversation:
+            // Pigu writes native message rows AND agy appends mirrored lines to cliLogPath, updating KV syncedFileSize
+            const piguTurnTime = Date.parse("2026-11-15T00:06:00Z")
+            yield* dbSvc.db
+              .insert(SessionMessageTable)
+              .values([
+                {
+                  id: SessionMessage.ID.make("msg_native_pigu_user_1"),
+                  session_id: cliSesID,
+                  type: "user",
+                  seq: 1_000_020,
+                  time_created: piguTurnTime,
+                  time_updated: piguTurnTime,
+                  data: {
+                    text: "Set token CORAL-99 in Pigu",
+                    time: { created: piguTurnTime },
+                  },
+                },
+                {
+                  id: SessionMessage.ID.make("msg_native_pigu_asst_1"),
+                  session_id: cliSesID,
+                  type: "assistant",
+                  seq: 1_000_021,
+                  time_created: piguTurnTime + 1000,
+                  time_updated: piguTurnTime + 1000,
+                  data: {
+                    agent: Agent.ID.make("build"),
+                    model: { providerID: Provider.ID.make("local"), id: Model.ID.make("agy/gemini-3.8-flash") },
+                    content: [{ type: "text", text: "Saved CORAL-99." }],
+                    finish: "stop",
+                    time: {
+                      created: piguTurnTime + 1000,
+                      streamed: piguTurnTime + 1000,
+                      completed: piguTurnTime + 1000,
+                    },
+                  },
+                },
+              ])
+              .run()
+
+            const postPiguSize = yield* Effect.promise(async () => {
+              const mirrored = [
+                JSON.stringify({
+                  step_index: 9,
+                  type: "USER_INPUT",
+                  source: "USER_EXPLICIT",
+                  created_at: "2026-11-15T00:06:00Z",
+                  content: "<USER_REQUEST>\nSet token CORAL-99 in Pigu\n</USER_REQUEST>",
+                }),
+                JSON.stringify({
+                  step_index: 10,
+                  type: "PLANNER_RESPONSE",
+                  source: "MODEL",
+                  created_at: "2026-11-15T00:06:01Z",
+                  content: "Saved CORAL-99.",
+                }),
+              ]
+              await fs.appendFile(cliLogPath, `${mirrored.join("\n")}\n`, "utf8")
+              return (await fs.stat(cliLogPath)).size
+            })
+
+            yield* dbSvc.db
+              .insert(KVTable)
+              .values({
+                key: `plugin:pigu.provider.local:session:${cliSesID}`,
+                value: {
+                  lastEngine: "agy",
+                  lastPromptCount: 6,
+                  engines: {
+                    agy: {
+                      sessionId: cliConvID,
+                      filePath: cliLogPath,
+                      syncedFileSize: postPiguSize,
+                    },
+                  },
+                },
+                time_created: piguTurnTime,
+                time_updated: piguTurnTime + 1000,
+              })
+              .run()
+
+            const afterPiguMsgs = (
+              yield* session.messages({ sessionID: cliSesID, order: "desc", limit: 30 })
+            ).toReversed()
+            const coralUserCount = afterPiguMsgs.filter(
+              (m) => m.type === "user" && m.text.includes("CORAL-99"),
+            ).length
+            expect(coralUserCount).toBe(1)
+
+            // Now simulate user switching BACK to external agy CLI in terminal and sending a new turn
+            yield* Effect.promise(async () => {
+              const externalAppend = [
+                JSON.stringify({
+                  step_index: 11,
+                  type: "USER_INPUT",
+                  source: "USER_EXPLICIT",
+                  created_at: "2026-11-15T00:07:00Z",
+                  content: "<USER_REQUEST>\nExternal terminal follow-up JADE-77\n</USER_REQUEST>",
+                }),
+                JSON.stringify({
+                  step_index: 12,
+                  type: "PLANNER_RESPONSE",
+                  source: "MODEL",
+                  created_at: "2026-11-15T00:07:02Z",
+                  content: "Confirmed JADE-77 in terminal.",
+                }),
+              ]
+              await fs.appendFile(cliLogPath, `${externalAppend.join("\n")}\n`, "utf8")
+            })
+
+            const afterExternalMsgs = (
+              yield* session.messages({ sessionID: cliSesID, order: "desc", limit: 30 })
+            ).toReversed()
+            expect(afterExternalMsgs.filter((m) => m.type === "user" && m.text.includes("CORAL-99")).length).toBe(1)
+            expect(afterExternalMsgs.filter((m) => m.type === "user" && m.text.includes("JADE-77")).length).toBe(1)
+
+            const updatedKv = yield* dbSvc.db
+              .select()
+              .from(KVTable)
+              .where(eq(KVTable.key, `plugin:pigu.provider.local:session:${cliSesID}`))
+              .get()
+            const kvVal = updatedKv?.value
+            expect(
+              kvVal && typeof kvVal === "object" && "lastPromptCount" in kvVal ? kvVal.lastPromptCount : undefined,
+            ).toBe(8)
+
+            // Verify native Session events (e.g. switchModel) receive seq strictly AFTER external messages (> 1,000,000)
+            yield* session.switchModel({
+              sessionID: cliSesID,
+              model: { providerID: Provider.ID.make("openai"), id: Model.ID.make("gpt-5") },
+            })
+            const afterSwitchMsgs = (
+              yield* session.messages({ sessionID: cliSesID, order: "desc", limit: 35 })
+            ).toReversed()
+            expect(afterSwitchMsgs.at(-1)?.type).toBe("model-switched")
+          }),
+        )
+      }),
   )
 })

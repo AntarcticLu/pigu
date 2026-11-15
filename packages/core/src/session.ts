@@ -1,7 +1,7 @@
 export * as Session from "./session.js"
 export * from "./session/schema.js"
 
-import { DateTime, Effect, Layer, Context, Option, Stream } from "effect"
+import { DateTime, Effect, Fiber, Layer, Context, Option, Stream } from "effect"
 import { LLMClient } from "@opencode/ai/effect"
 import { ListAnchor, ListCursor, ListFilter } from "@opencode/schema/session"
 import { and, desc, eq } from "drizzle-orm"
@@ -411,10 +411,10 @@ const layer = Layer.effect(
         yield* bus.remove(sessionID)
       }),
       list: Effect.fn("Session.list")(function* (input = {}) {
-        if (!SessionExternal.hasCompletedInitialSync()) {
-          yield* syncExternal().pipe(Effect.timeoutOption("4 seconds"), Effect.ignoreCause)
-        } else {
-          yield* Effect.forkDetach(syncExternal())
+        const needsInitial = !SessionExternal.hasCompletedInitialSync()
+        const syncFiber = yield* Effect.forkDetach(syncExternal())
+        if (needsInitial) {
+          yield* Fiber.await(syncFiber).pipe(Effect.timeoutOption("8 seconds"), Effect.ignoreCause)
         }
         const filter =
           input.cursor === undefined
