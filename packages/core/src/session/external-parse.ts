@@ -238,6 +238,18 @@ export function cleanTitle(text: string): string {
   return line.slice(0, 64)
 }
 
+export function isDshBrokenFallbackTitle(raw: string): boolean {
+  const trimmed = raw.trim()
+  if (!trimmed) return true
+  return (
+    trimmed.startsWith("<conversation_context") ||
+    trimmed.startsWith("<attached_files") ||
+    trimmed.startsWith("<compacted-summary") ||
+    trimmed.startsWith("Current runtime context") ||
+    trimmed.startsWith("The messages above have been compacted")
+  )
+}
+
 export function buildUnifiedFileDiff(
   filePath: string,
   oldText: string,
@@ -445,6 +457,7 @@ export function normalizeExternalToolCall(input: {
     lower === "write_stdin" ||
     lower === "manage_task" ||
     lower === "bash" ||
+    lower === "pwsh" ||
     lower === "shell" ||
     lower === "shell_command" ||
     lower === "exec_command" ||
@@ -490,7 +503,7 @@ export function normalizeExternalToolCall(input: {
   }
 
   // 3. File Read
-  if (lower === "read_file" || lower === "view_file" || lower === "read") {
+  if (lower === "read_file" || lower === "view_file" || lower === "read" || lower === "read_image") {
     const rawPath = asString(args.Path ?? args.AbsolutePath ?? args.file_path ?? args.path) ?? ""
     const cleanPath = normalizeCandidatePath(rawPath) || rawPath
     const startLine = asNumber(args.StartLine ?? args.offset ?? args.start_line)
@@ -684,6 +697,7 @@ export function normalizeExternalToolCall(input: {
     lower === "agent" ||
     lower === "task" ||
     lower === "subagent" ||
+    lower === "subagent_fork" ||
     lower === "browser_subagent"
   ) {
     const agent = asString(args.TypeName ?? args.subagent_type ?? args.agent) ?? "subagent"
@@ -706,6 +720,7 @@ export function normalizeExternalToolCall(input: {
   if (
     lower === "ask_question" ||
     lower === "askuserquestion" ||
+    lower === "ask_user_question" ||
     lower === "question" ||
     lower === "request_user_input"
   ) {
@@ -810,7 +825,16 @@ function isContinuationLine(source: SourceApp, line: string): boolean {
     )
   }
   if (source === "deepseek-harness") {
-    return line.includes('"tool/message"')
+    return (
+      line.includes('"tool/message"') ||
+      line.includes('"tool/call"') ||
+      line.includes('"tool/result"') ||
+      line.includes('"assistant/message"') ||
+      line.includes('"request/header"') ||
+      line.includes('"request/context"') ||
+      line.includes('"turn/end"') ||
+      line.includes('"compact-checkpoint"')
+    )
   }
   return false
 }
@@ -934,6 +958,14 @@ export function readJsonlWindowSync(input: {
         continue
       }
       if (
+        input.source === "deepseek-harness" &&
+        (readLineSample(candidateIdx - 1).includes('"compaction/start"') ||
+          readLineSample(candidateIdx - 1).includes('"compaction/summary"'))
+      ) {
+        candidateIdx -= 1
+        continue
+      }
+      if (
         input.source === "codex" &&
         (sample.includes('"role":"user"') ||
           sample.includes('"role": "user"') ||
@@ -1010,6 +1042,29 @@ export function readJsonlForwardSync(fullPath: string, fromOffset: number): Json
   const fd = nodeFs.openSync(fullPath, "r")
   const bytesRead = nodeFs.readSync(fd, buf, 0, span, fromOffset)
   nodeFs.closeSync(fd)
+
+  if (fullPath.endsWith(".zst") || fullPath.endsWith(".zstd")) {
+    const decompressed = Option.getOrUndefined(
+      Option.liftThrowable(() => zlib.zstdDecompressSync(buf.subarray(0, bytesRead)).toString("utf8"))(),
+    )
+    if (!decompressed) {
+      return {
+        lines: [],
+        startOffset: fromOffset,
+        endOffset: fromOffset,
+        fileSize: stat.size,
+        mtimeMs: Math.floor(stat.mtimeMs),
+      }
+    }
+    const lines = decompressed.split(/\r?\n/).filter((line) => line.trim().length > 0)
+    return {
+      lines,
+      startOffset: fromOffset,
+      endOffset: fromOffset + bytesRead,
+      fileSize: stat.size,
+      mtimeMs: Math.floor(stat.mtimeMs),
+    }
+  }
 
   const lastNewline = buf.subarray(0, bytesRead).lastIndexOf(0x0a)
   if (lastNewline < 0) {
@@ -1971,6 +2026,23 @@ export function parseCodexLines(
   }
 }
 
+function parseDshToolArgs(part: Record<string, unknown>): Record<string, unknown> {
+  if (isRecord(part.args)) return part.args
+  if (isRecord(part.input)) return part.input
+  if (isRecord(part.arguments)) return part.arguments
+  if (typeof part.arguments === "string" && part.arguments.trim()) {
+    const decoded = decodeJson(part.arguments.trim())
+    if (Option.isSome(decoded) && isRecord(decoded.value)) return decoded.value
+  }
+  return {}
+}
+
+function cleanDshCompactionSummary(raw: string): string {
+  const tagMatch = /<compacted-summary>\s*([\s\S]*?)\s*<\/compacted-summary>/i.exec(raw)
+  if (tagMatch?.[1]?.trim()) return tagMatch[1].trim()
+  return raw.replace(/^The messages above have been compacted into the summary below[^\n]*\n*/i, "").trim()
+}
+
 export function parseDshLines(
   lines: ReadonlyArray<string>,
   fallbackTime: number,
@@ -1980,9 +2052,13 @@ export function parseDshLines(
 } {
   let cwd = ""
   let title = ""
+  let currentModel = ""
+  let latestModel = ""
   let createdAt = 0
   let updatedAt = 0
   const seenMsgIDs = new Set<string>()
+  const seenCompactionIDs = new Set<string>()
+  const compactionReasonByID = new Map<string, "auto" | "manual">()
 
   type MutableDshTool = {
     callID: string
@@ -1996,7 +2072,7 @@ export function parseDshLines(
 
   const items: Array<
     | Exclude<ExternalEntry, { kind: "assistant" }>
-    | { kind: "assistant"; text?: string; thinking?: string; tools: MutableDshTool[]; time: number }
+    | { kind: "assistant"; text?: string; thinking?: string; model?: string; tools: MutableDshTool[]; time: number }
   > = []
   const toolsByID = new Map<string, MutableDshTool>()
 
@@ -2004,8 +2080,6 @@ export function parseDshLines(
     const json = decodeJson(lines[lineIdx]!)
     if (Option.isNone(json) || !isRecord(json.value)) continue
     const row = json.value
-    const surfaceOp = isRecord(row.surfaceOp) ? row.surfaceOp : undefined
-    if (surfaceOp?.op === "replace") continue
 
     const explicitTime =
       typeof row.time === "number" ? row.time : typeof row.createdAt === "number" ? row.createdAt : 0
@@ -2015,13 +2089,110 @@ export function parseDshLines(
       updatedAt = Math.max(updatedAt, Math.floor(explicitTime))
     }
 
-    if ((row.type === "session" || row.type === "header") && typeof row.cwd === "string" && row.cwd && !cwd) {
+    if (
+      (row.type === "session" || row.type === "header" || typeof row.sessionId === "string") &&
+      typeof row.cwd === "string" &&
+      row.cwd &&
+      !cwd
+    ) {
       cwd = row.cwd
     }
 
     const data = isRecord(row.data) ? row.data : undefined
-    if (row.type === "session/title" && typeof data?.title === "string" && data.title.trim()) {
-      title = data.title.trim()
+    if (typeof data?.cwd === "string" && data.cwd && !cwd) {
+      cwd = data.cwd
+    }
+
+    if (row.type === "request/context" && typeof data?.model === "string" && data.model.trim()) {
+      currentModel = data.model.trim()
+      latestModel = currentModel
+      continue
+    }
+
+    if (
+      row.type === "request/header" &&
+      isRecord(data?.header) &&
+      isRecord(data.header.config) &&
+      typeof data.header.config.model === "string" &&
+      data.header.config.model.trim()
+    ) {
+      currentModel = data.header.config.model.trim()
+      latestModel = currentModel
+      continue
+    }
+
+    if (row.type === "compaction/start" && data) {
+      const compactionID = asString(data.compactionId)
+      if (compactionID) {
+        const isManual = Boolean(asString(data.sourceCommandId)) || data.trigger === "manual"
+        compactionReasonByID.set(compactionID, isManual ? "manual" : "auto")
+      }
+      continue
+    }
+
+    if (row.type === "compaction/summary" && data) {
+      const compactionID = asString(data.compactionId)
+      if (compactionID && seenCompactionIDs.has(compactionID)) continue
+      if (compactionID) seenCompactionIDs.add(compactionID)
+
+      const rawSummary =
+        typeof data.summary === "string"
+          ? data.summary
+          : Array.isArray(data.summary)
+            ? extractTextFromContentArray(data.summary)
+            : ""
+      const summary = cleanDshCompactionSummary(rawSummary) || "Context compacted"
+      const reason: "auto" | "manual" = asString(data.sourceCommandId)
+        ? "manual"
+        : ((compactionID ? compactionReasonByID.get(compactionID) : undefined) ?? "auto")
+
+      const usage = isRecord(data.usage) ? data.usage : undefined
+      const inputTok = asNumber(usage?.inputTokens) ?? asNumber(data.shadowedTokenCount)
+      const outputTok = asNumber(usage?.outputTokens) ?? 0
+      const cacheReadTok = asNumber(usage?.cacheReadTokens)
+
+      items.push({
+        kind: "compaction",
+        summary,
+        reason,
+        ...(inputTok !== undefined
+          ? {
+              tokens: {
+                input: inputTok,
+                output: outputTok,
+                ...(cacheReadTok !== undefined ? { cacheRead: cacheReadTok } : {}),
+              },
+            }
+          : {}),
+        time,
+      })
+      continue
+    }
+
+    const surfaceOp = isRecord(row.surfaceOp) ? row.surfaceOp : undefined
+    if (row.type === "user/message" && data && isRecord(data.source) && data.source.kind === "compact-checkpoint") {
+      const compactionID = asString(data.source.compactionId)
+      if (compactionID && seenCompactionIDs.has(compactionID)) continue
+      if (compactionID) seenCompactionIDs.add(compactionID)
+
+      const rawCheckpoint = Array.isArray(data.content) ? extractTextFromContentArray(data.content) : ""
+      const summary = cleanDshCompactionSummary(rawCheckpoint) || "Context compacted"
+      const reason: "auto" | "manual" = asString(data.source.sourceCommandId)
+        ? "manual"
+        : ((compactionID ? compactionReasonByID.get(compactionID) : undefined) ?? "auto")
+
+      items.push({ kind: "compaction", summary, reason, time })
+      continue
+    }
+
+    if (surfaceOp?.op === "replace") continue
+
+    if (row.type === "session/title" && typeof data?.title === "string") {
+      const candidateTitle = data.title.trim()
+      if (candidateTitle && !isDshBrokenFallbackTitle(candidateTitle)) {
+        title = candidateTitle
+      }
+      continue
     }
 
     if (row.type === "user/message" && data) {
@@ -2033,7 +2204,12 @@ export function parseDshLines(
       const source = isRecord(data.source) ? data.source : undefined
       if ((!source?.kind || source.kind === "user") && Array.isArray(data.content)) {
         const text = stripIdeMetadataTags(extractTextFromContentArray(data.content))
-        if (text && !isInjectedPromptBoilerplate(text)) {
+        if (
+          text &&
+          !isInjectedPromptBoilerplate(text) &&
+          text.trim() !== "/compact" &&
+          !/^\/compact\s+/i.test(text.trim())
+        ) {
           items.push({ kind: "user", text, time })
         }
       }
@@ -2046,6 +2222,10 @@ export function parseDshLines(
         if (seenMsgIDs.has(msgID)) continue
         seenMsgIDs.add(msgID)
       }
+      const msgSource = isRecord(data.message.source) ? data.message.source : undefined
+      const msgModel = asString(msgSource?.model)?.trim() || asString(data.message.model)?.trim() || currentModel
+      if (msgModel) latestModel = msgModel
+
       const text = extractTextFromContentArray(data.message.content) || undefined
       const thinking =
         data.message.content
@@ -2066,7 +2246,7 @@ export function parseDshLines(
         if (part.type === "tool-call" || part.type === "tool_use" || part.type === "tool_call") {
           const callID = asString(part.toolCallId ?? part.id) ?? `dsh_${lineIdx}_${pIdx}`
           const rawName = asString(part.toolName ?? part.name) ?? "tool"
-          const rawArgs = isRecord(part.args ?? part.input) ? ((part.args ?? part.input) as Record<string, unknown>) : {}
+          const rawArgs = parseDshToolArgs(part)
           const tool: MutableDshTool = {
             callID,
             rawName,
@@ -2086,10 +2266,67 @@ export function parseDshLines(
           kind: "assistant",
           ...(text ? { text } : {}),
           ...(thinking ? { thinking } : {}),
+          ...(msgModel ? { model: msgModel } : {}),
           tools,
           time,
         })
       }
+      continue
+    }
+
+    if (row.type === "tool/call" && data) {
+      const callID = asString(data.toolCallId ?? data.id)
+      const parsedArgs = parseDshToolArgs(data)
+      if (callID) {
+        const existing = toolsByID.get(callID)
+        if (existing) {
+          if (Object.keys(existing.rawArgs).length === 0 && Object.keys(parsedArgs).length > 0) {
+            existing.rawArgs = parsedArgs
+          }
+          continue
+        }
+        const rawName = asString(data.toolName ?? data.name) ?? "tool"
+        const tool: MutableDshTool = {
+          callID,
+          rawName,
+          rawArgs: parsedArgs,
+          rawOutput: "Done",
+          isError: false,
+          time,
+          seed: `dsh:${lineIdx}:0:${rawName}`,
+        }
+        toolsByID.set(callID, tool)
+        const prev = items.at(-1)
+        if (prev?.kind === "assistant") {
+          prev.tools.push(tool)
+          continue
+        }
+        items.push({
+          kind: "assistant",
+          ...(currentModel ? { model: currentModel } : {}),
+          tools: [tool],
+          time,
+        })
+      }
+      continue
+    }
+
+    if (row.type === "tool/result" && data) {
+      const msg = isRecord(data.message) ? data.message : data
+      const callID = asString(data.toolCallId ?? msg.toolCallId ?? msg.tool_use_id ?? msg.id)
+      const matched = callID ? toolsByID.get(callID) : undefined
+      if (!matched) continue
+      const resultVal = msg.content ?? msg.result ?? msg.output ?? data.result ?? data.output
+      const outText =
+        typeof resultVal === "string"
+          ? resultVal
+          : Array.isArray(resultVal)
+            ? extractTextFromContentArray(resultVal)
+            : isRecord(resultVal) && typeof resultVal.output === "string"
+              ? resultVal.output
+              : ""
+      matched.rawOutput = outText || "Done"
+      matched.isError = msg.isError === true || msg.is_error === true || data.isError === true
       continue
     }
 
@@ -2131,6 +2368,7 @@ export function parseDshLines(
       kind: "assistant",
       ...(item.text ? { text: item.text } : {}),
       ...(item.thinking ? { thinking: item.thinking } : {}),
+      ...(item.model ? { model: item.model } : {}),
       ...(tools.length > 0 ? { tools } : {}),
       time: item.time,
     }
@@ -2138,7 +2376,7 @@ export function parseDshLines(
 
   return {
     entries,
-    meta: { cwd, title, model: "", createdAt, updatedAt, isSubagent: false },
+    meta: { cwd, title, model: latestModel, createdAt, updatedAt, isSubagent: false },
   }
 }
 

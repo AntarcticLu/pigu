@@ -7,6 +7,7 @@ import fs from "node:fs"
 import os from "node:os"
 import path from "node:path"
 import { fileURLToPath } from "node:url"
+import zlib from "node:zlib"
 import type {
   LanguageModelV3,
   LanguageModelV3CallOptions,
@@ -26,6 +27,10 @@ import type { PluginInternal } from "../internal.js"
 import {
   buildCatalogLimitMap,
   buildMultimodalProcessEnv,
+  detectModelModality,
+  detectModelProtocol,
+  isNonChatUtilityModel,
+  protocolBaseURL,
   resolveDefaultConfigDir,
   resolveModelLimit,
   type ResolvedModelLimit,
@@ -491,19 +496,87 @@ function findGrokSessionFile(home: string, sessionId: string) {
   return fs.existsSync(directJson) ? directJson : undefined
 }
 
+function resolveDshRoot(home: string) {
+  return process.env.DSH_HOME ? path.resolve(process.env.DSH_HOME) : path.join(home, ".dsh")
+}
+
 function findDshSessionFile(home: string, sessionId: string) {
-  const projCacheFile = path.join(home, ".dsh", "storages", "session_projcache", "sessions", `${sessionId}.json`)
+  const dshRoot = resolveDshRoot(home)
+  const sessionsDir = path.join(dshRoot, "sessions")
 
-  if (fs.existsSync(projCacheFile)) return projCacheFile
-  const sessionsDir = path.join(home, ".dsh", "sessions")
+  if (fs.existsSync(sessionsDir)) {
+    const workspaceDirs = fs
+      .readdirSync(sessionsDir, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => path.join(sessionsDir, entry.name, sessionId))
+      .filter((dir) => fs.existsSync(dir))
 
-  if (!fs.existsSync(sessionsDir)) return undefined
-  const direct = path.join(sessionsDir, `${sessionId}.jsonl`)
+    for (const sessionDir of workspaceDirs) {
+      const files = fs
+        .readdirSync(sessionDir)
+        .filter((name) => name.endsWith(".jsonl.zstd") || name.endsWith(".jsonl.zst") || name.endsWith(".jsonl"))
+        .toSorted((a, b) => b.localeCompare(a))
+      if (files[0]) return path.join(sessionDir, files[0])
+    }
 
-  if (fs.existsSync(direct)) return direct
-  const directJson = path.join(sessionsDir, `${sessionId}.json`)
+    const directCandidates = [
+      path.join(sessionsDir, `${sessionId}.jsonl.zstd`),
+      path.join(sessionsDir, `${sessionId}.jsonl`),
+      path.join(sessionsDir, `${sessionId}.json`),
+    ]
+    const directHit = directCandidates.find((candidate) => fs.existsSync(candidate))
+    if (directHit) return directHit
+  }
 
-  return fs.existsSync(directJson) ? directJson : undefined
+  const projCacheFile = path.join(dshRoot, "storages", "session_projcache", "sessions", `${sessionId}.json`)
+  return fs.existsSync(projCacheFile) ? projCacheFile : undefined
+}
+
+function isDshHeadlessAdoptableSession(
+  home: string,
+  sessionId: string,
+  filePath: string | undefined,
+  cwd: string,
+): boolean {
+  const candidate =
+    filePath &&
+    (filePath.endsWith(".jsonl.zstd") || filePath.endsWith(".jsonl.zst") || filePath.endsWith(".jsonl")) &&
+    fs.existsSync(filePath)
+      ? filePath
+      : findDshSessionFile(home, sessionId)
+
+  if (!candidate || candidate.endsWith(".json") || !fs.existsSync(candidate)) return false
+  const stat = fs.statSync(candidate, { throwIfNoEntry: false })
+  if (!stat || !stat.isFile() || stat.size <= 0 || stat.size > 32 * 1024 * 1024) return false
+
+  const firstLine = Option.getOrUndefined(
+    Option.liftThrowable(() => {
+      const rawText =
+        candidate.endsWith(".zstd") || candidate.endsWith(".zst")
+          ? zlib.zstdDecompressSync(fs.readFileSync(candidate)).toString("utf8")
+          : fs.readFileSync(candidate, "utf8")
+      return rawText
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => line.length > 0)
+    })(),
+  )
+  if (!firstLine) return false
+
+  const header = Option.getOrUndefined(decodeJsonUnknown(firstLine))
+  if (!isRecord(header)) return false
+  if (header.agentPreset !== undefined && header.agentPreset !== null) return false
+
+  const headerCwd = typeof header.cwd === "string" ? header.cwd.trim() : ""
+  if (!headerCwd) return false
+
+  const canonicalize = (target: string) =>
+    Option.getOrElse(
+      Option.liftThrowable(() => fs.realpathSync.native(target))(),
+      () => path.resolve(target),
+    )
+
+  return canonicalize(headerCwd) === canonicalize(cwd)
 }
 
 function findOpencodeSessionFile(home: string, sessionId: string) {
@@ -1947,15 +2020,25 @@ type DshModelRoute = {
   readonly displayName: string
   readonly baseURL: string
   readonly apiKey: string
-  readonly api: "openai-completions" | "anthropic-messages"
+  readonly api: "openai-completions" | "openai-responses" | "anthropic-messages"
   readonly modelId: string
+  readonly limit: ResolvedModelLimit
+}
+
+function isChatTextModelId(raw: string): boolean {
+  const modelKey = raw.includes("/") ? raw.slice(raw.indexOf("/") + 1).trim() : raw.trim()
+  return isValidDiscoveredModelId(modelKey) && !isNonChatUtilityModel(modelKey) && detectModelModality(modelKey) === "text"
 }
 
 function resolveDshModelRoute(home: string, subModel: string | undefined): DshModelRoute | undefined {
+  const appData = process.env.APPDATA ?? path.join(home, "AppData", "Roaming")
+  const localAppData = process.env.LOCALAPPDATA ?? path.join(home, "AppData", "Local")
   const cfg =
     readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json")) ??
     readJsonRecordSafe(path.join(home, ".config", "opencode", "config.json")) ??
-    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json"))
+    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json")) ??
+    readJsonRecordSafe(path.join(appData, "opencode", "opencode.json")) ??
+    readJsonRecordSafe(path.join(localAppData, "opencode", "opencode.json"))
   if (!cfg) return undefined
 
   const rawProviders = isRecord(cfg.provider) ? cfg.provider : isRecord(cfg.providers) ? cfg.providers : {}
@@ -1965,7 +2048,7 @@ function resolveDshModelRoute(home: string, subModel: string | undefined): DshMo
     const baseURL = typeof opts?.baseURL === "string" ? opts.baseURL.trim() : ""
     const apiKey = typeof opts?.apiKey === "string" ? opts.apiKey.trim() : ""
     const displayName = typeof val.name === "string" && val.name.trim() ? val.name.trim() : key
-    const models = isRecord(val.models) ? Object.keys(val.models) : []
+    const models = isRecord(val.models) ? Object.keys(val.models).filter(isChatTextModelId) : []
     if (!baseURL || !apiKey) return []
     const safeKey = key.toLowerCase().replace(/[^a-z0-9-]+/g, "-") || "pigu"
     return [{ key, safeKey, displayName, baseURL, apiKey, models }]
@@ -2015,6 +2098,7 @@ function resolveDshModelRoute(home: string, subModel: string | undefined): DshMo
     const primary = entries[0]
     if (!primary) return undefined
     const defaultModel =
+      primary.models.find((m) => /deepseek.*flash/i.test(m)) ??
       primary.models.find((m) => m === "gemini-3.8-flash") ??
       primary.models.find((m) => /gemini-3\.8-flash/i.test(m)) ??
       primary.models[0] ??
@@ -2024,17 +2108,36 @@ function resolveDshModelRoute(home: string, subModel: string | undefined): DshMo
 
   if (!matched) return undefined
 
-  const api: "openai-completions" | "anthropic-messages" = /anthropic/i.test(matched.provider.baseURL)
-    ? "anthropic-messages"
-    : "openai-completions"
+  const detectedProtocol = detectModelProtocol(matched.modelId, matched.provider.baseURL)
+  const api: DshModelRoute["api"] =
+    detectedProtocol === "anthropic"
+      ? "anthropic-messages"
+      : detectedProtocol === "openai-responses"
+        ? "openai-responses"
+        : "openai-completions"
+
+  const resolvedBaseURL = (() => {
+    if (api === "anthropic-messages") {
+      return protocolBaseURL(matched.provider.baseURL, "anthropic").replace(/\/v1$/i, "")
+    }
+    if (api === "openai-responses") {
+      return protocolBaseURL(matched.provider.baseURL, "openai-responses")
+    }
+    const chatBase = protocolBaseURL(matched.provider.baseURL, "openai-chat")
+    if (/generativelanguage\.googleapis\.com/i.test(chatBase) && !/\/openai(\/|$)/i.test(chatBase)) {
+      return `${chatBase.replace(/\/+$/, "")}/openai`
+    }
+    return chatBase
+  })()
 
   return {
     providerKey: matched.provider.safeKey,
     displayName: matched.provider.displayName,
-    baseURL: matched.provider.baseURL,
+    baseURL: resolvedBaseURL || matched.provider.baseURL,
     apiKey: matched.provider.apiKey,
     api,
     modelId: matched.modelId,
+    limit: resolveModelLimit(matched.modelId),
   }
 }
 
@@ -2045,6 +2148,7 @@ async function runDshProcess(input: {
   prompt: string
   sessionId?: string
   resume: boolean
+  noSessionPersistence?: boolean
   subModel?: string
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
@@ -2067,6 +2171,14 @@ async function runDshProcess(input: {
     "- id: dsh-dafeiyu",
     "  config:",
     "    enabled: false",
+    ...(input.noSessionPersistence
+      ? [
+          "- id: session-persistence-jsonl",
+          "  disabled: true",
+          "- id: session-projection-cache",
+          "  disabled: true",
+        ]
+      : []),
     ...(route
       ? [
           "- id: llm-pi-ai",
@@ -2079,8 +2191,8 @@ async function runDshProcess(input: {
           `        baseURL: ${JSON.stringify(route.baseURL)}`,
           "        models:",
           `          - id: ${JSON.stringify(route.modelId)}`,
-          "            contextWindow: 1000000",
-          "            maxTokens: 32768",
+          `            contextWindow: ${route.limit.context}`,
+          `            maxTokens: ${route.limit.output}`,
           "- id: agent-default-model",
           "  config:",
           `    provider: ${JSON.stringify(route.providerKey)}`,
@@ -2170,9 +2282,26 @@ async function runDshProcess(input: {
       }
       if (row.type === "status" && row.phase === "step_end" && isRecord(row.usage)) {
         if (typeof row.usage.inputTokens === "number") input.emitter.state.inputTokens = row.usage.inputTokens
-        if (typeof row.usage.outputTokens === "number") input.emitter.state.outputTokens = row.usage.outputTokens
+        if (typeof row.usage.outputTokens === "number") input.emitter.state.outputTokens += row.usage.outputTokens
         if (typeof row.usage.reasoningTokens === "number")
-          input.emitter.state.reasoningTokens = row.usage.reasoningTokens
+          input.emitter.state.reasoningTokens += row.usage.reasoningTokens
+        if (typeof row.usage.cacheReadTokens === "number")
+          input.emitter.state.cacheReadTokens = row.usage.cacheReadTokens
+        if (typeof row.usage.cacheWriteTokens === "number")
+          input.emitter.state.cacheWriteTokens = row.usage.cacheWriteTokens
+        return
+      }
+      if (row.type === "status" && row.phase === "turn_end" && isRecord(row.reason) && row.reason.kind === "error") {
+        state.hadError = true
+        const errMsg =
+          typeof row.reason.message === "string"
+            ? row.reason.message
+            : typeof row.reason.error === "string"
+              ? row.reason.error
+              : ""
+        if (errMsg && !input.emitter.state.hasText) {
+          input.emitter.pushText(`deepseek harness 执行出错：${errMsg}`)
+        }
         return
       }
       if (row.type === "final" && typeof row.text === "string" && row.text && !input.emitter.state.hasText) {
@@ -2352,6 +2481,23 @@ function cleanupEphemeralCliSession(home: string, engine: LocalEngine, sessionId
       }
       return
     }
+    if (engine === "deepseek-harness") {
+      const dshRoot = resolveDshRoot(home)
+      const projCacheFile = path.join(dshRoot, "storages", "session_projcache", "sessions", `${sessionId}.json`)
+      if (fs.existsSync(projCacheFile)) fs.rmSync(projCacheFile, { force: true })
+      const sessionsDir = path.join(dshRoot, "sessions")
+      if (fs.existsSync(sessionsDir)) {
+        const sessionDirs = fs
+          .readdirSync(sessionsDir, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .map((entry) => path.join(sessionsDir, entry.name, sessionId))
+          .filter((dir) => fs.existsSync(dir))
+        for (const dir of sessionDirs) {
+          fs.rmSync(dir, { recursive: true, force: true })
+        }
+      }
+      return
+    }
     const file = findEngineSessionFile(home, engine, sessionId)
     if (file && fs.existsSync(file) && !file.endsWith("opencode.db")) {
       fs.rmSync(file, { force: true })
@@ -2482,6 +2628,7 @@ async function dispatchLocalEngineRun(input: {
       prompt: input.prompt,
       sessionId: input.sessionId,
       resume: input.canResume,
+      noSessionPersistence: input.cliAttachmentFlags.includes("--no-session-persistence"),
       subModel: input.subModel,
       signal: input.signal,
       emitter: input.emitter,
@@ -2518,12 +2665,17 @@ function getEngineRecord(
     legacySessionId ??
     (initialSource === engine ? parsedMetadata?.externalID : undefined)
 
-  const filePath =
+  const rawFilePath =
     fromMap?.filePath ??
     legacyFilePath ??
     (initialSource === engine
       ? parsedMetadata?.filePath ?? findEngineSessionFile(home, engine, sessionId)
       : findEngineSessionFile(home, engine, sessionId))
+
+  const filePath =
+    engine === "deepseek-harness" && sessionId && (!rawFilePath || rawFilePath.endsWith(".json"))
+      ? (findDshSessionFile(home, sessionId) ?? rawFilePath)
+      : rawFilePath
 
   return { sessionId, filePath }
 }
@@ -2603,7 +2755,7 @@ class LocalLanguageModel implements LanguageModelV3 {
                 ? ["--disable-slash-commands"]
                 : currentEngine === "codex"
                   ? ["--ephemeral"]
-                  : currentEngine === "claude"
+                  : currentEngine === "claude" || currentEngine === "deepseek-harness"
                     ? ["--no-session-persistence"]
                     : []
 
@@ -2670,7 +2822,12 @@ class LocalLanguageModel implements LanguageModelV3 {
           const rawCanResume =
             currentEngine === "agy"
               ? Boolean(currentRecord.sessionId && isAgyCliSession(home, currentRecord.sessionId))
-              : Boolean(currentRecord.sessionId && currentRecord.filePath && fs.existsSync(currentRecord.filePath))
+              : currentEngine === "deepseek-harness"
+                ? Boolean(
+                    currentRecord.sessionId &&
+                      isDshHeadlessAdoptableSession(home, currentRecord.sessionId, currentRecord.filePath, cwd),
+                  )
+                : Boolean(currentRecord.sessionId && currentRecord.filePath && fs.existsSync(currentRecord.filePath))
 
           const canResume = rawCanResume && !(hasCompactionReset && !sessionID.startsWith("ses_ext_"))
 
@@ -3415,11 +3572,14 @@ function discoverOpencodeConfigModels(home: string): { defaultModel?: string; mo
     readJsonRecordSafe(path.join(appData, "opencode", "opencode.json")) ??
     readJsonRecordSafe(path.join(localAppData, "opencode", "opencode.json"))
   if (!cfg) return { models: [] }
-  const defaultModel = typeof cfg.model === "string" ? cfg.model.trim() : undefined
+  const rawDefaultModel = typeof cfg.model === "string" ? cfg.model.trim() : undefined
+  const defaultModel = rawDefaultModel && isChatTextModelId(rawDefaultModel) ? rawDefaultModel : undefined
   const providers = isRecord(cfg.provider) ? cfg.provider : isRecord(cfg.providers) ? cfg.providers : {}
   const configuredModels = Object.entries(providers).flatMap(([providerKey, providerVal]) => {
     if (!isRecord(providerVal) || !isRecord(providerVal.models)) return []
-    return Object.keys(providerVal.models).map((modelKey) => `${providerKey}/${modelKey}`)
+    return Object.keys(providerVal.models)
+      .filter(isChatTextModelId)
+      .map((modelKey) => `${providerKey}/${modelKey}`)
   })
   return {
     defaultModel,
@@ -3428,29 +3588,56 @@ function discoverOpencodeConfigModels(home: string): { defaultModel?: string; mo
 }
 
 function discoverDshConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
+  const dshRoot = resolveDshRoot(home)
   const patchFiles = [
-    path.join(home, ".dsh", "profiles", "desktop", "cordis.patch.yml"),
-    path.join(home, ".dsh", "profiles", "headless", "cordis.patch.yml"),
+    path.join(dshRoot, "profiles", "desktop", "cordis.patch.yml"),
+    path.join(dshRoot, "profiles", "headless", "cordis.patch.yml"),
   ]
+  const defaultCandidates: string[] = []
   const patchModels: string[] = []
   for (const patchPath of patchFiles) {
     if (!fs.existsSync(patchPath)) continue
     const text = fs.readFileSync(patchPath, "utf8")
+    let modelsIndent = -1
     for (const line of text.split(/\r?\n/)) {
+      const trimmed = line.trim()
+      if (!trimmed || trimmed.startsWith("#")) continue
+      const indent = line.length - line.trimStart().length
+      if (modelsIndent >= 0 && indent <= modelsIndent) {
+        modelsIndent = -1
+      }
+      const modelsHeader = /^(\s*)models:\s*$/.exec(line)
+      if (modelsHeader) {
+        modelsIndent = (modelsHeader[1] ?? "").length
+        continue
+      }
+      if (modelsIndent >= 0) {
+        const idMatch = /^\s*-\s*id:\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9._/-]+))\s*$/.exec(line)
+        const idVal = (idMatch?.[1] ?? idMatch?.[2] ?? idMatch?.[3])?.trim()
+        if (idVal && isChatTextModelId(idVal)) patchModels.push(idVal)
+        continue
+      }
       const modelMatch = /^\s*model:\s*(?:"([^"]+)"|'([^']+)'|([A-Za-z0-9._/-]+))\s*$/.exec(line)
       const val = (modelMatch?.[1] ?? modelMatch?.[2] ?? modelMatch?.[3])?.trim()
-      if (val && isValidDiscoveredModelId(val)) patchModels.push(val)
+      if (val && isChatTextModelId(val)) {
+        defaultCandidates.push(val)
+        patchModels.push(val)
+      }
     }
   }
   const opencodeDiscovered = discoverOpencodeConfigModels(home)
-  const defaultModel = patchModels[0] ?? opencodeDiscovered.defaultModel
+  const opencodeBareModels = opencodeDiscovered.models.map((item) => item.replace(/^[^/]+\//, ""))
+  const defaultModel =
+    defaultCandidates[0] ??
+    patchModels[0] ??
+    (opencodeDiscovered.defaultModel ? opencodeDiscovered.defaultModel.replace(/^[^/]+\//, "") : undefined)
   return {
     defaultModel,
     models: [
       ...new Set([
         ...(defaultModel ? [defaultModel] : []),
         ...patchModels,
-        ...opencodeDiscovered.models,
+        ...opencodeBareModels,
       ]),
     ],
   }

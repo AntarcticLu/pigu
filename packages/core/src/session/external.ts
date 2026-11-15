@@ -24,6 +24,7 @@ import {
   cleanTitle,
   decodeJson,
   INITIAL_TAIL_BYTES,
+  isDshBrokenFallbackTitle,
   isInjectedPromptBoilerplate,
   isRecord,
   normalizeCandidatePath,
@@ -50,7 +51,7 @@ import type { MessagesInput } from "./store.js"
 
 export type { SourceApp }
 
-const EXTERNAL_PARSER_VERSION = 6
+const EXTERNAL_PARSER_VERSION = 7
 const SEQ_BASE = 1_000_000
 const REVIVAL_GRACE_MS = 5_000
 
@@ -1087,6 +1088,7 @@ const scanDsh = Effect.fn("SessionExternal.scanDsh")(function* (
         filePath: fullPath,
         cwd: parsed.meta.cwd,
         title: parsed.meta.title ? cleanTitle(parsed.meta.title) : cleanTitle(firstUser.text),
+        ...(parsed.meta.model ? { model: parsed.meta.model } : {}),
         createdAt,
         updatedAt,
         entries: parsed.entries,
@@ -1129,10 +1131,12 @@ const scanDsh = Effect.fn("SessionExternal.scanDsh")(function* (
         (typeof workingDirRow?.val === "string" ? workingDirRow.val : undefined) ??
         (typeof identity?.cwd === "string" ? identity.cwd : "")
       const firstText = stripIdeMetadataTags(typeof firstInput?.text === "string" ? firstInput.text : "").trim()
-      const rawTitle = typeof titleRow?.val === "string" && titleRow.val.trim() ? titleRow.val.trim() : firstText
+      const rawTitleCandidate = typeof titleRow?.val === "string" ? titleRow.val.trim() : ""
+      const rawTitle =
+        rawTitleCandidate && !isDshBrokenFallbackTitle(rawTitleCandidate) ? rawTitleCandidate : firstText
       const cleanedTitle = cleanTitle(rawTitle)
 
-      if (!firstText || !cleanedTitle) return undefined
+      if (!firstText || !cleanedTitle || isDshBrokenFallbackTitle(cleanedTitle)) return undefined
       const mtime = fileMtimeMs(fullPath)
       const createdAt = Math.floor(typeof identity?.createdAt === "number" ? identity.createdAt : mtime || Date.now())
       const updatedAt = Math.max(createdAt, mtime || createdAt)
@@ -1896,7 +1900,10 @@ function entryToMessageRow(input: {
 function isIncrementalJsonlPath(filePath: string): boolean {
   if (!filePath) return false
   const lower = filePath.toLowerCase()
-  return lower.endsWith(".jsonl") && !lower.endsWith("history.jsonl")
+  return (
+    (lower.endsWith(".jsonl") || lower.endsWith(".jsonl.zstd") || lower.endsWith(".jsonl.zst")) &&
+    !lower.endsWith("history.jsonl")
+  )
 }
 
 const knownSources: ReadonlyArray<SourceApp> = [
