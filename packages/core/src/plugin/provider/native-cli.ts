@@ -379,7 +379,10 @@ function extractSubModel(modelId: string): string | undefined {
 }
 
 function findClaudeSessionFile(home: string, sessionId: string) {
-  const projectsRoot = path.join(home, ".claude", "projects")
+  const claudeRoot = process.env.CLAUDE_CONFIG_DIR
+    ? path.resolve(process.env.CLAUDE_CONFIG_DIR)
+    : path.join(home, ".claude")
+  const projectsRoot = path.join(claudeRoot, "projects")
 
   if (!fs.existsSync(projectsRoot)) return undefined
   const projectDirs = fs.readdirSync(projectsRoot, { withFileTypes: true }).filter((entry) => entry.isDirectory())
@@ -770,14 +773,15 @@ function makeEmptyUsage(
   outputTokens = 0,
   reasoningTokens = 0,
   cacheReadTokens = 0,
+  cacheWriteTokens = 0,
 ): LanguageModelV3Usage {
-  const totalInput = inputTokens + cacheReadTokens
+  const totalInput = inputTokens + cacheReadTokens + cacheWriteTokens
   return {
     inputTokens: {
       total: totalInput,
       noCache: inputTokens,
       cacheRead: cacheReadTokens,
-      cacheWrite: 0,
+      cacheWrite: cacheWriteTokens,
     },
     outputTokens: {
       total: outputTokens,
@@ -802,6 +806,7 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
     outputTokens: 0,
     reasoningTokens: 0,
     cacheReadTokens: 0,
+    cacheWriteTokens: 0,
   }
 
   const ensureMetadata = () => {
@@ -873,6 +878,7 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
         state.outputTokens,
         state.reasoningTokens,
         state.cacheReadTokens,
+        state.cacheWriteTokens,
       ),
     })
   }
@@ -901,6 +907,8 @@ async function runStreamJsonProcess(input: {
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
+  const extraFlags = input.extraFlags ?? []
+  const noSessionPersistence = extraFlags.includes("--no-session-persistence")
   const targetSessionId = input.sessionId ?? crypto.randomUUID()
   const sessionFlag =
     input.mode === "agy"
@@ -913,10 +921,11 @@ async function runStreamJsonProcess(input: {
           : []
         : input.resume
           ? ["--resume", targetSessionId]
-          : ["--session-id", targetSessionId]
+          : noSessionPersistence
+            ? []
+            : ["--session-id", targetSessionId]
 
   const modelFlag = input.subModel ? ["--model", input.subModel] : []
-  const extraFlags = input.extraFlags ?? []
 
   const effortFlag =
     (input.mode === "claude" || input.mode === "agy") &&
@@ -979,7 +988,8 @@ async function runStreamJsonProcess(input: {
     })
 
     const state = {
-      detectedSessionId: input.sessionId ?? (input.mode === "claude" ? targetSessionId : undefined),
+      detectedSessionId:
+        input.sessionId ?? (input.mode === "claude" && !noSessionPersistence ? targetSessionId : undefined),
       streamedMessageIds: new Set<string>(),
       currentMessageId: "",
       plainLines: [] as string[],
@@ -1141,10 +1151,18 @@ async function runStreamJsonProcess(input: {
         if (isRecord(row.usage)) {
           if (typeof row.usage.input_tokens === "number") input.emitter.state.inputTokens = row.usage.input_tokens
           if (typeof row.usage.output_tokens === "number") input.emitter.state.outputTokens = row.usage.output_tokens
+          if (typeof row.usage.cache_read_input_tokens === "number") {
+            input.emitter.state.cacheReadTokens = row.usage.cache_read_input_tokens
+          }
+          if (typeof row.usage.cache_creation_input_tokens === "number") {
+            input.emitter.state.cacheWriteTokens = row.usage.cache_creation_input_tokens
+          }
         }
 
         if (!input.emitter.state.hasText && typeof row.result === "string" && row.result.trim()) {
-          input.emitter.pushText(row.result)
+          input.emitter.pushText(
+            row.is_error === true ? `${input.engineLabel} 执行出错：${row.result}` : row.result,
+          )
         }
       }
     }
@@ -2585,7 +2603,9 @@ class LocalLanguageModel implements LanguageModelV3 {
                 ? ["--disable-slash-commands"]
                 : currentEngine === "codex"
                   ? ["--ephemeral"]
-                  : []
+                  : currentEngine === "claude"
+                    ? ["--no-session-persistence"]
+                    : []
 
             const ephemeralResult = await dispatchLocalEngineRun({
               currentEngine,
@@ -3271,6 +3291,29 @@ function discoverClaudeRecentSessionModels(claudeRoot: string): readonly string[
   return [...new Set(found)]
 }
 
+function discoverClaudeRelayModels(home: string, rawBaseUrl: string | undefined): readonly string[] {
+  if (!rawBaseUrl) return []
+  const relayOrigin = URL.parse(rawBaseUrl.trim())?.origin
+  if (!relayOrigin) return []
+  const cfg =
+    readJsonRecordSafe(path.join(home, ".config", "opencode", "opencode.json")) ??
+    readJsonRecordSafe(path.join(home, ".config", "opencode", "config.json")) ??
+    readJsonRecordSafe(path.join(home, ".opencode", "opencode.json"))
+  if (!cfg) return []
+  const providers = isRecord(cfg.provider) ? cfg.provider : isRecord(cfg.providers) ? cfg.providers : {}
+  return Object.values(providers).flatMap((providerVal) => {
+    if (!isRecord(providerVal) || !isRecord(providerVal.models)) return []
+    const opts = isRecord(providerVal.options)
+      ? providerVal.options
+      : isRecord(providerVal.settings)
+        ? providerVal.settings
+        : undefined
+    const baseUrl = typeof opts?.baseURL === "string" ? opts.baseURL.trim() : ""
+    if (!baseUrl || URL.parse(baseUrl)?.origin !== relayOrigin) return []
+    return Object.keys(providerVal.models).filter((id) => id.startsWith("claude-") && isValidDiscoveredModelId(id))
+  })
+}
+
 function discoverClaudeConfigModels(home: string): { defaultModel?: string; models: readonly string[] } {
   const claudeRoot = process.env.CLAUDE_CONFIG_DIR
     ? path.resolve(process.env.CLAUDE_CONFIG_DIR)
@@ -3307,6 +3350,12 @@ function discoverClaudeConfigModels(home: string): { defaultModel?: string; mode
     .filter((val): val is string => typeof val === "string" && isValidDiscoveredModelId(val))
     .map(normalizeClaudeModelId)
 
+  const rawBaseUrl =
+    (typeof localEnv?.ANTHROPIC_BASE_URL === "string" && localEnv.ANTHROPIC_BASE_URL.trim()) ||
+    (typeof env?.ANTHROPIC_BASE_URL === "string" && env.ANTHROPIC_BASE_URL.trim()) ||
+    undefined
+  const relayModels = discoverClaudeRelayModels(home, rawBaseUrl)
+
   const recentSessionModels = discoverClaudeRecentSessionModels(claudeRoot)
 
   const claudeJson = readJsonRecordSafe(path.join(home, ".claude.json"))
@@ -3326,7 +3375,8 @@ function discoverClaudeConfigModels(home: string): { defaultModel?: string; mode
           .map(normalizeClaudeModelId)
       : []
 
-  const defaultModel = configuredDefault ?? recentSessionModels[0] ?? claudeJsonModels[0] ?? usageModels[0]
+  const defaultModel =
+    configuredDefault ?? relayModels[0] ?? recentSessionModels[0] ?? claudeJsonModels[0] ?? usageModels[0]
 
   return {
     defaultModel,
@@ -3334,6 +3384,7 @@ function discoverClaudeConfigModels(home: string): { defaultModel?: string; mode
       ...new Set([
         ...(defaultModel ? [defaultModel] : []),
         ...envModels,
+        ...relayModels,
         ...recentSessionModels,
         ...claudeJsonModels,
         ...usageModels,

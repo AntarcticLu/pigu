@@ -13,6 +13,7 @@ import { Project } from "@opencode/core/project"
 import { Session } from "@opencode/core/session"
 import { SessionExecution } from "@opencode/core/session/execution"
 import { SessionExternal } from "@opencode/core/session/external"
+import { SessionExternalParse } from "@opencode/core/session/external-parse"
 import { SessionMessage } from "@opencode/core/session/message"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
@@ -1297,6 +1298,186 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
             expect(afterSwitchMsgs.at(-1)?.type).toBe("model-switched")
           }),
         )
+      }),
+  )
+
+  it.effect(
+    "cleans Claude Code 2.1.170 compaction wrappers, preserves pre/post token counts, and snaps chunk boundaries cleanly",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped()
+        const filePath = path.join(tmp.path, "claude-2-170.jsonl")
+        const padding = "x".repeat(1200)
+
+        const rawLines = [
+          JSON.stringify({
+            parentUuid: null,
+            isSidechain: false,
+            type: "user",
+            cwd: tmp.path,
+            timestamp: "2026-11-15T10:00:00Z",
+            message: { role: "user", content: "Audit the auth service" },
+          }),
+          // Claude 2.1.170 places `message` (often >768 bytes) before `"type":"assistant"`
+          JSON.stringify({
+            parentUuid: "u1",
+            isSidechain: false,
+            message: {
+              id: "msg_multi_1",
+              model: "claude-sonnet-5-5",
+              container: null,
+              content: [{ type: "thinking", signature: padding, thinking: "Checking auth endpoints." }],
+            },
+            type: "assistant",
+            timestamp: "2026-11-15T10:00:01Z",
+          }),
+          JSON.stringify({
+            parentUuid: "u2",
+            isSidechain: false,
+            message: {
+              id: "msg_multi_1",
+              model: "claude-sonnet-5-5",
+              container: null,
+              content: [{ type: "text", text: `Auth check complete. ${padding}` }],
+            },
+            type: "assistant",
+            timestamp: "2026-11-15T10:00:02Z",
+          }),
+          JSON.stringify({
+            parentUuid: "u3",
+            isSidechain: false,
+            type: "user",
+            isMeta: true,
+            timestamp: "2026-11-15T10:01:00Z",
+            message: {
+              role: "user",
+              content: "<local-command-caveat>Caveat: The messages below were generated locally</local-command-caveat>",
+            },
+          }),
+          JSON.stringify({
+            parentUuid: "u4",
+            isSidechain: false,
+            type: "user",
+            timestamp: "2026-11-15T10:01:01Z",
+            message: {
+              role: "user",
+              content: "<command-name>/compact</command-name>\n<command-message>compact</command-message>",
+            },
+          }),
+          JSON.stringify({
+            parentUuid: null,
+            isSidechain: false,
+            type: "system",
+            subtype: "compact_boundary",
+            timestamp: "2026-11-15T10:01:02Z",
+            compactMetadata: { trigger: "manual", preTokens: 516207, postTokens: 8548 },
+          }),
+          JSON.stringify({
+            parentUuid: "cb_1",
+            isSidechain: false,
+            type: "user",
+            message: {
+              role: "user",
+              content: [
+                "This session is being continued from a previous conversation that ran out of context. The summary below covers the earlier portion of the conversation.",
+                "",
+                "Summary:",
+                "1. Primary Request and Intent:",
+                "   - Audited auth service and verified token middleware.",
+                "",
+                `If you need specific details from before compaction (like exact code snippets), read the full transcript at: ${filePath}`,
+                'Continue the conversation from where it left off without asking the user any further questions. Resume directly — do not acknowledge the summary. Pick up the last task as if the break never happened.',
+              ].join("\n"),
+            },
+            isCompactSummary: true,
+            timestamp: "2026-11-15T10:01:03Z",
+          }),
+          JSON.stringify({
+            parentUuid: "cb_2",
+            isSidechain: false,
+            type: "user",
+            timestamp: "2026-11-15T10:02:00Z",
+            message: { role: "user", content: "Continue with rate limiting" },
+          }),
+          JSON.stringify({
+            parentUuid: "u5",
+            isSidechain: false,
+            message: {
+              id: "msg_multi_2",
+              model: "claude-sonnet-5-5",
+              container: null,
+              content: [{ type: "text", text: "Added rate limiting." }],
+            },
+            type: "assistant",
+            timestamp: "2026-11-15T10:02:02Z",
+          }),
+        ]
+
+        const fileBytes = yield* Effect.promise(async () => {
+          const content = `${rawLines.join("\n")}\n`
+          await fs.writeFile(filePath, content, "utf8")
+          return Buffer.byteLength(content, "utf8")
+        })
+
+        const fullEntries = SessionExternalParse.parseClaudeLines(rawLines, Date.now()).entries
+        expect(fullEntries.map((e) => e.kind)).toEqual(["user", "assistant", "compaction", "user", "assistant"])
+
+        const compaction = fullEntries[2]
+        expect(compaction?.kind).toBe("compaction")
+        if (compaction?.kind === "compaction") {
+          expect(compaction.reason).toBe("manual")
+          expect(compaction.tokens).toEqual({ input: 516207, output: 8548 })
+          expect(compaction.summary.startsWith("Summary:\n1. Primary Request and Intent:")).toBe(true)
+          expect(compaction.summary).not.toContain("This session is being continued")
+          expect(compaction.summary).not.toContain("If you need specific details from before compaction")
+          expect(compaction.summary).not.toContain("Pick up the last task")
+        }
+
+        // Target a byte offset right inside the second row of `msg_multi_1` and verify it snaps back to the user turn
+        const midAssistantOffset = Buffer.byteLength(`${rawLines.slice(0, 2).join("\n")}\n`, "utf8") + 10
+        const tailWin = SessionExternalParse.readJsonlWindowSync({
+          fullPath: filePath,
+          targetStart: midAssistantOffset,
+          endOffset: fileBytes,
+          source: "claude",
+        })
+        expect(tailWin.startOffset).toBe(0)
+        expect(SessionExternalParse.parseClaudeLines(tailWin.lines, Date.now()).entries.length).toBe(fullEntries.length)
+
+        // 1) Target a byte offset inside `compact_boundary` (so next line is `isCompactSummary`) -> snaps back onto `compact_boundary`
+        const boundaryOffset = Buffer.byteLength(`${rawLines.slice(0, 5).join("\n")}\n`, "utf8")
+        const compactWin = SessionExternalParse.readJsonlWindowSync({
+          fullPath: filePath,
+          targetStart: boundaryOffset + 5,
+          endOffset: fileBytes,
+          source: "claude",
+        })
+        expect(compactWin.startOffset).toBe(boundaryOffset)
+        const compactSliceEntries = SessionExternalParse.parseClaudeLines(compactWin.lines, Date.now()).entries
+        expect(compactSliceEntries.map((e) => e.kind)).toEqual(["compaction", "user", "assistant"])
+        if (compactSliceEntries[0]?.kind === "compaction") {
+          expect(compactSliceEntries[0].tokens).toEqual({ input: 516207, output: 8548 })
+        }
+
+        // 2) Target a byte offset inside `isCompactSummary` -> tail starts at next user turn and preceding backfill chunk keeps boundary+summary intact
+        const summaryRowOffset = Buffer.byteLength(`${rawLines.slice(0, 6).join("\n")}\n`, "utf8") + 5
+        const afterSummaryWin = SessionExternalParse.readJsonlWindowSync({
+          fullPath: filePath,
+          targetStart: summaryRowOffset,
+          endOffset: fileBytes,
+          source: "claude",
+        })
+        const beforeSummaryWin = SessionExternalParse.readJsonlWindowSync({
+          fullPath: filePath,
+          targetStart: 0,
+          endOffset: afterSummaryWin.startOffset,
+          source: "claude",
+        })
+        const stitched = [
+          ...SessionExternalParse.parseClaudeLines(beforeSummaryWin.lines, Date.now()).entries,
+          ...SessionExternalParse.parseClaudeLines(afterSummaryWin.lines, Date.now()).entries,
+        ]
+        expect(stitched).toEqual([...fullEntries])
       }),
   )
 })

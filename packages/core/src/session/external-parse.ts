@@ -756,7 +756,19 @@ function isContinuationLine(source: SourceApp, line: string): boolean {
     )
   }
   if (source === "claude") {
-    return line.includes('"tool_result"')
+    if (line.includes('"compact_boundary"')) return false
+    const isUserRow = line.includes('"type":"user"') || line.includes('"type": "user"')
+    if (!isUserRow) return true
+    return (
+      line.includes('"tool_result"') ||
+      line.includes('"tool_use_id"') ||
+      line.includes('"isCompactSummary"') ||
+      line.includes('"isMeta":true') ||
+      line.includes('"isMeta": true') ||
+      line.includes("This session is being continued from a previous conversation") ||
+      line.includes("<local-command") ||
+      line.includes("<command-name>")
+    )
   }
   if (source === "codex") {
     return (
@@ -914,6 +926,10 @@ export function readJsonlWindowSync(input: {
     while (candidateIdx > 0) {
       const sample = readLineSample(candidateIdx)
       if (isContinuationLine(input.source, sample)) {
+        candidateIdx -= 1
+        continue
+      }
+      if (input.source === "claude" && readLineSample(candidateIdx - 1).includes('"compact_boundary"')) {
         candidateIdx -= 1
         continue
       }
@@ -1284,6 +1300,21 @@ function extractInlineImageAttachments(parts: ReadonlyArray<unknown>): FileAttac
   })
 }
 
+function cleanClaudeCompactionSummary(raw: string): string {
+  const stripped = raw
+    .replace(
+      /^This session is being continued from a previous conversation(?:\s+that ran out of context\.\s*The summary below covers the earlier portion of the conversation\.|\.)\s*/i,
+      "",
+    )
+    .replace(/\n+If you need specific details from before compaction[\s\S]*$/i, "")
+    .replace(
+      /\n+(?:Please )?continue the conversation from where (?:we left it|it left) off without asking the user any further questions\.[\s\S]*$/i,
+      "",
+    )
+    .trim()
+  return stripped || raw.trim()
+}
+
 export function parseClaudeLines(
   lines: ReadonlyArray<string>,
   fallbackTime: number,
@@ -1322,6 +1353,7 @@ export function parseClaudeLines(
   const toolsByCallID = new Map<string, MutableTool>()
   let pendingCompactTrigger: "auto" | "manual" | undefined
   let pendingCompactTime = 0
+  let pendingCompactTokens: { readonly input: number; readonly output: number } | undefined
 
   for (let lineIdx = 0; lineIdx < lines.length; lineIdx += 1) {
     const json = decodeJson(lines[lineIdx]!)
@@ -1352,32 +1384,45 @@ export function parseClaudeLines(
           kind: "compaction",
           reason: pendingCompactTrigger,
           summary: "Context compacted by Claude Code.",
+          ...(pendingCompactTokens ? { tokens: pendingCompactTokens } : {}),
           time: pendingCompactTime || time,
         })
       }
       const meta = isRecord(row.compactMetadata) ? row.compactMetadata : undefined
+      const preTokens = asNumber(meta?.preTokens) ?? 0
+      const postTokens = asNumber(meta?.postTokens) ?? 0
       pendingCompactTrigger = meta?.trigger === "manual" ? "manual" : "auto"
       pendingCompactTime = time
+      pendingCompactTokens =
+        preTokens + postTokens > 0
+          ? {
+              input: Math.max(0, Math.floor(preTokens)),
+              output: Math.max(0, Math.floor(postTokens)),
+            }
+          : undefined
       continue
     }
 
     if (row.isCompactSummary === true) {
       const msg = isRecord(row.message) ? row.message : undefined
       const rawContent = msg?.content
-      const summary =
+      const rawSummary =
         typeof rawContent === "string"
           ? rawContent.trim()
           : Array.isArray(rawContent)
             ? extractTextFromContentArray(rawContent)
             : ""
+      const summary = rawSummary ? cleanClaudeCompactionSummary(rawSummary) : ""
       items.push({
         kind: "compaction",
         reason: pendingCompactTrigger ?? "auto",
         summary: summary || "Context compacted by Claude Code.",
+        ...(pendingCompactTokens ? { tokens: pendingCompactTokens } : {}),
         time: pendingCompactTime || time,
       })
       pendingCompactTrigger = undefined
       pendingCompactTime = 0
+      pendingCompactTokens = undefined
       continue
     }
 
@@ -1386,10 +1431,12 @@ export function parseClaudeLines(
         kind: "compaction",
         reason: pendingCompactTrigger,
         summary: "Context compacted by Claude Code.",
+        ...(pendingCompactTokens ? { tokens: pendingCompactTokens } : {}),
         time: pendingCompactTime || time,
       })
       pendingCompactTrigger = undefined
       pendingCompactTime = 0
+      pendingCompactTokens = undefined
     }
 
     if (row.type === "user") {
@@ -1509,6 +1556,7 @@ export function parseClaudeLines(
       kind: "compaction",
       reason: pendingCompactTrigger,
       summary: "Context compacted by Claude Code.",
+      ...(pendingCompactTokens ? { tokens: pendingCompactTokens } : {}),
       time: pendingCompactTime || updatedAt || fallbackTime,
     })
   }

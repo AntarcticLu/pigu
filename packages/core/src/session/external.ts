@@ -50,7 +50,7 @@ import type { MessagesInput } from "./store.js"
 
 export type { SourceApp }
 
-const EXTERNAL_PARSER_VERSION = 5
+const EXTERNAL_PARSER_VERSION = 6
 const SEQ_BASE = 1_000_000
 const REVIVAL_GRACE_MS = 5_000
 
