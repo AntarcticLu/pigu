@@ -50,7 +50,7 @@ import type { MessagesInput } from "./store.js"
 
 export type { SourceApp }
 
-const EXTERNAL_PARSER_VERSION = 4
+const EXTERNAL_PARSER_VERSION = 5
 const SEQ_BASE = 1_000_000
 const REVIVAL_GRACE_MS = 5_000
 
@@ -2382,6 +2382,14 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
 
     registerChild("claude", asString(kvRow.value.claudeSessionId), asString(kvRow.value.claudeFilePath))
     registerChild("codex", asString(kvRow.value.codexSessionId), asString(kvRow.value.codexFilePath))
+
+    const retired = Array.isArray(kvRow.value.retiredChildSessions) ? kvRow.value.retiredChildSessions : []
+    for (const item of retired) {
+      if (!isRecord(item)) continue
+      const src = asString(item.source)
+      if (!src || !knownSources.includes(src as SourceApp)) continue
+      registerChild(src as SourceApp, asString(item.sessionId), asString(item.filePath))
+    }
 
     const engines = isRecord(kvRow.value.engines) ? kvRow.value.engines : undefined
     if (!engines) continue

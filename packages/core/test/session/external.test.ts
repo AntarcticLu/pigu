@@ -465,8 +465,23 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
           }),
           JSON.stringify({
             timestamp: "2026-11-12T10:01:00Z",
+            type: "event_msg",
+            payload: { type: "context_compacted" },
+          }),
+          JSON.stringify({
+            timestamp: "2026-11-12T10:01:00Z",
             type: "compacted",
-            payload: { message: "Compacted earlier Codex exploration into summary." },
+            payload: {
+              message:
+                "Another language model started to solve this problem and produced a summary of its thinking process. You also have access to the state of the tools that were used by that language model. Use this to build on the work that has already been done and avoid duplicating work. Here is the summary produced by the other language model, use the information in this summary to assist with your own analysis:\nCompacted earlier Codex exploration into summary.",
+              latest_token_usage_record: {
+                usage: {
+                  input_tokens: 248000,
+                  cached_input_tokens: 190000,
+                  output_tokens: 3600,
+                },
+              },
+            },
           }),
           JSON.stringify({
             timestamp: "2026-11-12T10:02:00Z",
@@ -551,8 +566,17 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
           expect(imported?.title).toBe("Codex Refactor Pipeline")
 
           const messages = (yield* session.messages({ sessionID: expectedID, order: "desc", limit: 20 })).toReversed()
-          // Deduped user & assistant messages, with consecutive tool calls grouped cleanly!
+          // Deduped compaction, user & assistant messages, with consecutive tool calls grouped cleanly!
           expect(messages.map((m) => m.type)).toEqual(["compaction", "user", "assistant", "assistant"])
+
+          const codexCompaction = messages[0]
+          if (codexCompaction?.type === "compaction" && codexCompaction.status === "completed") {
+            expect(codexCompaction.summary).toBe("Compacted earlier Codex exploration into summary.")
+            expect(codexCompaction.summary).not.toContain("Another language model started to solve this problem")
+            expect(codexCompaction.tokens?.input).toBe(248000)
+            expect(codexCompaction.tokens?.cache.read).toBe(190000)
+            expect(codexCompaction.tokens?.output).toBe(3600)
+          }
 
           const toolsMsg = messages[2]
           if (toolsMsg?.type === "assistant") {
@@ -615,6 +639,11 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
             lines.push(
               JSON.stringify({
                 timestamp: ts,
+                type: "event_msg",
+                payload: { type: "task_started", turn_id: `turn_${i}` },
+              }),
+              JSON.stringify({
+                timestamp: ts,
                 type: "response_item",
                 payload: {
                   type: "message",
@@ -622,8 +651,21 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
                   content: [{ type: "input_text", text: `${label} user prompt` }],
                 },
               }),
-            )
-            lines.push(
+              JSON.stringify({
+                timestamp: ts,
+                type: "turn_context",
+                payload: { cwd: repoDir, model: "gpt-6.1-sol" },
+              }),
+              JSON.stringify({
+                timestamp: ts,
+                type: "event_msg",
+                payload: { type: "user_message", message: `${label} user prompt` },
+              }),
+              JSON.stringify({
+                timestamp: ts,
+                type: "event_msg",
+                payload: { type: "agent_message", message: `${label} assistant reply ${padding}` },
+              }),
               JSON.stringify({
                 timestamp: ts,
                 type: "response_item",
@@ -768,11 +810,32 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
       const repoDir = path.join(tmp.path, "dsh-repo")
       const projCacheDir = path.join(home, ".dsh", "storages", "session_projcache", "sessions")
       const childDshID = "child-dsh-owned-by-native-pigu"
+      const retiredDshID = "child-dsh-retired-before-compact"
       const standaloneDshID = "standalone-dsh-session-001"
 
       yield* Effect.promise(async () => {
         await fs.mkdir(path.join(repoDir, ".git"), { recursive: true })
         await fs.mkdir(projCacheDir, { recursive: true })
+
+        await fs.writeFile(
+          path.join(projCacheDir, `${retiredDshID}.json`),
+          JSON.stringify({
+            record: {
+              identity: { cwd: repoDir, createdAt: 1_759_999_990_000 },
+              rows: {
+                workingDirectory: { val: repoDir },
+                titleInput: {
+                  val: {
+                    first: {
+                      text: "Pre-compact child session",
+                    },
+                  },
+                },
+              },
+            },
+          }),
+          "utf8",
+        )
 
         await fs.writeFile(
           path.join(projCacheDir, `${childDshID}.json`),
@@ -836,6 +899,12 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
                     sessionId: childDshID,
                   },
                 },
+                retiredChildSessions: [
+                  {
+                    source: "deepseek-harness",
+                    sessionId: retiredDshID,
+                  },
+                ],
               },
               time_created: Date.now(),
               time_updated: Date.now(),
@@ -845,9 +914,11 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
           SessionExternal.resetForTesting()
           const listed = yield* session.list({ limit: 30 })
           const childExtID = SessionExternal.makeSessionID("deepseek-harness", childDshID)
+          const retiredExtID = SessionExternal.makeSessionID("deepseek-harness", retiredDshID)
           const standaloneExtID = SessionExternal.makeSessionID("deepseek-harness", standaloneDshID)
 
           expect(listed.data.some((item) => item.id === childExtID)).toBe(false)
+          expect(listed.data.some((item) => item.id === retiredExtID)).toBe(false)
           const standalone = listed.data.find((item) => item.id === standaloneExtID)
           expect(standalone).toBeDefined()
           expect(standalone?.title).toBe("独立DSH需求开发")

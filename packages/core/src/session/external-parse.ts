@@ -760,9 +760,41 @@ function isContinuationLine(source: SourceApp, line: string): boolean {
   }
   if (source === "codex") {
     return (
+      line.includes('"role":"assistant"') ||
+      line.includes('"role": "assistant"') ||
+      line.includes('"role":"developer"') ||
+      line.includes('"role": "developer"') ||
+      line.includes('"AgentMessage"') ||
+      line.includes('"agent_message"') ||
+      line.includes('"agent_reasoning"') ||
+      line.includes('"Reasoning"') ||
+      line.includes('"type":"reasoning"') ||
+      line.includes('"type": "reasoning"') ||
+      line.includes('"UserMessage"') ||
+      line.includes('"custom_tool_call"') ||
       line.includes('"custom_tool_call_output"') ||
+      line.includes('"function_call"') ||
       line.includes('"function_call_output"') ||
-      line.includes('"CommandExecution"')
+      line.includes('"tool_search_call"') ||
+      line.includes('"tool_search_output"') ||
+      line.includes('"web_search_call"') ||
+      line.includes('"image_generation_call"') ||
+      line.includes('"CommandExecution"') ||
+      line.includes('"FileChange"') ||
+      line.includes('"ContextCompaction"') ||
+      line.includes('"context_compacted"') ||
+      line.includes('"CollabAgentToolCall"') ||
+      line.includes('"ImageView"') ||
+      line.includes('"patch_apply_end"') ||
+      line.includes('"web_search_end"') ||
+      line.includes('"sub_agent_activity"') ||
+      line.includes('"token_usage_record"') ||
+      line.includes('"token_count"') ||
+      line.includes('"task_complete"') ||
+      line.includes('"thread_settings_applied"') ||
+      line.includes('"turn_aborted"') ||
+      line.includes('"world_state"') ||
+      line.includes('"turn_context"')
     )
   }
   if (source === "deepseek-harness") {
@@ -844,41 +876,86 @@ export function readJsonlWindowSync(input: {
   }
 
   const fd = nodeFs.openSync(input.fullPath, "r")
+  const minBoundaryPeek = Math.max(0, clampedTarget - BACKFILL_CHUNK_BYTES * 2)
   let peekStart = Math.max(0, clampedTarget - BOUNDARY_PEEK_BYTES)
-  let buf = Buffer.alloc(0)
-  let bytesRead = 0
+  let sliceBuf = Buffer.alloc(0)
+  let lineStarts: number[] = []
+  let candidateIdx = 0
 
   for (;;) {
     const span = end - peekStart
-    buf = Buffer.alloc(span)
-    bytesRead = nodeFs.readSync(fd, buf, 0, span, peekStart)
+    const buf = Buffer.alloc(span)
+    const bytesRead = nodeFs.readSync(fd, buf, 0, span, peekStart)
     const firstNl = buf.subarray(0, bytesRead).indexOf(0x0a)
-    if (peekStart === 0 || (firstNl >= 0 && firstNl + 1 < bytesRead)) break
-    peekStart = Math.max(0, peekStart - BACKFILL_CHUNK_BYTES)
+    if (peekStart > 0 && (firstNl < 0 || firstNl + 1 >= bytesRead)) {
+      peekStart = Math.max(0, peekStart - BACKFILL_CHUNK_BYTES)
+      continue
+    }
+
+    sliceBuf = buf.subarray(0, bytesRead)
+    lineStarts = peekStart === 0 ? [0] : []
+    for (let idx = 0; idx < sliceBuf.length - 1; idx += 1) {
+      if (sliceBuf[idx] === 0x0a) lineStarts.push(idx + 1)
+    }
+
+    if (lineStarts.length === 0) break
+
+    const desiredInBuf = clampedTarget - peekStart
+    candidateIdx = lineStarts.findIndex((pos) => pos >= desiredInBuf)
+    if (candidateIdx === -1) candidateIdx = lineStarts.length - 1
+
+    const readLineSample = (idx: number) => {
+      const startPos = lineStarts[idx]!
+      const nextPos = lineStarts[idx + 1] ?? sliceBuf.length
+      const sampleLen = Math.min(nextPos - startPos, 768)
+      return sliceBuf.subarray(startPos, startPos + sampleLen).toString("utf8")
+    }
+
+    while (candidateIdx > 0) {
+      const sample = readLineSample(candidateIdx)
+      if (isContinuationLine(input.source, sample)) {
+        candidateIdx -= 1
+        continue
+      }
+      if (
+        input.source === "codex" &&
+        (sample.includes('"role":"user"') ||
+          sample.includes('"role": "user"') ||
+          sample.includes('"user_message"'))
+      ) {
+        const prevSample = readLineSample(candidateIdx - 1)
+        if (
+          prevSample.includes('"user_message"') ||
+          prevSample.includes('"role":"user"') ||
+          prevSample.includes('"role": "user"') ||
+          prevSample.includes('"turn_context"') ||
+          prevSample.includes('"world_state"') ||
+          prevSample.includes('"role":"developer"') ||
+          prevSample.includes('"role": "developer"') ||
+          prevSample.includes('"task_started"') ||
+          prevSample.includes('"token_count"')
+        ) {
+          candidateIdx -= 1
+          continue
+        }
+      }
+      break
+    }
+
+    if (
+      candidateIdx === 0 &&
+      peekStart > minBoundaryPeek &&
+      isContinuationLine(input.source, readLineSample(0))
+    ) {
+      peekStart = Math.max(minBoundaryPeek, peekStart - BOUNDARY_PEEK_BYTES * 2)
+      continue
+    }
+    break
   }
   nodeFs.closeSync(fd)
 
-  const sliceBuf = buf.subarray(0, bytesRead)
-  const lineStarts: number[] = peekStart === 0 ? [0] : []
-  for (let idx = 0; idx < sliceBuf.length - 1; idx += 1) {
-    if (sliceBuf[idx] === 0x0a) lineStarts.push(idx + 1)
-  }
-
   if (lineStarts.length === 0) {
     return { lines: [], startOffset: end, endOffset: end, fileSize, mtimeMs }
-  }
-
-  const desiredInBuf = clampedTarget - peekStart
-  let candidateIdx = lineStarts.findIndex((pos) => pos >= desiredInBuf)
-  if (candidateIdx === -1) candidateIdx = lineStarts.length - 1
-
-  while (candidateIdx > 0) {
-    const startPos = lineStarts[candidateIdx]!
-    const nextPos = lineStarts[candidateIdx + 1] ?? sliceBuf.length
-    const sampleLen = Math.min(nextPos - startPos, 512)
-    const sample = sliceBuf.subarray(startPos, startPos + sampleLen).toString("utf8")
-    if (!isContinuationLine(input.source, sample)) break
-    candidateIdx -= 1
   }
 
   const chosenInBuf = lineStarts[candidateIdx]!
@@ -892,7 +969,7 @@ export function readJsonlWindowSync(input: {
   return {
     lines,
     startOffset: actualStart,
-    endOffset: peekStart + bytesRead,
+    endOffset: peekStart + sliceBuf.length,
     fileSize,
     mtimeMs,
   }
@@ -1478,6 +1555,16 @@ export function parseClaudeLines(
   }
 }
 
+function cleanCodexCompactionSummary(raw: string): string {
+  const stripped = raw
+    .replace(
+      /^Another language model started to solve this problem[\s\S]*?use the information in this summary to assist with your own analysis:\s*/i,
+      "",
+    )
+    .trim()
+  return stripped || raw.trim()
+}
+
 export function parseCodexLines(
   lines: ReadonlyArray<string>,
   fallbackTime: number,
@@ -1554,12 +1641,26 @@ export function parseCodexLines(
     })
   }
 
+  const pushPendingThinking = (raw: string) => {
+    const trimmed = raw.trim()
+    if (!trimmed) return
+    if (pendingThinking.at(-1) === trimmed) return
+    pendingThinking.push(trimmed)
+  }
+
   const attachToolCall = (tool: MutableCodexTool) => {
     toolsByCallID.set(tool.callID, tool)
     const thinking = pendingThinking.length > 0 ? pendingThinking.join("\n\n") : undefined
     pendingThinking = []
     const prev = items.at(-1)
-    if (prev && prev.kind === "assistant" && prev.tools && !prev.text && Math.abs(prev.time - tool.time) <= 5_000) {
+    if (
+      !thinking &&
+      prev &&
+      prev.kind === "assistant" &&
+      prev.tools &&
+      !prev.text &&
+      Math.abs(prev.time - tool.time) <= 5_000
+    ) {
       prev.tools.push(tool)
       return
     }
@@ -1605,12 +1706,32 @@ export function parseCodexLines(
             })
             .at(-1)
         : undefined
-      items.push({
+      const rawSummary = msg || replacementSummary || "Context compacted by Codex."
+      const usageRec = isRecord(payload?.latest_token_usage_record) ? payload.latest_token_usage_record : undefined
+      const usage = usageRec && isRecord(usageRec.usage) ? usageRec.usage : undefined
+      const inTokens = asNumber(usage?.input_tokens) ?? 0
+      const outTokens = asNumber(usage?.output_tokens) ?? 0
+      const cacheRead = asNumber(usage?.cached_input_tokens) ?? 0
+      const nextCompaction: ExternalEntry = {
         kind: "compaction",
         reason: "auto",
-        summary: msg || replacementSummary || "Context compacted by Codex.",
+        summary: cleanCodexCompactionSummary(rawSummary),
+        ...(inTokens + outTokens + cacheRead > 0
+          ? {
+              tokens: {
+                input: Math.max(0, Math.floor(inTokens)),
+                output: Math.max(0, Math.floor(outTokens)),
+                cacheRead: Math.max(0, Math.floor(cacheRead)),
+              },
+            }
+          : {}),
         time,
-      })
+      }
+      if (items.at(-1)?.kind === "compaction") {
+        items[items.length - 1] = nextCompaction
+        continue
+      }
+      items.push(nextCompaction)
       continue
     }
 
@@ -1629,14 +1750,18 @@ export function parseCodexLines(
           pushAssistantTextDeduped(cleaned, undefined, time)
         }
         if (payload.type === "agent_reasoning" && cleaned) {
-          pendingThinking.push(cleaned)
+          pushPendingThinking(cleaned)
         }
       }
 
       if (payload.type === "item_completed" && isRecord(payload.item)) {
         const item = payload.item
         const itemType = asString(item.type)
-        const itemContent = Array.isArray(item.content) ? extractTextFromContentArray(item.content) : ""
+        const itemContent = Array.isArray(item.content)
+          ? extractTextFromContentArray(item.content)
+          : Array.isArray(item.summary_text)
+            ? extractTextFromContentArray(item.summary_text)
+            : ""
         const cleaned = stripIdeMetadataTags(itemContent)
 
         if (itemType === "UserMessage" && cleaned && !isInjectedPromptBoilerplate(cleaned)) {
@@ -1646,7 +1771,7 @@ export function parseCodexLines(
           pushAssistantTextDeduped(cleaned, undefined, time)
         }
         if (itemType === "Reasoning" && cleaned) {
-          pendingThinking.push(cleaned)
+          pushPendingThinking(cleaned)
         }
         if (itemType === "CommandExecution" && !turnHasExplicitToolCall) {
           const cmd = item.command
@@ -1676,7 +1801,7 @@ export function parseCodexLines(
           : Array.isArray(payload.content)
             ? extractTextFromContentArray(payload.content)
             : ""
-        if (summaryText) pendingThinking.push(summaryText)
+        if (summaryText) pushPendingThinking(summaryText)
         continue
       }
 

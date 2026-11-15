@@ -83,11 +83,21 @@ const SessionCliStateSchema = Schema.Struct({
     ]),
   ),
   lastPromptCount: Schema.optional(Schema.Number),
+  lastCheckpointHead: Schema.optional(Schema.String),
   claudeSessionId: Schema.optional(Schema.String),
   claudeFilePath: Schema.optional(Schema.String),
   codexSessionId: Schema.optional(Schema.String),
   codexFilePath: Schema.optional(Schema.String),
   engines: Schema.optional(Schema.Record(Schema.String, EngineRecordSchema)),
+  retiredChildSessions: Schema.optional(
+    Schema.Array(
+      Schema.Struct({
+        source: Schema.String,
+        sessionId: Schema.optional(Schema.String),
+        filePath: Schema.optional(Schema.String),
+      }),
+    ),
+  ),
 })
 type SessionCliState = typeof SessionCliStateSchema.Type
 const decodeSessionCliState = Schema.decodeUnknownOption(SessionCliStateSchema)
@@ -379,40 +389,46 @@ function findClaudeSessionFile(home: string, sessionId: string) {
 }
 
 function findCodexSessionFile(home: string, sessionId: string) {
-  const sessionsRoot = path.join(home, ".codex", "sessions")
+  const codexRoot = process.env.CODEX_HOME ? path.resolve(process.env.CODEX_HOME) : path.join(home, ".codex")
+  const searchRoots = [path.join(codexRoot, "sessions"), path.join(codexRoot, "archived_sessions")]
 
-  if (!fs.existsSync(sessionsRoot)) return undefined
-  const years = fs
-    .readdirSync(sessionsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .toSorted((a, b) => b.name.localeCompare(a.name))
-
-  const dayDirs = years.flatMap((year) => {
-    const yearDir = path.join(sessionsRoot, year.name)
-    const months = fs
-      .readdirSync(yearDir, { withFileTypes: true })
+  for (const sessionsRoot of searchRoots) {
+    if (!fs.existsSync(sessionsRoot)) continue
+    const years = fs
+      .readdirSync(sessionsRoot, { withFileTypes: true })
       .filter((entry) => entry.isDirectory())
       .toSorted((a, b) => b.name.localeCompare(a.name))
 
-    return months.flatMap((month) => {
-      const monthDir = path.join(yearDir, month.name)
-
-      return fs
-        .readdirSync(monthDir, { withFileTypes: true })
+    const dayDirs = years.flatMap((year) => {
+      const yearDir = path.join(sessionsRoot, year.name)
+      const months = fs
+        .readdirSync(yearDir, { withFileTypes: true })
         .filter((entry) => entry.isDirectory())
         .toSorted((a, b) => b.name.localeCompare(a.name))
-        .map((day) => path.join(monthDir, day.name))
-    })
-  })
 
-  return dayDirs
-    .flatMap((dayDir) =>
-      fs
-        .readdirSync(dayDir)
-        .filter((file) => file.endsWith(".jsonl") && file.includes(sessionId))
-        .map((file) => path.join(dayDir, file)),
-    )
-    .at(0)
+      return months.flatMap((month) => {
+        const monthDir = path.join(yearDir, month.name)
+
+        return fs
+          .readdirSync(monthDir, { withFileTypes: true })
+          .filter((entry) => entry.isDirectory())
+          .toSorted((a, b) => b.name.localeCompare(a.name))
+          .map((day) => path.join(monthDir, day.name))
+      })
+    })
+
+    const matched = dayDirs
+      .flatMap((dayDir) =>
+        fs
+          .readdirSync(dayDir)
+          .filter((file) => file.endsWith(".jsonl") && file.includes(sessionId))
+          .map((file) => path.join(dayDir, file)),
+      )
+      .at(0)
+    if (matched) return matched
+  }
+
+  return undefined
 }
 
 function findAgyTranscriptInBase(baseDir: string, sessionId: string) {
@@ -773,8 +789,10 @@ function makeEmptyUsage(
 
 function createStreamEmitter(controller: ReadableStreamDefaultController<LanguageModelV3StreamPart>, modelId: string) {
   const responseId = `resp_${crypto.randomUUID()}`
-  const reasoningId = `${responseId}:reasoning`
-  const textId = `${responseId}:text`
+  let reasoningSegment = 0
+  let textSegment = 0
+  let currentReasoningId = `${responseId}:reasoning:0`
+  let currentTextId = `${responseId}:text:0`
   const state = {
     started: false,
     reasoningOpen: false,
@@ -797,19 +815,21 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
 
     if (state.textOpen) {
       state.textOpen = false
-      controller.enqueue({ type: "text-end", id: textId })
+      controller.enqueue({ type: "text-end", id: currentTextId })
     }
 
     if (!state.reasoningOpen) {
       state.reasoningOpen = true
-      controller.enqueue({ type: "reasoning-start", id: reasoningId })
+      reasoningSegment += 1
+      currentReasoningId = `${responseId}:reasoning:${reasoningSegment}`
+      controller.enqueue({ type: "reasoning-start", id: currentReasoningId })
     }
   }
 
   const pushReasoning = (delta: string) => {
     if (!delta) return
     openReasoning()
-    controller.enqueue({ type: "reasoning-delta", id: reasoningId, delta })
+    controller.enqueue({ type: "reasoning-delta", id: currentReasoningId, delta })
   }
 
   const pushText = (delta: string) => {
@@ -818,16 +838,18 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
 
     if (state.reasoningOpen) {
       state.reasoningOpen = false
-      controller.enqueue({ type: "reasoning-end", id: reasoningId })
+      controller.enqueue({ type: "reasoning-end", id: currentReasoningId })
     }
 
     if (!state.textOpen) {
       state.textOpen = true
-      controller.enqueue({ type: "text-start", id: textId })
+      textSegment += 1
+      currentTextId = `${responseId}:text:${textSegment}`
+      controller.enqueue({ type: "text-start", id: currentTextId })
     }
 
     state.hasText = true
-    controller.enqueue({ type: "text-delta", id: textId, delta })
+    controller.enqueue({ type: "text-delta", id: currentTextId, delta })
   }
 
   const finish = () => {
@@ -835,12 +857,12 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
 
     if (state.reasoningOpen) {
       state.reasoningOpen = false
-      controller.enqueue({ type: "reasoning-end", id: reasoningId })
+      controller.enqueue({ type: "reasoning-end", id: currentReasoningId })
     }
 
     if (state.textOpen) {
       state.textOpen = false
-      controller.enqueue({ type: "text-end", id: textId })
+      controller.enqueue({ type: "text-end", id: currentTextId })
     }
 
     controller.enqueue({
@@ -1234,6 +1256,7 @@ async function runCodexProcess(input: {
     const state = {
       detectedSessionId: input.sessionId,
       stderrText: "",
+      lastErrorMessage: "",
       buffer: "",
       seenAgentMessages: new Set<string>(),
     }
@@ -1276,6 +1299,13 @@ async function runCodexProcess(input: {
           input.emitter.pushReasoning(`\n[codex 原生命令: ${item.command}]\n`)
         }
 
+        if (item.type === "mcp_tool_call") {
+          const mcpName = [item.server, item.tool]
+            .filter((part): part is string => typeof part === "string" && part.length > 0)
+            .join("/")
+          input.emitter.pushReasoning(`\n[codex 原生工具: ${mcpName || "mcp"}]\n`)
+        }
+
         return
       }
 
@@ -1289,7 +1319,23 @@ async function runCodexProcess(input: {
         }
 
         if (item.type === "file_change") {
-          input.emitter.pushReasoning("\n[codex 原生文件变更]\n")
+          const files = Array.isArray(item.changes)
+            ? item.changes
+                .flatMap((ch) => (isRecord(ch) && typeof ch.path === "string" && ch.path.trim() ? [ch.path.trim()] : []))
+                .join(", ")
+            : ""
+          input.emitter.pushReasoning(files ? `\n[codex 原生文件变更: ${files}]\n` : "\n[codex 原生文件变更]\n")
+
+          return
+        }
+
+        if (
+          item.type === "error" &&
+          typeof item.message === "string" &&
+          item.message.trim() &&
+          !/Defaulting to fallback metadata/i.test(item.message)
+        ) {
+          state.lastErrorMessage = item.message.trim()
 
           return
         }
@@ -1299,7 +1345,7 @@ async function runCodexProcess(input: {
 
           if (!state.seenAgentMessages.has(text)) {
             state.seenAgentMessages.add(text)
-            input.emitter.pushText(input.emitter.state.hasText ? `\n\n${text}` : text)
+            input.emitter.pushText(input.emitter.state.textOpen ? `\n\n${text}` : text)
           }
         }
 
@@ -1320,16 +1366,32 @@ async function runCodexProcess(input: {
 
           if (!state.seenAgentMessages.has(text)) {
             state.seenAgentMessages.add(text)
-            input.emitter.pushText(input.emitter.state.hasText ? `\n\n${text}` : text)
+            input.emitter.pushText(input.emitter.state.textOpen ? `\n\n${text}` : text)
           }
         }
 
         return
       }
 
+      if (row.type === "turn.failed" && isRecord(row.error) && typeof row.error.message === "string") {
+        state.lastErrorMessage = row.error.message.trim()
+        return
+      }
+
+      if (row.type === "error" && typeof row.message === "string" && row.message.trim()) {
+        state.lastErrorMessage = row.message.trim()
+        return
+      }
+
       if (row.type === "turn.completed" && isRecord(row.usage)) {
-        if (typeof row.usage.input_tokens === "number") input.emitter.state.inputTokens = row.usage.input_tokens
-        if (typeof row.usage.output_tokens === "number") input.emitter.state.outputTokens = row.usage.output_tokens
+        const rawIn = typeof row.usage.input_tokens === "number" ? row.usage.input_tokens : 0
+        const cachedIn = typeof row.usage.cached_input_tokens === "number" ? row.usage.cached_input_tokens : 0
+        const outTok = typeof row.usage.output_tokens === "number" ? row.usage.output_tokens : 0
+        const reasonTok = typeof row.usage.reasoning_output_tokens === "number" ? row.usage.reasoning_output_tokens : 0
+        input.emitter.state.inputTokens = Math.max(0, rawIn - cachedIn)
+        input.emitter.state.cacheReadTokens = Math.max(0, cachedIn)
+        input.emitter.state.outputTokens = Math.max(0, outTok)
+        input.emitter.state.reasoningTokens = Math.max(0, reasonTok)
       }
     }
 
@@ -1364,8 +1426,9 @@ async function runCodexProcess(input: {
         fs.rmSync(lastMsgFile, { force: true })
       }
 
-      if (!input.emitter.state.hasText && code !== 0 && !input.signal.aborted) {
-        const detail = state.stderrText.trim() || `codex 进程退出码 ${code ?? "unknown"}`
+      if (!input.emitter.state.hasText && !input.signal.aborted && (code !== 0 || state.lastErrorMessage)) {
+        const detail =
+          state.lastErrorMessage || state.stderrText.trim() || `codex 进程退出码 ${code ?? "unknown"}`
         input.emitter.pushText(`codex 执行出错：${detail}`)
       }
 
@@ -2257,6 +2320,20 @@ function cleanupEphemeralCliSession(home: string, engine: LocalEngine, sessionId
       }
       return
     }
+    if (engine === "codex") {
+      const codexRoot = process.env.CODEX_HOME ? path.resolve(process.env.CODEX_HOME) : path.join(home, ".codex")
+      const file = findCodexSessionFile(home, sessionId)
+      if (file && fs.existsSync(file)) fs.rmSync(file, { force: true })
+      if (fs.existsSync(codexRoot)) {
+        const sqliteFiles = fs.readdirSync(codexRoot).filter((name) => /^state_\d+\.sqlite$/i.test(name))
+        for (const sqliteName of sqliteFiles) {
+          const db = new Database(path.join(codexRoot, sqliteName))
+          db.prepare("DELETE FROM threads WHERE id = ?").run(sessionId)
+          db.close()
+        }
+      }
+      return
+    }
     const file = findEngineSessionFile(home, engine, sessionId)
     if (file && fs.existsSync(file) && !file.endsWith("opencode.db")) {
       fs.rmSync(file, { force: true })
@@ -2503,7 +2580,12 @@ class LocalLanguageModel implements LanguageModelV3 {
 
             const statelessDir = path.join(os.tmpdir(), "pigu-local-stateless")
             fs.mkdirSync(statelessDir, { recursive: true })
-            const statelessFlags = currentEngine === "agy" ? ["--disable-slash-commands"] : []
+            const statelessFlags =
+              currentEngine === "agy"
+                ? ["--disable-slash-commands"]
+                : currentEngine === "codex"
+                  ? ["--ephemeral"]
+                  : []
 
             const ephemeralResult = await dispatchLocalEngineRun({
               currentEngine,
@@ -2558,10 +2640,12 @@ class LocalLanguageModel implements LanguageModelV3 {
           const effectiveLastEngine = saved.lastEngine ?? initialExternalSource
           const currentRecord = getEngineRecord(saved, currentEngine, initialExternalSource, parsedMetadata, home)
 
+          const currentCheckpointHead =
+            priorTurns[0]?.text.includes("<conversation-checkpoint>") ? priorTurns[0].text.slice(0, 240) : undefined
           const hasCompactionReset =
             saved.lastPromptCount !== undefined &&
-            priorTurns.length < saved.lastPromptCount &&
-            (priorTurns[0]?.text.includes("<conversation-checkpoint>") ?? false)
+            Boolean(currentCheckpointHead) &&
+            (priorTurns.length < saved.lastPromptCount || saved.lastCheckpointHead !== currentCheckpointHead)
 
           const rawCanResume =
             currentEngine === "agy"
@@ -2576,7 +2660,8 @@ class LocalLanguageModel implements LanguageModelV3 {
               ((saved.lastPromptCount === undefined && effectiveLastEngine === currentEngine) ||
                 (saved.lastPromptCount !== undefined &&
                   effectiveLastEngine === currentEngine &&
-                  saved.lastPromptCount === priorTurns.length)))
+                  (saved.lastPromptCount === priorTurns.length ||
+                    (hasCompactionReset && priorTurns.length === 1)))))
 
           const contextFileToRead = (() => {
             if (isSameEngineWithoutGap) return undefined
@@ -2642,6 +2727,36 @@ class LocalLanguageModel implements LanguageModelV3 {
               : undefined
 
           if (sessionID) {
+            const prevEngineRecord = saved.engines?.[currentEngine]
+            const prevSessionId =
+              prevEngineRecord?.sessionId ??
+              (currentEngine === "claude"
+                ? saved.claudeSessionId
+                : currentEngine === "codex"
+                  ? saved.codexSessionId
+                  : undefined)
+            const prevFilePath =
+              prevEngineRecord?.filePath ??
+              (currentEngine === "claude"
+                ? saved.claudeFilePath
+                : currentEngine === "codex"
+                  ? saved.codexFilePath
+                  : undefined)
+            const existingRetired = saved.retiredChildSessions ?? []
+            const shouldRetirePrev =
+              Boolean(prevSessionId && nextSessionId && prevSessionId !== nextSessionId) &&
+              !existingRetired.some((item) => item.source === currentEngine && item.sessionId === prevSessionId)
+            const nextRetired = shouldRetirePrev
+              ? [
+                  ...existingRetired,
+                  {
+                    source: currentEngine,
+                    sessionId: prevSessionId,
+                    ...(prevFilePath ? { filePath: prevFilePath } : {}),
+                  },
+                ]
+              : existingRetired
+
             const nextEngines = {
               ...(saved.engines ?? {}),
               [currentEngine]: {
@@ -2654,11 +2769,13 @@ class LocalLanguageModel implements LanguageModelV3 {
             await this.setSessionState(sessionID, {
               lastEngine: currentEngine,
               lastPromptCount: priorTurns.length + 2,
+              ...(currentCheckpointHead ? { lastCheckpointHead: currentCheckpointHead } : {}),
               claudeSessionId: currentEngine === "claude" ? nextSessionId : saved.claudeSessionId,
               claudeFilePath: currentEngine === "claude" ? nextFilePath : saved.claudeFilePath,
               codexSessionId: currentEngine === "codex" ? nextSessionId : saved.codexSessionId,
               codexFilePath: currentEngine === "codex" ? nextFilePath : saved.codexFilePath,
               engines: nextEngines,
+              ...(nextRetired.length > 0 ? { retiredChildSessions: nextRetired } : {}),
             })
           }
 
@@ -2871,33 +2988,50 @@ function discoverCodexSqliteModels(codexRoot: string): readonly string[] {
   if (!latestDb) return []
   const dbPath = path.join(codexRoot, latestDb)
   if (!fs.existsSync(dbPath) || fs.statSync(dbPath, { throwIfNoEntry: false })?.size === 0) return []
-  const db = new Database(dbPath, { readonly: true })
-  const hasThreads = db
-    .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'threads'")
-    .get()
-  if (!hasThreads) {
-    db.close()
-    return []
+
+  const runModelQuery = (db: Database): readonly string[] => {
+    const hasThreads = db
+      .query<{ name: string }, []>("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'threads'")
+      .get()
+    if (!hasThreads) return []
+    const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all()
+    if (!columns.some((col) => col.name === "model")) return []
+    const rows = db
+      .query<{ model: string | null }, []>(
+        "SELECT model FROM threads WHERE model IS NOT NULL AND trim(model) != '' ORDER BY updated_at DESC LIMIT 80",
+      )
+      .all()
+    return [...new Set(rows.map((row) => row.model?.trim() ?? "").filter((val) => val.length > 0))]
   }
-  const columns = db.query<{ name: string }, []>("PRAGMA table_info(threads)").all()
-  const hasModelColumn = columns.some((col) => col.name === "model")
-  if (!hasModelColumn) {
+
+  const direct = Option.liftThrowable(() => {
+    const db = new Database(dbPath, { readonly: true })
+    const out = runModelQuery(db)
     db.close()
-    return []
-  }
-  const rows = db
-    .query<{ model: string | null }, []>(
-      "SELECT model FROM threads WHERE model IS NOT NULL AND trim(model) != '' ORDER BY updated_at DESC LIMIT 80",
-    )
-    .all()
-  db.close()
-  return [
-    ...new Set(
-      rows
-        .map((row) => row.model?.trim() ?? "")
-        .filter((val) => val.length > 0),
-    ),
-  ]
+    return out
+  })()
+  if (Option.isSome(direct)) return direct.value
+
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "pigu-codex-sqlite-"))
+  const tmpDbPath = path.join(tmpDir, latestDb)
+  const copied = Option.liftThrowable(() => {
+    fs.copyFileSync(dbPath, tmpDbPath)
+    fs.chmodSync(tmpDbPath, 0o600)
+    for (const suffix of ["-wal", "-shm"]) {
+      const sidecar = `${dbPath}${suffix}`
+      if (fs.existsSync(sidecar)) {
+        const dst = `${tmpDbPath}${suffix}`
+        fs.copyFileSync(sidecar, dst)
+        fs.chmodSync(dst, 0o600)
+      }
+    }
+    const db = new Database(tmpDbPath)
+    const out = runModelQuery(db)
+    db.close()
+    return out
+  })()
+  Option.liftThrowable(() => fs.rmSync(tmpDir, { recursive: true, force: true }))()
+  return Option.getOrElse(copied, (): readonly string[] => [])
 }
 
 function discoverCodexRecentRolloutModels(codexRoot: string): readonly string[] {
