@@ -54,12 +54,18 @@ export function parseMobileInput(rawInput: string): ParsedMobileCommand {
   }
 
   if (head === "project" || head === "proj" || head === "p") {
-    if (!rest || rest.toLowerCase() === "list") {
+    if (!rest) {
       return { kind: "project", sub: "list", arg: "" }
     }
     const subParts = rest.split(/\s+/)
     const subCmd = (subParts[0] ?? "").toLowerCase()
     const subRest = rest.slice((subParts[0] ?? "").length).trim()
+    if (subCmd === "list" || subCmd === "ls") {
+      return { kind: "project", sub: "list", arg: subRest }
+    }
+    if (subCmd === "?" || subCmd === "search") {
+      return { kind: "project", sub: "list", arg: `? ${subRest}`.trim() }
+    }
     if (subCmd === "new" || subCmd === "add" || subCmd === "create") {
       return { kind: "project", sub: "new", arg: subRest }
     }
@@ -83,12 +89,21 @@ export function parseMobileInput(rawInput: string): ParsedMobileCommand {
   }
 
   if (head === "chat" || head === "c" || head === "session") {
-    if (!rest || rest.toLowerCase() === "list") {
+    if (!rest) {
       return { kind: "chat", sub: "list", arg: "" }
     }
     const subParts = rest.split(/\s+/)
     const subCmd = (subParts[0] ?? "").toLowerCase()
     const subRest = rest.slice((subParts[0] ?? "").length).trim()
+    if (subCmd === "list" || subCmd === "ls") {
+      return { kind: "chat", sub: "list", arg: subRest }
+    }
+    if (subCmd === "?" || subCmd === "search") {
+      return { kind: "chat", sub: "list", arg: `? ${subRest}`.trim() }
+    }
+    if (/^p(?:age)?\d+$/i.test(subCmd) || (subCmd === "page" && /^\d+$/.test(subRest))) {
+      return { kind: "chat", sub: "list", arg: rest }
+    }
     if (subCmd === "new" || subCmd === "create") {
       return { kind: "chat", sub: "new", arg: subRest }
     }
@@ -111,12 +126,15 @@ export function parseMobileInput(rawInput: string): ParsedMobileCommand {
   }
 
   if (head === "model" || head === "m" || head === "models") {
-    if (!rest || rest.toLowerCase() === "list") {
+    if (!rest) {
       return { kind: "model", sub: "list", arg: "" }
     }
     const subParts = rest.split(/\s+/)
     const subCmd = (subParts[0] ?? "").toLowerCase()
     const subRest = rest.slice((subParts[0] ?? "").length).trim()
+    if (subCmd === "list" || subCmd === "ls") {
+      return { kind: "model", sub: "list", arg: subRest }
+    }
     if (subCmd === "effort" || subCmd === "thinking" || subCmd === "reasoning") {
       return { kind: "model", sub: "effort", arg: subRest }
     }

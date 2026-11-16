@@ -323,6 +323,182 @@ function toView(robot: MobileRobotConfig, connector: MobilePlatformConnector | u
 
 const MOBILE_SESSION_PERMISSIONS = [{ action: "*", resource: "*", effect: "allow" as const }]
 
+export interface ModelVendorGroup {
+  readonly key: string
+  readonly label: string
+  readonly shortLabel: string
+  readonly aliases: readonly string[]
+  readonly models: readonly UnifiedModelItem[]
+}
+
+const LOCAL_VENDOR_ORDER = [
+  "local:claude",
+  "local:codex",
+  "local:agy",
+  "local:pi",
+  "local:opencode",
+  "local:cursor",
+  "local:grok",
+  "local:deepseek-harness",
+  "local:workbuddy",
+] as const
+
+const POPULAR_CLOUD_VENDOR_ORDER = [
+  "anthropic",
+  "openai",
+  "google",
+  "deepseek",
+  "openrouter",
+  "xai",
+  "opencode",
+] as const
+
+const LOCAL_VENDOR_META: Readonly<
+  Record<string, { readonly label: string; readonly shortLabel: string; readonly aliases: readonly string[] }>
+> = {
+  claude: {
+    label: "Claude Code (本地 CLI)",
+    shortLabel: "Claude CLI",
+    aliases: ["claude", "claude-code", "local:claude", "local/claude"],
+  },
+  codex: {
+    label: "OpenAI Codex (本地 CLI)",
+    shortLabel: "Codex CLI",
+    aliases: ["codex", "local:codex", "local/codex"],
+  },
+  agy: {
+    label: "Antigravity (本地 CLI)",
+    shortLabel: "Antigravity",
+    aliases: ["agy", "antigravity", "local:agy", "local/agy"],
+  },
+  pi: {
+    label: "Pi (本地 CLI)",
+    shortLabel: "Pi CLI",
+    aliases: ["pi", "local:pi", "local/pi"],
+  },
+  opencode: {
+    label: "OpenCode (本地 CLI)",
+    shortLabel: "OpenCode CLI",
+    aliases: ["local:opencode", "local/opencode", "opencode-cli"],
+  },
+  cursor: {
+    label: "Cursor (本地 CLI)",
+    shortLabel: "Cursor CLI",
+    aliases: ["cursor", "local:cursor", "local/cursor"],
+  },
+  grok: {
+    label: "Grok (本地 CLI)",
+    shortLabel: "Grok CLI",
+    aliases: ["grok", "local:grok", "local/grok"],
+  },
+  "deepseek-harness": {
+    label: "DeepSeek Harness (本地 CLI)",
+    shortLabel: "DSH CLI",
+    aliases: ["dsh", "deepseek-harness", "local:deepseek-harness", "local/deepseek-harness", "local:dsh", "local/dsh"],
+  },
+  workbuddy: {
+    label: "WorkBuddy (本地 CLI)",
+    shortLabel: "WorkBuddy",
+    aliases: ["workbuddy", "local:workbuddy", "local/workbuddy"],
+  },
+}
+
+const CLOUD_VENDOR_META: Readonly<
+  Record<string, { readonly label: string; readonly shortLabel: string; readonly aliases: readonly string[] }>
+> = {
+  pigutoken: { label: "PiguToken", shortLabel: "PiguToken", aliases: ["pigutoken", "pigu"] },
+  pigu: { label: "PiguToken", shortLabel: "PiguToken", aliases: ["pigu", "pigutoken"] },
+  anthropic: { label: "Anthropic", shortLabel: "Anthropic", aliases: ["anthropic"] },
+  openai: { label: "OpenAI", shortLabel: "OpenAI", aliases: ["openai"] },
+  google: { label: "Google Gemini", shortLabel: "Gemini", aliases: ["google", "gemini"] },
+  deepseek: { label: "DeepSeek", shortLabel: "DeepSeek", aliases: ["deepseek"] },
+  openrouter: { label: "OpenRouter", shortLabel: "OpenRouter", aliases: ["openrouter"] },
+  xai: { label: "xAI", shortLabel: "xAI", aliases: ["xai"] },
+  opencode: { label: "OpenCode Zen", shortLabel: "OpenCode", aliases: ["opencode", "zen"] },
+}
+
+function vendorSortRank(key: string): number {
+  if (key === "pigutoken" || key === "pigu") return 0
+  if (key.startsWith("local:")) {
+    const idx = LOCAL_VENDOR_ORDER.indexOf(key as (typeof LOCAL_VENDOR_ORDER)[number])
+    return idx >= 0 ? 10 + idx : 29
+  }
+  const cloudIdx = POPULAR_CLOUD_VENDOR_ORDER.indexOf(key as (typeof POPULAR_CLOUD_VENDOR_ORDER)[number])
+  return cloudIdx >= 0 ? 30 + cloudIdx : 50
+}
+
+export function groupModelsByVendor(models: readonly UnifiedModelItem[]): readonly ModelVendorGroup[] {
+  const buckets = new Map<
+    string,
+    { label: string; shortLabel: string; aliases: readonly string[]; items: UnifiedModelItem[] }
+  >()
+
+  for (const m of models) {
+    if (m.providerID === "local" || m.providerID.startsWith("local/")) {
+      const slashIdx = m.id.indexOf("/")
+      const engine =
+        m.providerID === "local"
+          ? slashIdx === -1
+            ? m.id
+            : m.id.slice(0, slashIdx)
+          : m.providerID.slice("local/".length)
+      const key = `local:${engine}`
+      const meta = LOCAL_VENDOR_META[engine] ?? {
+        label: `${engine} (本地 CLI)`,
+        shortLabel: `${engine} CLI`,
+        aliases: [engine.toLowerCase(), `local:${engine.toLowerCase()}`, `local/${engine.toLowerCase()}`],
+      }
+      const existing = buckets.get(key)
+      if (existing) {
+        existing.items.push(m)
+      }
+      if (!existing) {
+        buckets.set(key, { ...meta, items: [m] })
+      }
+      continue
+    }
+
+    const key = m.providerID
+    const meta = CLOUD_VENDOR_META[key] ?? {
+      label: key,
+      shortLabel: key,
+      aliases: [key.toLowerCase()],
+    }
+    const existing = buckets.get(key)
+    if (existing) {
+      existing.items.push(m)
+    }
+    if (!existing) {
+      buckets.set(key, { ...meta, items: [m] })
+    }
+  }
+
+  return [...buckets.entries()]
+    .map(([key, val]) => ({
+      key,
+      label: val.label,
+      shortLabel: val.shortLabel,
+      aliases: val.aliases,
+      models: val.items,
+    }))
+    .sort((a, b) => {
+      const rankDiff = vendorSortRank(a.key) - vendorSortRank(b.key)
+      if (rankDiff !== 0) return rankDiff
+      return a.label.localeCompare(b.label)
+    })
+}
+
+function chunkCardButtons(buttons: readonly CardButton[], perRow = 3): readonly MobileCard["elements"][number][] {
+  const rows: MobileCard["elements"][number][] = []
+  for (let i = 0; i < buttons.length; i += perRow) {
+    rows.push({
+      kind: "actions",
+      buttons: buttons.slice(i, i + perRow),
+    })
+  }
+  return rows
+}
+
 function remoteHeaders(remote: RemoteServerTarget, hasBody: boolean): Record<string, string> {
   const headers: Record<string, string> = hasBody ? { "Content-Type": "application/json" } : {}
   if (remote.password) {
@@ -767,7 +943,9 @@ const layer = Layer.effect(
       const globalSessions = await runEffect(
         sessions.list({
           project: Project.ID.make("global"),
-          limit: 50,
+          parentID: null,
+          archived: false,
+          limit: 500,
         }),
       ).catch(() => ({ data: [] }))
       for (const s of globalSessions.data) {
@@ -823,27 +1001,37 @@ const layer = Layer.effect(
             location?: { directory?: string }
             time?: { updated?: number; created?: number }
           }>
-        }>(remote, "/api/session?project=global&parent=null&archived=false&limit=50", undefined, 8_000).catch(
+        }>(remote, "/api/session?project=global&parentID=null&archived=false&limit=500", undefined, 8_000).catch(
           () => undefined,
         )
 
-        const remoteProjects = await remoteFetchJson<
-          Array<{
-            id: string
-            name?: string
-            canonical: string
-            time?: { active?: number; updated?: number; created?: number }
-          }>
-        >(remote, "/api/project", undefined, 8_000).catch(() => undefined)
+        type RemoteProjectEntry = {
+          id: string
+          name?: string
+          canonical?: string
+          directory?: string
+          time?: { active?: number; updated?: number; created?: number }
+        }
+        const remoteProjectsResp = await remoteFetchJson<RemoteProjectEntry[] | { data?: RemoteProjectEntry[] }>(
+          remote,
+          "/api/project",
+          undefined,
+          8_000,
+        ).catch(() => undefined)
+        const remoteProjects = Array.isArray(remoteProjectsResp)
+          ? remoteProjectsResp
+          : (remoteProjectsResp?.data ?? [])
 
-        for (const rp of remoteProjects ?? []) {
+        for (const rp of remoteProjects) {
+          const dir = rp.canonical ?? rp.directory ?? ""
+          if (!dir) continue
           items.push({
             serverKey: remote.key,
             serverLabel: `SSH:${remote.name}`,
             isRemote: true,
             id: rp.id,
-            name: rp.name?.trim() || path.posix.basename(rp.canonical) || rp.canonical,
-            directory: rp.canonical,
+            name: rp.name?.trim() || path.posix.basename(dir) || dir,
+            directory: dir,
             updatedAt: rp.time?.active ?? rp.time?.updated ?? rp.time?.created ?? 0,
           })
         }
@@ -1017,44 +1205,76 @@ const layer = Layer.effect(
       if (proj.isRemote) {
         const remote = remoteServers.get(proj.serverKey)
         if (!remote) return []
-        const res = await remoteFetchJson<{
-          data: Array<{
-            id: string
-            parentID?: string
-            title?: string
-            location?: { directory?: string }
-            model?: { providerID: string; id: string }
-            time?: { updated?: number; created?: number }
-          }>
-        }>(remote, `/api/session?project=${encodeURIComponent(proj.id)}&parent=null&archived=false&limit=30`)
-        return (res.data ?? [])
-          .filter(
-            (s) =>
-              !s.parentID &&
-              (proj.id !== "global" || !s.location?.directory || s.location.directory === proj.directory),
-          )
-          .map((s) => ({
+        type RemoteSessionEntry = {
+          id: string
+          parentID?: string
+          title?: string
+          location?: { directory?: string }
+          model?: { providerID: string; id: string }
+          time?: { updated?: number; created?: number }
+        }
+        const [byProj, byDir] = await Promise.all([
+          remoteFetchJson<{ data?: RemoteSessionEntry[] }>(
+            remote,
+            `/api/session?project=${encodeURIComponent(proj.id)}&parentID=null&archived=false&limit=500`,
+          ),
+          proj.id !== "global"
+            ? remoteFetchJson<{ data?: RemoteSessionEntry[] }>(
+                remote,
+                `/api/session?directory=${encodeURIComponent(proj.directory)}&parentID=null&archived=false&limit=500`,
+              ).catch(() => ({ data: [] as RemoteSessionEntry[] }))
+            : Promise.resolve({ data: [] as RemoteSessionEntry[] }),
+        ])
+        const seen = new Set<string>()
+        const merged: UnifiedSessionItem[] = []
+        for (const s of [...(byProj.data ?? []), ...(byDir.data ?? [])]) {
+          if (seen.has(s.id) || s.parentID) continue
+          if (proj.id === "global" && s.location?.directory && s.location.directory !== proj.directory) continue
+          seen.add(s.id)
+          merged.push({
             id: s.id,
             title: s.title?.trim() || "未命名会话",
             updatedAt: s.time?.updated ?? s.time?.created ?? Date.now(),
             modelLabel: s.model ? `${s.model.providerID}/${s.model.id}` : fallbackModelLabel,
-          }))
+          })
+        }
+        return merged.sort((a, b) => b.updatedAt - a.updatedAt)
       }
 
-      const res = await runEffect(
-        sessions.list({
-          project: Project.ID.make(proj.id),
-          limit: 30,
-        }),
-      )
-      return res.data
-        .filter((s) => !s.parentID && (proj.id !== "global" || s.location.directory === proj.directory))
-        .map((s) => ({
+      const [byProj, byDir] = await Promise.all([
+        runEffect(
+          sessions.list({
+            project: Project.ID.make(proj.id),
+            parentID: null,
+            archived: false,
+            limit: 500,
+          }),
+        ),
+        proj.id !== "global"
+          ? runEffect(
+              sessions.list({
+                directory: AbsolutePath.make(proj.directory),
+                parentID: null,
+                archived: false,
+                limit: 500,
+              }),
+            ).catch(() => ({ data: [] }))
+          : Promise.resolve({ data: [] }),
+      ])
+      const seen = new Set<string>()
+      const merged: UnifiedSessionItem[] = []
+      for (const s of [...byProj.data, ...byDir.data]) {
+        if (seen.has(s.id) || s.parentID) continue
+        if (proj.id === "global" && s.location.directory !== proj.directory) continue
+        seen.add(s.id)
+        merged.push({
           id: s.id,
           title: s.title?.trim() || "未命名会话",
           updatedAt: DateTime.toEpochMillis(s.time.updated),
           modelLabel: s.model ? `${s.model.providerID}/${s.model.id}` : fallbackModelLabel,
-        }))
+        })
+      }
+      return merged.sort((a, b) => b.updatedAt - a.updatedAt)
     }
 
     async function createSessionInProject(proj: UnifiedProjectItem, title?: string): Promise<string> {
@@ -1260,9 +1480,9 @@ const layer = Layer.effect(
           "直接发送**文字、语音、截图/图片或文件**即可对话；长任务中途静默更新进度（仅在完成时提醒一次），运行中直接发话即可自动插话纠偏；遇到 `question` 问答或权限确认会立即弹窗提醒；桌面端发起或 `/schedule` 定时任务完成后也会自动推送结果到手机。",
           "",
           "**快捷指令（`.` 前缀，支持编号选择）**",
-          "`.project` (`.p`) — 项目列表 / `.p <编号>` 切换 / `.p new <路径>`",
-          "`.chat` (`.c`) — 会话列表 / `.c <编号>` 切换 / `.new` 新建 / `.history` 历史 / `.undo` 撤回 / `.c name` 重命名 / `.c del` 删除",
-          "`.model` (`.m`) — 模型列表 / `.m <编号>` 切换 / `.m effort <级别>`",
+          "`.project` (`.p`) — 查看设备与项目 / `.p <设备编号>` 分页看全部 / `.p <设备>.<项目>` 切换 / `.p new [服务器:]<路径>`",
+          "`.chat` (`.c`) — 会话列表 / `.c p<页码>` 翻页 / `.c <编号>` 切换 / `.new` 新建 / `.history` 历史 / `.undo` 撤回 / `.c del` 删除",
+          "`.model` (`.m`) — 查看当前设备厂家 / `.m <厂家编号>` 分页看模型 / `.m <厂家>.<模型>` 切换 / `.m effort <级别>`",
           "`.sh <命令>` (`.shell`) — 在项目目录执行终端命令",
           "`.log` (`.progress`) — 查看当前/上一轮任务的 AI 中间输出与执行步骤",
           "`.skip` — 跳过当前待确认问答（让 AI 按推荐方案继续）",
@@ -1287,6 +1507,7 @@ const layer = Layer.effect(
       sessionKey: string,
       sub: "list" | "switch" | "new",
       arg: string,
+      options?: { readonly forceSwitch?: boolean },
     ): Promise<MobileCard> {
       const current = await ensureBinding(sessionKey)
       if (sub === "new") {
@@ -1378,39 +1599,45 @@ const layer = Layer.effect(
       }
 
       const allProjects = await listAllProjects()
-      if (sub === "switch" && arg.trim()) {
-        const rawQuery = arg.trim()
-        const prefixed = parseServerPrefixedArg(rawQuery)
-        const hasValidFilter =
-          prefixed.serverKey === "local" || (prefixed.serverKey !== undefined && remoteServers.has(prefixed.serverKey))
-        const query = hasValidFilter ? prefixed.rest : rawQuery
-        const pool = hasValidFilter ? allProjects.filter((p) => p.serverKey === prefixed.serverKey) : allProjects
-        const qLower = query.toLowerCase()
-        const idx = Number(rawQuery)
-        const matched =
-          Number.isInteger(idx) && idx >= 1 && idx <= allProjects.length
-            ? allProjects[idx - 1]
-            : !query && pool.length > 0
-              ? pool[0]
-              : (pool.find(
-                  (p) =>
-                    p.id === query ||
-                    p.name.toLowerCase() === qLower ||
-                    p.directory.toLowerCase() === qLower,
-                ) ??
-                pool.find((p) => p.name.toLowerCase().includes(qLower)) ??
-                pool.find((p) => p.serverLabel.toLowerCase().includes(qLower)))
-        if (!matched) {
-          return {
-            header: { title: "未找到匹配项目", color: "red" },
-            elements: [
-              {
-                kind: "markdown",
-                content: `找不到项目 \`${query}\`。发送 \`.project\` 查看编号。`,
-              },
-            ],
-          }
+      const deviceDefs: Array<{
+        readonly serverKey: string
+        readonly serverLabel: string
+        readonly shortLabel: string
+        readonly aliases: readonly string[]
+      }> = [
+        { serverKey: "local", serverLabel: "本机", shortLabel: "本机", aliases: ["local", "本机", "本地"] },
+        ...[...remoteServers.values()].map((r) => ({
+          serverKey: r.key,
+          serverLabel: `SSH:${r.name}`,
+          shortLabel: r.name,
+          aliases: [r.key.toLowerCase(), `ssh:${r.name.toLowerCase()}`, r.name.toLowerCase()],
+        })),
+      ]
+      for (const proj of allProjects) {
+        if (!deviceDefs.some((d) => d.serverKey === proj.serverKey)) {
+          deviceDefs.push({
+            serverKey: proj.serverKey,
+            serverLabel: proj.serverLabel,
+            shortLabel: proj.serverLabel,
+            aliases: [proj.serverKey.toLowerCase(), proj.serverLabel.toLowerCase()],
+          })
         }
+      }
+
+      const deviceGroups = deviceDefs.map((dev, idx) => ({
+        ...dev,
+        dIdx: idx + 1,
+        projects: allProjects.filter((p) => p.serverKey === dev.serverKey),
+      }))
+
+      const isCurrentProj = (proj: UnifiedProjectItem): boolean =>
+        Boolean(
+          current?.serverKey === proj.serverKey &&
+            ((current.projectId !== "global" && current.projectId === proj.id) ||
+              current.projectDirectory === proj.directory),
+        )
+
+      const switchMatchedProject = async (matched: UnifiedProjectItem): Promise<MobileCard> => {
         const projSessions = await listSessionsForProject(matched)
         const sessionId = projSessions[0]?.id ?? (await createSessionInProject(matched, "手机端会话"))
         bindings.set(sessionKey, {
@@ -1427,16 +1654,258 @@ const layer = Layer.effect(
             {
               kind: "markdown",
               content: [
-                `项目：**${matched.name}** (${matched.serverLabel})`,
-                `路径：\`${matched.directory}\``,
+                `设备：**${matched.serverLabel}**`,
+                `项目：**${matched.name}** (\`${matched.directory}\`)`,
                 `会话：${projSessions[0]?.title ?? "新会话"} (\`${sessionId.slice(0, 12)}\`)`,
+                `提示：发 \`.c\` 切换会话 ｜ 发 \`.m\` 选择该设备的厂家与模型`,
               ].join("\n"),
             },
           ],
         }
       }
 
-      if (allProjects.length === 0) {
+      const findDeviceByToken = (token: string) => {
+        const tLower = token.trim().toLowerCase()
+        if (!tLower) return undefined
+        const dNum = Number(tLower)
+        if (Number.isInteger(dNum) && dNum >= 1 && dNum <= deviceGroups.length) {
+          return deviceGroups[dNum - 1]
+        }
+        if (tLower === "ssh" || tLower === "remote") {
+          return deviceGroups.find((d) => d.serverKey !== "local")
+        }
+        return deviceGroups.find((d) => d.aliases.includes(tLower))
+      }
+
+      const renderDeviceProjectsCard = (dev: (typeof deviceGroups)[number], rawRest: string): MobileCard => {
+        const PAGE_SIZE = 15
+        const tokens = rawRest.split(/\s+/).filter(Boolean)
+        const pageTokenIdx = tokens.findIndex((t) => /^p(?:age)?\d+$/i.test(t))
+        const requestedPage =
+          pageTokenIdx >= 0
+            ? Math.max(1, Number(tokens[pageTokenIdx]!.replace(/^p(?:age)?/i, "")) || 1)
+            : tokens.length === 1 && /^\d+$/.test(tokens[0]!)
+              ? Math.max(1, Number(tokens[0]!) || 1)
+              : 1
+        const filterWords = tokens.filter(
+          (t, i) => i !== pageTokenIdx && !(tokens.length === 1 && /^\d+$/.test(t)),
+        )
+        const keyword = filterWords.join(" ").toLowerCase()
+
+        const indexed = dev.projects
+          .map((proj, idx) => ({ proj, pIdx: idx + 1, isCurrent: isCurrentProj(proj) }))
+          .filter((entry) => {
+            if (!keyword) return true
+            return (
+              entry.proj.name.toLowerCase().includes(keyword) ||
+              entry.proj.directory.toLowerCase().includes(keyword)
+            )
+          })
+
+        if (indexed.length === 0) {
+          const newHint =
+            dev.serverKey === "local"
+              ? "`.p new /项目路径`"
+              : `\`.p new ${dev.shortLabel}:~/目录\``
+          return {
+            header: { title: `项目列表 · #${dev.dIdx} ${dev.serverLabel}`, color: "orange" },
+            elements: [
+              {
+                kind: "markdown",
+                content: keyword
+                  ? `在 **${dev.serverLabel}** 下没有匹配 \`${keyword}\` 的项目。发送 \`.p ${dev.dIdx}\` 查看该设备全部项目。`
+                  : `**${dev.serverLabel}** 暂无已打开项目，可发送 ${newHint} 打开目录。`,
+              },
+              {
+                kind: "actions",
+                buttons: [{ text: "⬅ 全部设备", value: "proj:root" }],
+              },
+            ],
+          }
+        }
+
+        const totalPages = Math.max(1, Math.ceil(indexed.length / PAGE_SIZE))
+        const safePage = Math.min(totalPages, requestedPage)
+        const pageSlice = indexed.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+        const listElements: MobileCard["elements"][number][] = [
+          {
+            kind: "markdown",
+            content: `设备：**${dev.serverLabel}** · 第 ${safePage}/${totalPages} 页（共 ${indexed.length} 个项目）`,
+          },
+          ...pageSlice.map((item) => ({
+            kind: "list_item" as const,
+            text: `${item.isCurrent ? "* " : "- "}**${dev.dIdx}.${item.pIdx} ${item.proj.name}**${
+              item.isCurrent ? " (当前)" : ""
+            } · \`${item.proj.directory}\``,
+          })),
+        ]
+
+        const pickButtons: CardButton[] = pageSlice.map((item) => {
+          const shortName = item.proj.name.length > 14 ? `${item.proj.name.slice(0, 13)}…` : item.proj.name
+          return {
+            text: `${item.isCurrent ? "✓ " : ""}${dev.dIdx}.${item.pIdx} ${shortName}`,
+            value: `proj:pick:${dev.dIdx}.${item.pIdx}`,
+            type: item.isCurrent ? "primary" : "default",
+          }
+        })
+
+        const navButtons: CardButton[] = [{ text: "⬅ 全部设备", value: "proj:root" }]
+        if (safePage > 1) {
+          navButtons.push({
+            text: `⬅ 上一页 (${safePage - 1}/${totalPages})`,
+            value: `proj:dev:${dev.serverKey}:${safePage - 1}`,
+          })
+        }
+        if (safePage < totalPages) {
+          navButtons.push({
+            text: `下一页 (${safePage + 1}/${totalPages}) ➡`,
+            value: `proj:dev:${dev.serverKey}:${safePage + 1}`,
+            type: "primary",
+          })
+        }
+
+        return {
+          header: { title: `选择项目 · #${dev.dIdx} ${dev.serverLabel}`, color: "blue" },
+          elements: [
+            ...listElements,
+            ...chunkCardButtons(pickButtons, 3),
+            { kind: "actions", buttons: navButtons },
+            {
+              kind: "note",
+              text: `用法：发 .p ${dev.dIdx}.<编号> 切换（如 .p ${dev.dIdx}.${pageSlice[0]?.pIdx ?? 1}）${
+                totalPages > 1 ? `｜ .p ${dev.dIdx} p${safePage < totalPages ? safePage + 1 : 1} 翻页` : ""
+              } ｜ .p 返回全部设备`,
+            },
+          ],
+        }
+      }
+
+      const normalizedArg = arg.trim().replace(/(\d)[。．](\d)/g, "$1.$2")
+
+      // Cross-device search: `.p ? <keyword>` or `.p search <keyword>`
+      if (normalizedArg && /^(?:\?|search)\s+/i.test(normalizedArg) && !options?.forceSwitch) {
+        const kw = normalizedArg.replace(/^(?:\?|search)\s+/i, "").trim().toLowerCase()
+        const hits: Array<{ dIdx: number; pIdx: number; proj: UnifiedProjectItem }> = []
+        for (const dev of deviceGroups) {
+          for (const [pi, proj] of dev.projects.entries()) {
+            if (proj.name.toLowerCase().includes(kw) || proj.directory.toLowerCase().includes(kw)) {
+              hits.push({ dIdx: dev.dIdx, pIdx: pi + 1, proj })
+            }
+          }
+        }
+        if (hits.length === 0) {
+          return {
+            header: { title: "未搜索到匹配项目", color: "orange" },
+            elements: [{ kind: "markdown", content: `未找到包含 \`${kw}\` 的项目。发送 \`.p\` 查看设备与项目列表。` }],
+          }
+        }
+        const topHits = hits.slice(0, 15)
+        const hitButtons: CardButton[] = topHits.map((h) => {
+          const shortName = h.proj.name.length > 14 ? `${h.proj.name.slice(0, 13)}…` : h.proj.name
+          return {
+            text: `${h.dIdx}.${h.pIdx} ${shortName}`,
+            value: `proj:pick:${h.dIdx}.${h.pIdx}`,
+          }
+        })
+        return {
+          header: { title: `项目搜索结果 · "${kw}" (共 ${hits.length} 个)`, color: "blue" },
+          elements: [
+            ...topHits.map((h) => ({
+              kind: "list_item" as const,
+              text: `${isCurrentProj(h.proj) ? "* " : "- "}**${h.dIdx}.${h.pIdx} ${h.proj.name}** (${
+                h.proj.serverLabel
+              }) · \`${h.proj.directory}\``,
+            })),
+            ...chunkCardButtons(hitButtons, 3),
+            { kind: "actions", buttons: [{ text: "⬅ 全部设备", value: "proj:root" }] },
+            { kind: "note", text: "用法：发 .p <设备>.<项目> 切换（如 .p 1.1）｜ .p 返回全部设备" },
+          ],
+        }
+      }
+
+      if (normalizedArg) {
+        // 1. Two-level index `<deviceIdx>.<projectIdx>` (e.g. `.p 1.1`, `.p 2.2`)
+        const twoLevelMatch = /^(\d+)\.(\d+)$/.exec(normalizedArg)
+        if (twoLevelMatch) {
+          const dIdx = Number(twoLevelMatch[1])
+          const pIdx = Number(twoLevelMatch[2])
+          const dev = deviceGroups[dIdx - 1]
+          if (!dev) {
+            return {
+              header: { title: "设备编号超出范围", color: "red" },
+              elements: [
+                {
+                  kind: "markdown",
+                  content: `当前共有 **${deviceGroups.length}** 台设备，不存在设备 \`#${dIdx}\`。发送 \`.p\` 查看设备列表。`,
+                },
+              ],
+            }
+          }
+          const matchedProj = dev.projects[pIdx - 1]
+          if (!matchedProj) {
+            return {
+              header: { title: "项目编号超出范围", color: "red" },
+              elements: [
+                {
+                  kind: "markdown",
+                  content: `**#${dIdx} ${dev.serverLabel}** 共有 **${dev.projects.length}** 个项目，请使用 \`.p ${dIdx}.1\` ~ \`.p ${dIdx}.${dev.projects.length}\`。`,
+                },
+              ],
+            }
+          }
+          return switchMatchedProject(matchedProj)
+        }
+
+        // 2. Device drill-down: `.p 1`, `.p 1 p2`, `.p 2`, `.p local p2`, `.p AutoDL`
+        if (!options?.forceSwitch) {
+          const firstSpace = normalizedArg.search(/\s/)
+          const headToken = firstSpace === -1 ? normalizedArg : normalizedArg.slice(0, firstSpace)
+          const tailRest = firstSpace === -1 ? "" : normalizedArg.slice(firstSpace + 1).trim()
+          const matchedDev = findDeviceByToken(headToken)
+          if (matchedDev) {
+            return renderDeviceProjectsCard(matchedDev, tailRest)
+          }
+        }
+
+        // 3. Direct switch by serverKey:path, exact project name/path, or fallback global index
+        if (sub === "switch" || options?.forceSwitch) {
+          const prefixed = parseServerPrefixedArg(normalizedArg)
+          const hasValidFilter =
+            prefixed.serverKey === "local" || (prefixed.serverKey !== undefined && remoteServers.has(prefixed.serverKey))
+          const query = hasValidFilter ? prefixed.rest : normalizedArg
+          const pool = hasValidFilter ? allProjects.filter((p) => p.serverKey === prefixed.serverKey) : allProjects
+          const qLower = query.toLowerCase()
+          const idx = Number(normalizedArg)
+          const matched =
+            Number.isInteger(idx) && idx >= 1 && idx <= allProjects.length
+              ? allProjects[idx - 1]
+              : !query && pool.length > 0
+                ? pool[0]
+                : (pool.find(
+                    (p) =>
+                      p.id === query ||
+                      p.name.toLowerCase() === qLower ||
+                      p.directory.toLowerCase() === qLower,
+                  ) ??
+                  pool.find((p) => p.name.toLowerCase().includes(qLower)) ??
+                  pool.find((p) => p.serverLabel.toLowerCase().includes(qLower)))
+          if (!matched) {
+            return {
+              header: { title: "未找到匹配项目", color: "red" },
+              elements: [
+                {
+                  kind: "markdown",
+                  content: `找不到项目 \`${query}\`。发送 \`.p\` 查看设备与项目编号，或发 \`.p ? <关键词>\` 搜索。`,
+                },
+              ],
+            }
+          }
+          return switchMatchedProject(matched)
+        }
+      }
+
+      if (allProjects.length === 0 && remoteServers.size === 0) {
         return {
           header: { title: "项目列表", color: "blue" },
           elements: [
@@ -1448,26 +1917,86 @@ const layer = Layer.effect(
         }
       }
 
+      // Level 1 Overview: list every Device + preview top projects with `d.p` codes and full pagination link
+      const PREVIEW_CAP = 8
       const elements: MobileCard["elements"][number][] = []
-      for (const [i, proj] of allProjects.slice(0, 20).entries()) {
-        const isCurrent =
-          current?.serverKey === proj.serverKey &&
-          ((current.projectId !== "global" && current.projectId === proj.id) ||
-            current.projectDirectory === proj.directory)
-        const mark = isCurrent ? "* " : "- "
-        const tag = isCurrent ? `${proj.serverLabel} · 当前` : proj.serverLabel
-        elements.push({
-          kind: "list_item",
-          text: `${mark}**#${i + 1} ${proj.name}** (${tag}) · \`${proj.directory}\``,
+      const devButtons: CardButton[] = []
+      const quickButtons: CardButton[] = []
+
+      for (const dev of deviceGroups) {
+        if (dev.projects.length === 0) {
+          if (dev.serverKey !== "local") {
+            elements.push({
+              kind: "markdown",
+              content: `**#${dev.dIdx} ${dev.serverLabel}** · 暂无已打开项目（可发 \`.p new ${dev.shortLabel}:~/目录\` 打开）`,
+            })
+          }
+          continue
+        }
+
+        const indexedDev = dev.projects.map((proj, idx) => ({
+          proj,
+          pIdx: idx + 1,
+          isCurrent: isCurrentProj(proj),
+        }))
+        const shown = indexedDev.slice(0, PREVIEW_CAP)
+        const currentInRest = indexedDev.slice(PREVIEW_CAP).find((item) => item.isCurrent)
+        const visibleItems = currentInRest ? [...shown, currentInRest] : shown
+        const hasCurrent = indexedDev.some((item) => item.isCurrent)
+
+        devButtons.push({
+          text: `${hasCurrent ? "✓ " : ""}#${dev.dIdx} ${dev.shortLabel}全部 (${dev.projects.length})`,
+          value: `proj:dev:${dev.serverKey}:1`,
+          type: hasCurrent ? "primary" : "default",
         })
+
+        elements.push({
+          kind: "markdown",
+          content: `**#${dev.dIdx} ${dev.serverLabel}** · 共 ${dev.projects.length} 个项目${
+            dev.projects.length > PREVIEW_CAP ? `（发 \`.p ${dev.dIdx}\` 分页看全部）` : ""
+          }`,
+        })
+
+        for (const item of visibleItems) {
+          const mark = item.isCurrent ? "* " : "- "
+          const tag = item.isCurrent ? `${item.proj.serverLabel} · 当前` : item.proj.serverLabel
+          elements.push({
+            kind: "list_item",
+            text: `${mark}**${dev.dIdx}.${item.pIdx} ${item.proj.name}** (${tag}) · \`${item.proj.directory}\``,
+          })
+          if (quickButtons.length < 6 && (item.isCurrent || dev.serverKey !== "local" || item.pIdx <= 3)) {
+            const shortName = item.proj.name.length > 13 ? `${item.proj.name.slice(0, 12)}…` : item.proj.name
+            quickButtons.push({
+              text: `${item.isCurrent ? "✓ " : ""}${dev.dIdx}.${item.pIdx} ${shortName}`,
+              value: `proj:pick:${dev.dIdx}.${item.pIdx}`,
+              type: item.isCurrent ? "primary" : "default",
+            })
+          }
+        }
+
+        const hiddenCount = dev.projects.length - visibleItems.length
+        if (hiddenCount > 0) {
+          elements.push({
+            kind: "markdown",
+            content: `_… 其余 ${hiddenCount} 个项目可发 \`.p ${dev.dIdx}\`（及 \`.p ${dev.dIdx} p2\`）翻页查看全部 ${dev.projects.length} 个_`,
+          })
+        }
       }
+
+      if (devButtons.length > 0) {
+        elements.push(...chunkCardButtons(devButtons, 3))
+      }
+      if (quickButtons.length > 0) {
+        elements.push(...chunkCardButtons(quickButtons, 3))
+      }
+
       elements.push({
         kind: "note",
-        text: "用法：.p <编号> 切换项目 ｜ .p new <路径> 打开目录",
+        text: "用法：发 .p <设备编号> 分页看该设备全部项目 ｜ .p <设备>.<项目> 切换（如 .p 1.1）｜ .p ? <词> 搜索 ｜ .p new [服务器:]<路径>",
       })
 
       return {
-        header: { title: `项目列表 (共 ${allProjects.length} 个)`, color: "blue" },
+        header: { title: `项目列表 (共 ${allProjects.length} 个 · 跨 ${deviceGroups.length} 台设备)`, color: "blue" },
         elements,
       }
     }
@@ -1697,23 +2226,117 @@ const layer = Layer.effect(
         }
       }
 
-      const elements: MobileCard["elements"][number][] = []
-      for (const [i, item] of list.slice(0, 15).entries()) {
+      const PAGE_SIZE = 15
+      const rawChatArg = arg.trim()
+      const isSearch = /^(?:\?|search)\s+/i.test(rawChatArg)
+      const searchKw = isSearch ? rawChatArg.replace(/^(?:\?|search)\s+/i, "").trim().toLowerCase() : ""
+      const tokens = isSearch ? [] : rawChatArg.split(/\s+/).filter(Boolean)
+      const pageTokenIdx = tokens.findIndex((t) => /^p(?:age)?\d+$/i.test(t))
+      const requestedPage =
+        pageTokenIdx >= 0
+          ? Math.max(1, Number(tokens[pageTokenIdx]!.replace(/^p(?:age)?/i, "")) || 1)
+          : tokens.length === 2 && tokens[0]!.toLowerCase() === "page" && /^\d+$/.test(tokens[1]!)
+            ? Math.max(1, Number(tokens[1]!) || 1)
+            : tokens.length === 1 && /^\d+$/.test(tokens[0]!)
+              ? Math.max(1, Number(tokens[0]!) || 1)
+              : 1
+      const extraFilter = isSearch
+        ? searchKw
+        : tokens
+            .filter(
+              (t, i) =>
+                i !== pageTokenIdx &&
+                !(tokens.length === 2 && tokens[0]!.toLowerCase() === "page") &&
+                !(tokens.length === 1 && /^\d+$/.test(t)),
+            )
+            .join(" ")
+            .toLowerCase()
+
+      const indexed = list
+        .map((item, idx) => ({ item, idx: idx + 1 }))
+        .filter(({ item }) => {
+          if (!extraFilter) return true
+          return (
+            item.title.toLowerCase().includes(extraFilter) ||
+            item.id.toLowerCase().includes(extraFilter) ||
+            item.modelLabel.toLowerCase().includes(extraFilter)
+          )
+        })
+
+      if (indexed.length === 0) {
+        return {
+          header: { title: `会话列表 · ${currentProj.name} (${currentProj.serverLabel})`, color: "blue" },
+          elements: [
+            {
+              kind: "markdown",
+              content: extraFilter
+                ? `未找到匹配 \`${extraFilter}\` 的会话。发送 \`.c\` 查看全部会话。`
+                : "当前项目暂无会话。发送 `.new [标题]` 创建会话。",
+            },
+          ],
+        }
+      }
+
+      const totalPages = Math.max(1, Math.ceil(indexed.length / PAGE_SIZE))
+      const safePage = Math.min(totalPages, requestedPage)
+      const pageSlice = indexed.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+      const elements: MobileCard["elements"][number][] = [
+        {
+          kind: "markdown",
+          content: `设备：**${currentProj.serverLabel}** · 项目：**${currentProj.name}** · 第 ${safePage}/${totalPages} 页（共 ${indexed.length} 个会话）`,
+        },
+      ]
+
+      const pickButtons: CardButton[] = []
+      for (const { item, idx } of pageSlice) {
         const isCurrent = item.id === binding.sessionId
         const mark = isCurrent ? "* " : "- "
         const status = isCurrent ? `当前 · ${formatRelativeTime(item.updatedAt)}` : formatRelativeTime(item.updatedAt)
         elements.push({
           kind: "list_item",
-          text: `${mark}**#${i + 1} ${item.title}** (${status}) · \`${item.modelLabel}\``,
+          text: `${mark}**#${idx} ${item.title}** (${status}) · \`${item.modelLabel}\``,
+        })
+        const shortTitle = item.title.length > 14 ? `${item.title.slice(0, 13)}…` : item.title
+        pickButtons.push({
+          text: `${isCurrent ? "✓ " : ""}#${idx} ${shortTitle}`,
+          value: `chat:pick:${item.id}`,
+          type: isCurrent ? "primary" : "default",
         })
       }
+
+      if (pickButtons.length > 0) {
+        elements.push(...chunkCardButtons(pickButtons, 3))
+      }
+
+      const navButtons: CardButton[] = [{ text: "➕ 新建会话", value: "chat:new" }]
+      if (safePage > 1) {
+        navButtons.push({
+          text: `⬅ 上一页 (${safePage - 1}/${totalPages})`,
+          value: `chat:page:${safePage - 1}`,
+        })
+      }
+      if (safePage < totalPages) {
+        navButtons.push({
+          text: `下一页 (${safePage + 1}/${totalPages}) ➡`,
+          value: `chat:page:${safePage + 1}`,
+          type: "primary",
+        })
+      }
+      elements.push({ kind: "actions", buttons: navButtons })
+
       elements.push({
         kind: "note",
-        text: "用法：.c <编号> 切换 ｜ .new [标题] 新建 ｜ .c name <标题> 重命名 ｜ .c del <编号> 删除",
+        text: `用法：.c <编号> 切换${
+          totalPages > 1 ? ` ｜ .c p${safePage < totalPages ? safePage + 1 : 1} 翻页` : ""
+        } ｜ .c ? <词> 搜索 ｜ .new [标题] 新建 ｜ .c name <标题> ｜ .c del <编号>`,
       })
 
       return {
-        header: { title: `会话列表 · ${currentProj.name} (共 ${list.length} 个)`, color: "blue" },
+        header: {
+          title: `会话列表 · ${currentProj.name} (第 ${safePage}/${totalPages} 页 · 共 ${indexed.length} 个)`,
+          color: "blue",
+        },
         elements,
       }
     }
@@ -1722,6 +2345,7 @@ const layer = Layer.effect(
       sessionKey: string,
       sub: "list" | "switch" | "effort",
       arg: string,
+      options?: { readonly forceSwitch?: boolean },
     ): Promise<MobileCard> {
       const binding = await ensureBinding(sessionKey)
       if (!binding) {
@@ -1781,41 +2405,18 @@ const layer = Layer.effect(
       }
 
       const models = await listModelsForBinding(binding)
+      const vendors = groupModelsByVendor(models)
       const summary = await getCurrentSessionSummary(binding)
+      const serverTag =
+        binding.serverKey === "local"
+          ? "本机"
+          : `SSH:${remoteServers.get(binding.serverKey)?.name ?? binding.serverKey}`
+      const activeFull = summary.activeModelRef
+        ? `${summary.activeModelRef.providerID}/${summary.activeModelRef.id}`
+        : summary.modelLabel
+      const normalizedArg = arg.trim().replace(/(\d)[。．](\d)/g, "$1.$2")
 
-      if (sub === "switch" && arg.trim()) {
-        const query = arg.trim()
-        const qLower = query.toLowerCase()
-        const idx = Number(query)
-        const target =
-          Number.isInteger(idx) && idx >= 1 && idx <= models.length
-            ? models[idx - 1]
-            : (models.find((m) => `${m.providerID}/${m.id}`.toLowerCase() === qLower) ??
-              models.find((m) => m.id.toLowerCase() === qLower || m.name.toLowerCase() === qLower) ??
-              models.find((m) => `${m.providerID}/${m.id}`.toLowerCase().includes(qLower)))
-
-        const resolvedTarget: UnifiedModelItem | undefined =
-          target ??
-          (query.includes("/")
-            ? {
-                providerID: query.split("/")[0] ?? "",
-                id: query.split("/").slice(1).join("/"),
-                name: query,
-              }
-            : undefined)
-
-        if (!resolvedTarget || !resolvedTarget.providerID || !resolvedTarget.id) {
-          return {
-            header: { title: "未找到匹配模型", color: "red" },
-            elements: [
-              {
-                kind: "markdown",
-                content: `未找到模型 \`${query}\`。发送 \`.model\` 查看编号或使用 \`<provider>/<model>\`。`,
-              },
-            ],
-          }
-        }
-
+      const applyModelSwitch = async (resolvedTarget: UnifiedModelItem): Promise<MobileCard> => {
         const effectiveVariant =
           binding.effort &&
           binding.effort !== "default" &&
@@ -1834,47 +2435,337 @@ const layer = Layer.effect(
           elements: [
             {
               kind: "markdown",
-              content: `模型：\`${resolvedTarget.providerID}/${resolvedTarget.id}\`\n会话：${summary.sessionLabel}（上下文已保留）`,
+              content: [
+                `设备：**${serverTag}** · 项目：**${binding.projectName}**`,
+                `模型：\`${resolvedTarget.providerID}/${resolvedTarget.id}\``,
+                `会话：${summary.sessionLabel}（上下文已保留）`,
+              ].join("\n"),
             },
           ],
         }
       }
 
-      const activeFull = summary.activeModelRef
-        ? `${summary.activeModelRef.providerID}/${summary.activeModelRef.id}`
-        : summary.modelLabel
+      const findVendorByToken = (token: string): { vendor: ModelVendorGroup; vIdx: number } | undefined => {
+        const tLower = token.trim().toLowerCase()
+        if (!tLower) return undefined
+        const vNum = Number(tLower)
+        if (Number.isInteger(vNum) && vNum >= 1 && vNum <= vendors.length) {
+          return { vendor: vendors[vNum - 1]!, vIdx: vNum }
+        }
+        const exactIdx = vendors.findIndex(
+          (v) =>
+            v.key.toLowerCase() === tLower ||
+            v.aliases.includes(tLower) ||
+            v.shortLabel.toLowerCase() === tLower,
+        )
+        if (exactIdx >= 0) {
+          return { vendor: vendors[exactIdx]!, vIdx: exactIdx + 1 }
+        }
+        if (tLower === "opencode") {
+          const localOcIdx = vendors.findIndex((v) => v.key === "local:opencode")
+          if (localOcIdx >= 0) return { vendor: vendors[localOcIdx]!, vIdx: localOcIdx + 1 }
+        }
+        return undefined
+      }
+
+      const renderVendorModelsCard = (
+        vendor: ModelVendorGroup,
+        vIdx: number,
+        rawRest: string,
+      ): MobileCard => {
+        const PAGE_SIZE = 15
+        const tokens = rawRest.split(/\s+/).filter(Boolean)
+        const pageTokenIdx = tokens.findIndex((t) => /^p(?:age)?\d+$/i.test(t))
+        const requestedPage =
+          pageTokenIdx >= 0
+            ? Math.max(1, Number(tokens[pageTokenIdx]!.replace(/^p(?:age)?/i, "")) || 1)
+            : tokens.length === 1 && /^\d+$/.test(tokens[0]!)
+              ? Math.max(1, Number(tokens[0]!) || 1)
+              : 1
+        const filterWords = tokens.filter(
+          (t, i) => i !== pageTokenIdx && !(tokens.length === 1 && /^\d+$/.test(t)),
+        )
+        const keyword = filterWords.join(" ").toLowerCase()
+
+        const indexed = vendor.models
+          .map((m, idx) => ({ m, mIdx: idx + 1 }))
+          .filter((entry) => {
+            if (!keyword) return true
+            return (
+              entry.m.id.toLowerCase().includes(keyword) ||
+              entry.m.name.toLowerCase().includes(keyword) ||
+              `${entry.m.providerID}/${entry.m.id}`.toLowerCase().includes(keyword)
+            )
+          })
+
+        if (indexed.length === 0) {
+          return {
+            header: { title: `未找到匹配模型 · #${vIdx} ${vendor.label}`, color: "orange" },
+            elements: [
+              {
+                kind: "markdown",
+                content: `在 **${vendor.label}** 下没有匹配 \`${keyword}\` 的模型。发送 \`.m ${vIdx}\` 查看该家全部模型。`,
+              },
+              {
+                kind: "actions",
+                buttons: [
+                  { text: `查看 ${vendor.shortLabel} 全部`, value: `model:vendor:${vendor.key}:1`, type: "primary" },
+                  { text: "⬅ 全部厂家", value: "model:root" },
+                ],
+              },
+            ],
+          }
+        }
+
+        const totalPages = Math.max(1, Math.ceil(indexed.length / PAGE_SIZE))
+        const safePage = Math.min(totalPages, requestedPage)
+        const pageSlice = indexed.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
+        const lines = pageSlice
+          .map(({ m, mIdx }) => {
+            const full = `${m.providerID}/${m.id}`
+            const isAct = full === activeFull || full === summary.modelLabel
+            const displayId = m.providerID === "local" ? m.id : full
+            return `${isAct ? "* " : "- "}**${vIdx}.${mIdx}** \`${displayId}\`${isAct ? " · 当前" : ""}`
+          })
+          .join("\n")
+
+        const pickButtons: CardButton[] = pageSlice.map(({ m, mIdx }) => {
+          const full = `${m.providerID}/${m.id}`
+          const isAct = full === activeFull || full === summary.modelLabel
+          const rawShort = m.providerID === "local" && m.id.includes("/") ? m.id.slice(m.id.indexOf("/") + 1) : m.id
+          const shortName = rawShort.length > 16 ? `${rawShort.slice(0, 15)}…` : rawShort
+          return {
+            text: `${isAct ? "✓ " : ""}${vIdx}.${mIdx} ${shortName}`,
+            value: `model:pick:${full}`,
+            type: isAct ? "primary" : "default",
+          }
+        })
+
+        const navButtons: CardButton[] = [{ text: "⬅ 全部厂家", value: "model:root" }]
+        if (safePage > 1) {
+          navButtons.push({
+            text: `⬅ 上一页 (${safePage - 1}/${totalPages})`,
+            value: `model:vendor:${vendor.key}:${safePage - 1}`,
+          })
+        }
+        if (safePage < totalPages) {
+          navButtons.push({
+            text: `下一页 (${safePage + 1}/${totalPages}) ➡`,
+            value: `model:vendor:${vendor.key}:${safePage + 1}`,
+            type: "primary",
+          })
+        }
+
+        const elements: MobileCard["elements"][number][] = [
+          {
+            kind: "markdown",
+            content: [
+              `设备：**${serverTag}** · 项目：**${binding.projectName}** · 第 ${safePage}/${totalPages} 页（共 ${indexed.length} 个）`,
+              "",
+              lines,
+            ].join("\n"),
+          },
+          ...chunkCardButtons(pickButtons, 3),
+          { kind: "actions", buttons: navButtons },
+          {
+            kind: "note",
+            text: `用法：发 .m ${vIdx}.<编号> 切换（如 .m ${vIdx}.${pageSlice[0]?.mIdx ?? 1}）${
+              totalPages > 1 ? `｜ .m ${vIdx} p${safePage < totalPages ? safePage + 1 : 1} 翻页` : ""
+            } ｜ .m 返回全部厂家`,
+          },
+        ]
+
+        return {
+          header: { title: `选择模型 · #${vIdx} ${vendor.label}`, color: "blue" },
+          elements,
+        }
+      }
+
+      // Cross-vendor search: `.m ? <keyword>` or `.m search <keyword>`
+      if (normalizedArg && /^(?:\?|search)\s+/i.test(normalizedArg) && !options?.forceSwitch) {
+        const kw = normalizedArg.replace(/^(?:\?|search)\s+/i, "").trim().toLowerCase()
+        const hits: Array<{ vIdx: number; mIdx: number; vendor: ModelVendorGroup; m: UnifiedModelItem }> = []
+        for (const [vi, v] of vendors.entries()) {
+          for (const [mi, m] of v.models.entries()) {
+            if (
+              m.id.toLowerCase().includes(kw) ||
+              m.name.toLowerCase().includes(kw) ||
+              `${m.providerID}/${m.id}`.toLowerCase().includes(kw)
+            ) {
+              hits.push({ vIdx: vi + 1, mIdx: mi + 1, vendor: v, m })
+            }
+          }
+        }
+        if (hits.length === 0) {
+          return {
+            header: { title: "未搜索到匹配模型", color: "orange" },
+            elements: [
+              { kind: "markdown", content: `当前设备（**${serverTag}**）未找到包含 \`${kw}\` 的模型。发送 \`.m\` 查看全部厂家。` },
+            ],
+          }
+        }
+        const topHits = hits.slice(0, 15)
+        const hitLines = topHits
+          .map(({ vIdx, mIdx, m }) => {
+            const full = `${m.providerID}/${m.id}`
+            const isAct = full === activeFull || full === summary.modelLabel
+            return `${isAct ? "* " : "- "}**${vIdx}.${mIdx}** \`${full}\`${isAct ? " · 当前" : ""}`
+          })
+          .join("\n")
+        const hitButtons: CardButton[] = topHits.map(({ vIdx, mIdx, m }) => {
+          const full = `${m.providerID}/${m.id}`
+          const rawShort = m.providerID === "local" && m.id.includes("/") ? m.id.slice(m.id.indexOf("/") + 1) : m.id
+          const shortName = rawShort.length > 16 ? `${rawShort.slice(0, 15)}…` : rawShort
+          return {
+            text: `${vIdx}.${mIdx} ${shortName}`,
+            value: `model:pick:${full}`,
+          }
+        })
+        return {
+          header: { title: `模型搜索结果 · "${kw}" (共 ${hits.length} 个)`, color: "blue" },
+          elements: [
+            { kind: "markdown", content: hitLines },
+            ...chunkCardButtons(hitButtons, 3),
+            { kind: "actions", buttons: [{ text: "⬅ 全部厂家", value: "model:root" }] },
+            { kind: "note", text: "用法：发 .m <厂家>.<模型> 切换（如 .m 1.1）｜ .m 返回全部厂家" },
+          ],
+        }
+      }
+
+      if (normalizedArg) {
+        // 1. Two-level numeric index `<vendorIdx>.<modelIdx>` (e.g. `.m 1.2`)
+        const twoLevelMatch = /^(\d+)\.(\d+)$/.exec(normalizedArg)
+        if (twoLevelMatch) {
+          const vIdx = Number(twoLevelMatch[1])
+          const mIdx = Number(twoLevelMatch[2])
+          const vendor = vendors[vIdx - 1]
+          if (!vendor) {
+            return {
+              header: { title: "厂家编号超出范围", color: "red" },
+              elements: [
+                {
+                  kind: "markdown",
+                  content: `当前设备共有 **${vendors.length}** 个厂家，不存在厂家 \`#${vIdx}\`。发送 \`.m\` 查看厂家列表。`,
+                },
+              ],
+            }
+          }
+          const targetModel = vendor.models[mIdx - 1]
+          if (!targetModel) {
+            return {
+              header: { title: "模型编号超出范围", color: "red" },
+              elements: [
+                {
+                  kind: "markdown",
+                  content: `**#${vIdx} ${vendor.label}** 共有 **${vendor.models.length}** 个模型，请使用 \`.m ${vIdx}.1\` ~ \`.m ${vIdx}.${vendor.models.length}\`。`,
+                },
+              ],
+            }
+          }
+          return applyModelSwitch(targetModel)
+        }
+
+        // 2. Vendor drill-down: `.m 1`, `.m 1 p2`, `.m codex`, `.m 1 deepseek`, or `.m list codex`
+        if (!options?.forceSwitch) {
+          const firstSpace = normalizedArg.search(/\s/)
+          const headToken = firstSpace === -1 ? normalizedArg : normalizedArg.slice(0, firstSpace)
+          const tailRest = firstSpace === -1 ? "" : normalizedArg.slice(firstSpace + 1).trim()
+          const matchedVendor = findVendorByToken(headToken)
+          if (matchedVendor) {
+            return renderVendorModelsCard(matchedVendor.vendor, matchedVendor.vIdx, tailRest)
+          }
+        }
+
+        // 3. Direct 1-step model switch (`.m codex/gpt-6.1-sol`, `.m pigutoken/...`, or Butler `forceSwitch`)
+        if (sub === "switch" || options?.forceSwitch) {
+          const qLower = normalizedArg.toLowerCase()
+          const matchedVendorForForce = options?.forceSwitch ? findVendorByToken(normalizedArg) : undefined
+          const target =
+            matchedVendorForForce?.vendor.models[0] ??
+            models.find((m) => `${m.providerID}/${m.id}`.toLowerCase() === qLower) ??
+            models.find((m) => m.providerID === "local" && m.id.toLowerCase() === qLower) ??
+            models.find((m) => m.id.toLowerCase() === qLower || m.name.toLowerCase() === qLower) ??
+            models.find((m) => `${m.providerID}/${m.id}`.toLowerCase().includes(qLower))
+
+          const resolvedTarget: UnifiedModelItem | undefined =
+            target ??
+            (normalizedArg.includes("/")
+              ? {
+                  providerID: normalizedArg.split("/")[0] ?? "",
+                  id: normalizedArg.split("/").slice(1).join("/"),
+                  name: normalizedArg,
+                }
+              : undefined)
+
+          if (!resolvedTarget || !resolvedTarget.providerID || !resolvedTarget.id) {
+            return {
+              header: { title: "未找到匹配厂家或模型", color: "red" },
+              elements: [
+                {
+                  kind: "markdown",
+                  content: `未找到 \`${normalizedArg}\`。发送 \`.m\` 查看当前设备（**${serverTag}**）的厂家编号，再发 \`.m <厂家编号>\` 选择模型。`,
+                },
+              ],
+            }
+          }
+
+          return applyModelSwitch(resolvedTarget)
+        }
+      }
+
+      // Level 1: List all Vendors on the current Project's Device (`local` or `SSH:<name>`)
       const elements: MobileCard["elements"][number][] = [
         {
           kind: "markdown",
-          content: `当前：\`${summary.modelLabel}\` · 推理：\`${binding.effort ?? "default"}\``,
+          content: `设备：**${serverTag}** · 项目：**${binding.projectName}**\n当前：\`${summary.modelLabel}\` · 推理：\`${binding.effort ?? "default"}\``,
         },
       ]
 
-      if (models.length > 0) {
-        const lines = models
-          .slice(0, 25)
-          .map((m, i) => {
-            const full = `${m.providerID}/${m.id}`
-            const mark = full === activeFull || full === summary.modelLabel ? "* " : "- "
-            return `${mark}**#${i + 1}** \`${full}\` (${m.name})`
+      if (vendors.length > 0) {
+        const vendorLines = vendors
+          .map((v, idx) => {
+            const activeInVendor = v.models.find((m) => {
+              const full = `${m.providerID}/${m.id}`
+              return full === activeFull || full === summary.modelLabel
+            })
+            if (activeInVendor) {
+              return `* **#${idx + 1} ${v.label}** · 共 ${v.models.length} 个 · 当前：\`${activeInVendor.name}\``
+            }
+            return `- **#${idx + 1} ${v.label}** · 共 ${v.models.length} 个`
           })
           .join("\n")
-        elements.push({ kind: "markdown", content: lines })
+
+        const vendorButtons: CardButton[] = vendors.slice(0, 15).map((v, idx) => {
+          const isAct = v.models.some((m) => {
+            const full = `${m.providerID}/${m.id}`
+            return full === activeFull || full === summary.modelLabel
+          })
+          return {
+            text: `${isAct ? "✓ " : ""}#${idx + 1} ${v.shortLabel} (${v.models.length})`,
+            value: `model:vendor:${v.key}:1`,
+            type: isAct ? "primary" : "default",
+          }
+        })
+
+        elements.push({ kind: "markdown", content: vendorLines })
+        elements.push(...chunkCardButtons(vendorButtons, 3))
       }
-      if (models.length === 0) {
+
+      if (vendors.length === 0) {
         elements.push({
           kind: "markdown",
-          content: "未发现已启用模型，可使用 `.m <provider>/<model>` 指定。",
+          content: `当前设备（**${serverTag}**）未发现已启用模型，可使用 \`.m <provider>/<model>\` 指定。`,
         })
       }
 
       elements.push({
         kind: "note",
-        text: "用法：.m <编号或厂商/模型> 切换 ｜ .m effort <low|medium|high|max> 设推理强度",
+        text: "用法：发 .m <厂家编号> 看模型（如 .m 1）｜ .m <厂家>.<模型> 切换（如 .m 1.1）｜ .m ? <词> 搜索 ｜ .m effort <级别>",
       })
 
       return {
-        header: { title: "模型与厂商切换 (.model)", color: "blue" },
+        header: { title: `模型与厂商切换 (.model) · ${serverTag}`, color: "blue" },
         elements,
       }
     }
@@ -2226,7 +3117,7 @@ const layer = Layer.effect(
         }
       }
       await scanDir(dir, "", 0)
-      return files.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 8)
+      return files.sort((a, b) => b.mtimeMs - a.mtimeMs).slice(0, 200)
     }
 
     function inferMimeFromFileName(fileName: string, bytes: Uint8Array): string {
@@ -2328,7 +3219,7 @@ const layer = Layer.effect(
       )
       return (res?.data ?? [])
         .filter((entry) => entry.type === "file" && entry.path && !path.posix.basename(entry.path).startsWith("."))
-        .slice(0, 8)
+        .slice(0, 200)
         .map((entry) => ({ name: entry.path, size: -1, mtimeMs: 0 }))
     }
 
@@ -2337,17 +3228,16 @@ const layer = Layer.effect(
       replyContext: unknown,
       sessionKey: string,
       rawFilePath: string,
-    ): Promise<void> {
+    ): Promise<MobileCard | undefined> {
       const binding = await ensureBinding(sessionKey)
       if (!binding) {
-        await connector.sendCard(replyContext, {
+        return {
           header: { title: "发送文件 (.send)", color: "orange" },
           elements: [{ kind: "markdown", content: "请先通过 `.project` 选择项目。" }],
-        })
-        return
+        }
       }
       if (binding.serverKey !== "local" && !remoteServers.has(binding.serverKey)) {
-        await connector.sendCard(replyContext, {
+        return {
           header: { title: "SSH 远程服务器未连接", color: "orange" },
           elements: [
             {
@@ -2355,52 +3245,89 @@ const layer = Layer.effect(
               content: "当前绑定的 SSH 服务器暂未连接，请恢复连接或发送 `.project` 切换其他项目。",
             },
           ],
-        })
-        return
+        }
       }
       const recentFiles =
         binding.serverKey === "local"
           ? await listRecentProjectFiles(binding.projectDirectory)
           : await listRemoteProjectFiles(remoteServers.get(binding.serverKey)!, binding.projectDirectory)
-      const targetRel = expandPathForServer(rawFilePath, binding.serverKey, binding.projectDirectory)
-      if (!targetRel) {
+      const trimmedInput = rawFilePath.trim()
+      const isPageReq = /^p(?:age)?\d+$/i.test(trimmedInput)
+      const isSearchReq = /^(?:\?|search)\s+/i.test(trimmedInput)
+
+      if (!trimmedInput || isPageReq || isSearchReq) {
+        const PAGE_SIZE = 15
+        const requestedPage = isPageReq ? Math.max(1, Number(trimmedInput.replace(/^p(?:age)?/i, "")) || 1) : 1
+        const kw = isSearchReq ? trimmedInput.replace(/^(?:\?|search)\s+/i, "").trim().toLowerCase() : ""
+        const indexed = recentFiles
+          .map((f, idx) => ({ f, idx: idx + 1 }))
+          .filter(({ f }) => !kw || f.name.toLowerCase().includes(kw))
+
+        const totalPages = Math.max(1, Math.ceil(indexed.length / PAGE_SIZE))
+        const safePage = Math.min(totalPages, requestedPage)
+        const pageSlice = indexed.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
+
         const elements: MobileCard["elements"][number][] = [
           {
             kind: "markdown",
-            content: `目录：\`${binding.projectDirectory}\``,
+            content: `目录：\`${binding.projectDirectory}\` · 第 ${safePage}/${totalPages} 页（共 ${indexed.length} 个文件）`,
           },
         ]
-        if (recentFiles.length > 0) {
-          for (const [i, f] of recentFiles.entries()) {
-            const sizeSuffix =
-              f.size < 0 ? "" : ` (${f.size < 1024 ? `${f.size} B` : `${(f.size / 1024).toFixed(1)} KB`})`
-            elements.push({
-              kind: "list_item",
-              text: `- **#${i + 1} ${f.name}**${sizeSuffix}`,
-            })
-          }
+        const sendButtons: CardButton[] = []
+        for (const { f, idx } of pageSlice) {
+          const sizeSuffix =
+            f.size < 0 ? "" : ` (${f.size < 1024 ? `${f.size} B` : `${(f.size / 1024).toFixed(1)} KB`})`
+          elements.push({
+            kind: "list_item",
+            text: `- **#${idx} ${f.name}**${sizeSuffix}`,
+          })
+          const base = path.posix.basename(f.name)
+          const shortBase = base.length > 16 ? `${base.slice(0, 15)}…` : base
+          sendButtons.push({
+            text: `#${idx} ${shortBase}`,
+            value: `send:pick:${idx}`,
+          })
+        }
+        if (sendButtons.length > 0) {
+          elements.push(...chunkCardButtons(sendButtons, 3))
+        }
+        const navButtons: CardButton[] = []
+        if (safePage > 1) {
+          navButtons.push({
+            text: `⬅ 上一页 (${safePage - 1}/${totalPages})`,
+            value: `send:page:${safePage - 1}`,
+          })
+        }
+        if (safePage < totalPages) {
+          navButtons.push({
+            text: `下一页 (${safePage + 1}/${totalPages}) ➡`,
+            value: `send:page:${safePage + 1}`,
+            type: "primary",
+          })
+        }
+        if (navButtons.length > 0) {
+          elements.push({ kind: "actions", buttons: navButtons })
         }
         elements.push({
           kind: "note",
-          text: "用法：.send <编号> 或 .send <相对/绝对路径>",
+          text: `用法：.send <编号或路径>${
+            totalPages > 1 ? ` ｜ .send p${safePage < totalPages ? safePage + 1 : 1} 翻页` : ""
+          } ｜ .send ? <词> 搜索`,
         })
-        await connector.sendCard(replyContext, {
+        return {
           header: { title: `发送文件 (.send) · ${binding.projectName}`, color: "blue" },
           elements,
-        })
-        return
+        }
       }
 
-      const idx = Number(targetRel)
+      const targetRel = expandPathForServer(rawFilePath, binding.serverKey, binding.projectDirectory)
+      const idx = Number(trimmedInput)
       const resolvedRel =
         Number.isInteger(idx) && idx >= 1 && idx <= recentFiles.length
           ? recentFiles[idx - 1]!.name
           : targetRel
 
-      const errCard = await deliverProjectFileToMobile(connector, replyContext, binding, resolvedRel)
-      if (errCard) {
-        await connector.sendCard(replyContext, errCard)
-      }
+      return deliverProjectFileToMobile(connector, replyContext, binding, resolvedRel)
     }
 
     async function handleAccessCommand(
@@ -3212,7 +4139,7 @@ const layer = Layer.effect(
         const resolvedTarget = snapProj
           ? `${snapProj.serverKey}:${snapProj.directory}`
           : rawTarget
-        return handleProjectCommand(sessionKey, "switch", resolvedTarget)
+        return handleProjectCommand(sessionKey, "switch", resolvedTarget, { forceSwitch: true })
       }
       if (action.type === "open_project") {
         return handleProjectCommand(sessionKey, "new", action.target ?? "")
@@ -3232,7 +4159,7 @@ const layer = Layer.effect(
       if (action.type === "switch_model") {
         const target = action.target?.trim() ?? ""
         const effort = action.effort?.trim() ?? ""
-        const modelCard = target ? await handleModelCommand(sessionKey, "switch", target) : undefined
+        const modelCard = target ? await handleModelCommand(sessionKey, "switch", target, { forceSwitch: true }) : undefined
         if (effort && (!modelCard || modelCard.header?.color !== "red")) {
           const effortCard = await handleModelCommand(sessionKey, "effort", effort)
           return modelCard ?? effortCard
@@ -4220,6 +5147,68 @@ const layer = Layer.effect(
         return nextCard
       }
 
+      if (input.action === "model:root") {
+        return handleModelCommand(input.sessionKey, "list", "")
+      }
+
+      if (input.action.startsWith("model:vendor:")) {
+        const rest = input.action.slice("model:vendor:".length)
+        const lastSep = rest.lastIndexOf(":")
+        const vendorKey = lastSep > 0 ? rest.slice(0, lastSep) : rest
+        const page = lastSep > 0 ? Number(rest.slice(lastSep + 1)) || 1 : 1
+        return handleModelCommand(input.sessionKey, "list", `${vendorKey} p${page}`)
+      }
+
+      if (input.action.startsWith("model:pick:")) {
+        const target = input.action.slice("model:pick:".length).trim()
+        if (!target) return undefined
+        return handleModelCommand(input.sessionKey, "switch", target, { forceSwitch: true })
+      }
+
+      if (input.action === "proj:root") {
+        return handleProjectCommand(input.sessionKey, "list", "")
+      }
+
+      if (input.action.startsWith("proj:dev:")) {
+        const rest = input.action.slice("proj:dev:".length)
+        const lastSep = rest.lastIndexOf(":")
+        const serverKey = lastSep > 0 ? rest.slice(0, lastSep) : rest
+        const page = lastSep > 0 ? Number(rest.slice(lastSep + 1)) || 1 : 1
+        return handleProjectCommand(input.sessionKey, "list", `${serverKey} p${page}`)
+      }
+
+      if (input.action.startsWith("proj:pick:")) {
+        const target = input.action.slice("proj:pick:".length).trim()
+        if (!target) return undefined
+        return handleProjectCommand(input.sessionKey, "switch", target, { forceSwitch: true })
+      }
+
+      if (input.action.startsWith("chat:page:")) {
+        const page = Number(input.action.slice("chat:page:".length)) || 1
+        return handleChatCommand(input.sessionKey, "list", `p${page}`)
+      }
+
+      if (input.action.startsWith("chat:pick:")) {
+        const target = input.action.slice("chat:pick:".length).trim()
+        if (!target) return undefined
+        return handleChatCommand(input.sessionKey, "switch", target)
+      }
+
+      if (input.action === "chat:new") {
+        return handleChatCommand(input.sessionKey, "new", "")
+      }
+
+      if (input.action.startsWith("send:page:")) {
+        const page = Number(input.action.slice("send:page:".length)) || 1
+        return handleSendFileCommand(connector, input.replyContext, input.sessionKey, `p${page}`)
+      }
+
+      if (input.action.startsWith("send:pick:")) {
+        const target = input.action.slice("send:pick:".length).trim()
+        if (!target) return undefined
+        return handleSendFileCommand(connector, input.replyContext, input.sessionKey, target)
+      }
+
       return undefined
     }
 
@@ -4520,7 +5509,10 @@ const layer = Layer.effect(
           modelLabel: item.modelLabel,
           isCurrent: item.id === binding.sessionId,
         })),
-        sampleModels: models.slice(0, 12).map((m) => `${m.providerID}/${m.id}`),
+        sampleModels: groupModelsByVendor(models)
+          .flatMap((v) => v.models.slice(0, 2))
+          .slice(0, 16)
+          .map((m) => `${m.providerID}/${m.id}`),
       })
 
       const targetSessionId = binding.sessionId
@@ -5029,7 +6021,8 @@ const layer = Layer.effect(
           return
         }
         if (parsed.kind === "send") {
-          await handleSendFileCommand(connector, msg.replyContext, msg.sessionKey, parsed.filePath)
+          const card = await handleSendFileCommand(connector, msg.replyContext, msg.sessionKey, parsed.filePath)
+          if (card) await connector.sendCard(msg.replyContext, card)
           return
         }
         if (parsed.kind === "access") {

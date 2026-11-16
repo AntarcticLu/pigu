@@ -1,5 +1,5 @@
 import { Button } from "@opencode/ui/button"
-import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle, DialogTitleGroup } from "@opencode/ui/dialog"
+import { Dialog, DialogBody, DialogFooter, DialogHeader, DialogTitle } from "@opencode/ui/dialog"
 import { Icon } from "@opencode/ui/icon"
 import { Switch } from "@opencode/ui/switch"
 import { TextInput, type TextInputProps } from "@opencode/ui/text-input"
@@ -38,8 +38,6 @@ const PLATFORMS: ReadonlyArray<{
   enName: string
   badgeZh: string
   badgeEn: string
-  descZh: string
-  descEn: string
 }> = [
   {
     id: "feishu",
@@ -47,10 +45,8 @@ const PLATFORMS: ReadonlyArray<{
     shortEn: "Feishu",
     zhName: "飞书 / Lark",
     enName: "Feishu / Lark",
-    badgeZh: "推荐 · 扫码即连",
-    badgeEn: "Recommended · QR",
-    descZh: "支持手机飞书扫码一键创号，原生渲染交互卡片与文件收发",
-    descEn: "One-click QR bot setup, interactive cards, and file sharing",
+    badgeZh: "推荐 · 手机扫码即连",
+    badgeEn: "Recommended · Scan QR",
   },
   {
     id: "weixin",
@@ -58,10 +54,8 @@ const PLATFORMS: ReadonlyArray<{
     shortEn: "WeChat",
     zhName: "个人微信",
     enName: "WeChat (iLink)",
-    badgeZh: "推荐 · 扫码即连",
-    badgeEn: "Recommended · QR",
-    descZh: "基于微信 iLink 协议，手机微信扫码即可直接对话与收发文件",
-    descEn: "Scan QR code with personal WeChat via iLink protocol",
+    badgeZh: "推荐 · 手机扫码即连",
+    badgeEn: "Recommended · Scan QR",
   },
   {
     id: "dingtalk",
@@ -69,10 +63,8 @@ const PLATFORMS: ReadonlyArray<{
     shortEn: "DingTalk",
     zhName: "钉钉机器人",
     enName: "DingTalk",
-    badgeZh: "Stream 长连接",
-    badgeEn: "Stream WS",
-    descZh: "通过钉钉 Stream 模式建立出站长连接，无需公网 IP 与域名",
-    descEn: "Outbound Stream WebSocket connection with zero public IP",
+    badgeZh: "免公网 Stream 长连接",
+    badgeEn: "Stream WebSocket",
   },
   {
     id: "wecom",
@@ -81,9 +73,7 @@ const PLATFORMS: ReadonlyArray<{
     zhName: "企业微信",
     enName: "WeCom",
     badgeZh: "智能机器人长连接",
-    badgeEn: "Smart Bot WS",
-    descZh: "企业微信智能机器人 API 长连接模式，实时流式响应与 Markdown 消息",
-    descEn: "WeCom Smart Robot WebSocket connection with real-time replies",
+    badgeEn: "Smart Bot WebSocket",
   },
   {
     id: "qqbot",
@@ -91,101 +81,56 @@ const PLATFORMS: ReadonlyArray<{
     shortEn: "QQ Bot",
     zhName: "QQ 机器人",
     enName: "QQ Bot",
-    badgeZh: "WebSocket v2",
-    badgeEn: "WebSocket v2",
-    descZh: "QQ 开放平台官方 WebSocket 网关，支持单聊与群聊 @ 对话",
-    descEn: "Official QQ Bot WebSocket v2 gateway for C2C and group chats",
+    badgeZh: "官方长连接",
+    badgeEn: "Official WebSocket",
   },
 ]
 
 const COMMAND_CHEAT_SHEET = [
   {
-    cmd: ".project",
-    alias: ".proj",
-    titleZh: "项目切换与新建",
-    titleEn: "Switch / Create Project",
-    descZh: "列出本机与已连接的远程 SSH 项目并切换，支持 .project new <路径> 或自然语言让 AI 切换",
-    descEn: "List local and remote SSH projects, switch, .project new <path>, or switch via natural language",
+    cmds: [".p", ".p new"],
+    titleZh: "查看并切换本机或 SSH 服务器项目",
+    titleEn: "List and switch local or SSH server projects",
   },
   {
-    cmd: ".chat",
-    alias: ".new / .undo",
-    titleZh: "会话管理与回退",
-    titleEn: "Session Management",
-    descZh: "切换项目会话、新建会话 (.new)、查看记录 (.history)、撤回修改 (.undo)",
-    descEn: "Switch sessions, create (.new), view (.history), or revert (.undo)",
+    cmds: [".c", ".new", ".undo"],
+    titleZh: "切换项目会话、新建会话或撤回上一轮修改",
+    titleEn: "Switch session, create a new chat, or revert last turn",
   },
   {
-    cmd: ".model",
-    alias: ".model effort",
-    titleZh: "无损切换模型",
-    titleEn: "Switch Model",
-    descZh: "在本机或远程 SSH 会话内无缝切换模型与供应商，调整推理强度，支持自然语言切换",
-    descEn: "Switch provider/model or reasoning effort on local and SSH sessions, including via natural language",
+    cmds: [".m", ".m 1.1"],
+    titleZh: "查看当前设备的厂家列表并按编号切换模型",
+    titleEn: "Browse device vendors and switch model by index",
   },
   {
-    cmd: ".log",
-    alias: ".progress",
-    titleZh: "抽查实时执行进度",
-    titleEn: "Inspect Live Progress",
-    descZh: "长任务中途静默运行不刷屏；发送 .log 可随时抽查当前或上一轮的中间思考与工具步骤",
-    descEn: "Tasks update silently without notification spam; send .log anytime to inspect intermediate steps",
+    cmds: [".send"],
+    titleZh: "将电脑或远程服务器上的文件直接发回手机",
+    titleEn: "Send files from desktop or SSH server to phone chat",
   },
   {
-    cmd: ".ps",
-    alias: "直接发文字",
-    titleZh: "运行中途自然插话",
-    titleEn: "Mid-Turn Steering",
-    descZh: "AI 干活时直接发送文字、语音或图片即可自动合并补充指令（也可用 .ps），无需中断重来",
-    descEn: "Send plain text, voice, or images while AI is busy to steer the current turn without restarting",
+    cmds: [".sh"],
+    titleZh: "直接在当前项目目录执行终端命令",
+    titleEn: "Run shell commands directly in active project directory",
   },
   {
-    cmd: ".skip",
-    alias: "数字 / 文字",
-    titleZh: "交互式问答与权限确认",
-    titleEn: "Interactive Q&A & Approvals",
-    descZh: "AI 遇到分歧或权限确认时会主动强提醒手机，点按钮、回编号或自定义文字放行，发 .skip 按推荐继续",
-    descEn: "Active alerts when AI asks questions or permissions; tap buttons, reply with option numbers, or .skip",
+    cmds: [".access", ".whoami"],
+    titleZh: "管理群聊白名单成员权限与查看当前身份",
+    titleEn: "Manage group allowlist permissions and check user role",
   },
   {
-    cmd: ".send",
-    alias: ".file",
-    titleZh: "双向图片与文件收发",
-    titleEn: "Two-Way Media & Files",
-    descZh: "手机发语音/图片/PDF 直接解析；发 .send <路径> 或让 AI 把本机与远程 SSH 文件发回手机",
-    descEn: "Send voice, images, or PDFs to AI; use .send <path> or ask AI to send local/SSH files to your phone",
+    cmds: [".log", ".ps"],
+    titleZh: "抽查实时执行步骤 / 在运行中途补充指令",
+    titleEn: "Inspect live execution steps or steer mid-run",
   },
   {
-    cmd: ".sh",
-    alias: ".shell",
-    titleZh: "直接执行命令",
-    titleEn: "Run Shell Command",
-    descZh: "不经过模型，直接在当前本机或远程 SSH 项目目录执行终端命令",
-    descEn: "Run shell commands directly in the active local or SSH directory",
+    cmds: [".stop", ".skip"],
+    titleZh: "立即停止当前任务 / 按推荐方案跳过待确认提问",
+    titleEn: "Stop active generation or skip pending question",
   },
   {
-    cmd: ".stop",
-    alias: "",
-    titleZh: "中止当前任务",
-    titleEn: "Stop Execution",
-    descZh: "立即停止当前会话正在运行的推理或工具调用",
-    descEn: "Immediately abort the currently running session execution",
-  },
-  {
-    cmd: ".access",
-    alias: ".acl / .whoami",
-    titleZh: "权限与白名单",
-    titleEn: "Access Control",
-    descZh: "管理员查看白名单 (.access list)、增删成员 (.access add / remove)",
-    descEn: "Owner allowlist management: list, add, or remove users",
-  },
-  {
-    cmd: ".help",
-    alias: "。help",
-    titleZh: "主控台状态面板",
-    titleEn: "Control Panel",
-    descZh: "查看当前项目、当前会话、当前模型与实时执行状态总览卡片",
-    descEn: "Open the interactive status card for active project, session, model, and live progress",
+    cmds: [".help"],
+    titleZh: "打开手机端控制中心状态面板",
+    titleEn: "Open mobile control center overview card",
   },
 ] as const
 
@@ -353,14 +298,8 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
     <>
       <div class="settings-tab-header">
         <div class="settings-tab-header-row">
-          <div class="flex min-w-0 flex-col gap-1">
+          <div class="flex min-w-0 flex-col">
             <h2 class="settings-tab-title">{language.tr("手机端", "Mobile")}</h2>
-            <span class="text-11-regular text-v2-text-text-muted">
-              {language.tr(
-                "通过飞书、微信、钉钉、企业微信或 QQ 远程控制本机与 SSH 项目",
-                "Control local and connected SSH projects from Feishu, WeChat, DingTalk, WeCom, or QQ",
-              )}
-            </span>
           </div>
           <div class="settings-tab-header-actions">
             <Button size="small" variant="neutral" icon="download" onClick={openImportDialog}>
@@ -385,10 +324,9 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
             fallback={
               <SettingsList>
                 <SettingsRow
-                  title={language.tr("尚未接入手机端机器人", "No mobile robots configured")}
-                  description={language.tr(
-                    "支持飞书或个人微信扫码快速接入，也可导入 AL-ROBOT-1 迁移码恢复已有通道。",
-                    "Connect via Feishu/WeChat QR scan, or import an AL-ROBOT-1 migration code.",
+                  title={language.tr(
+                    "添加飞书、微信、钉钉、企业微信或 QQ 机器人远程控制本机与 SSH 服务器",
+                    "Connect Feishu, WeChat, DingTalk, WeCom, or QQ to control local and SSH projects",
                   )}
                 >
                   <Button size="small" variant="outline" onClick={openAddWizard}>
@@ -417,28 +355,6 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
                     return language.tr("连接异常", "Error")
                   }
 
-                  const ownerSummary = () => {
-                    if (!robot.ownerID) {
-                      return language.tr(
-                        "待认领 · 在手机端发送首条消息自动绑定管理员",
-                        "Unclaimed · Send first message from phone to claim owner",
-                      )
-                    }
-
-                    const displayName = robot.userNames?.[robot.ownerID]
-                    const count = robot.allowFrom
-                      ? robot.allowFrom
-                          .split(",")
-                          .map((s) => s.trim())
-                          .filter(Boolean).length
-                      : 1
-                    const ownerLabel = displayName
-                      ? `${displayName} (${robot.ownerID.slice(0, 10)}…)`
-                      : robot.ownerID
-
-                    return `${language.tr("管理员", "Owner")}: ${ownerLabel} · ${language.tr(`白名单 ${count} 人`, `${count} allowed`)}`
-                  }
-
                   return (
                     <div
                       class="settings-extension-row settings-mcp-row"
@@ -459,13 +375,13 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
                         </span>
 
                         <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                          <div class="flex min-w-0 items-center gap-1.5">
+                          <div class="flex min-w-0 items-center gap-2">
                             <span class="settings-extension-name truncate">{robot.name}</span>
-                            <span class="shrink-0 rounded-[3px] border border-v2-border-border-base px-1.5 py-0.5 text-[10px] leading-none text-v2-text-text-muted">
+                            <span class="shrink-0 rounded-[3px] border border-v2-border-border-base px-1.5 py-0.5 text-[11px] leading-none text-v2-text-text-muted">
                               {language.tr(meta().shortZh, meta().shortEn)}
                             </span>
                             <span
-                              class="shrink-0 text-11-regular"
+                              class="shrink-0 text-[12px]"
                               classList={{
                                 "text-v2-text-text-muted": !isError(),
                                 "text-[var(--v2-state-fg-danger)]": isError(),
@@ -473,9 +389,12 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
                             >
                               {statusText()}
                             </span>
+                            <Show when={!robot.ownerID}>
+                              <span class="shrink-0 rounded-[3px] border border-v2-border-border-base px-1.5 py-0.5 text-[11px] leading-none text-v2-text-text-muted">
+                                {language.tr("待手机首条消息认领", "Send first message to claim")}
+                              </span>
+                            </Show>
                           </div>
-
-                          <span class="truncate text-11-regular text-v2-text-text-faint">{ownerSummary()}</span>
 
                           <Show when={isError() && robot.status.error}>
                             <span class="truncate font-mono text-[11px] text-[var(--v2-state-fg-danger)]">
@@ -515,25 +434,24 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
         </section>
 
         <section class="settings-section">
-          <h3 class="settings-section-title">{language.tr("运行守护与跨端体验", "Keep-Awake & Cross-Device")}</h3>
+          <h3 class="settings-section-title">{language.tr("运行守护", "Keep-Awake")}</h3>
           <SettingsList>
             <SettingsRow
               title={
                 <span class="inline-flex items-center gap-2">
                   <span>
-                    {language.tr("开启远控时阻止电脑自动休眠", "Prevent computer sleep while mobile control is active")}
+                    {language.tr(
+                      "远控在线时阻止电脑自动休眠（不影响屏幕正常息屏）",
+                      "Prevent computer sleep while mobile bots are active (display still sleeps)",
+                    )}
                   </span>
                   <Show when={mobileSettings().active}>
-                    <span class="rounded-[3px] border border-v2-border-border-base px-1.5 py-0.5 text-[10px] leading-none text-icon-success-base">
+                    <span class="rounded-[3px] border border-v2-border-border-base px-1.5 py-0.5 text-[11px] leading-none text-icon-success-base">
                       {language.tr("守护中", "Active")}
                     </span>
                   </Show>
                 </span>
               }
-              description={language.tr(
-                "仅阻止系统闲置挂起与断网，不影响显示器正常息屏与锁屏；当至少有一个机器人启用时自动生效。",
-                "Prevents OS idle suspend and network drop while allowing the display to turn off normally when any robot is enabled.",
-              )}
             >
               <Switch
                 checked={mobileSettings().preventSleep}
@@ -544,51 +462,29 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
                 <span class="sr-only">{language.tr("阻止电脑自动休眠", "Prevent computer sleep")}</span>
               </Switch>
             </SettingsRow>
-
-            <SettingsRow
-              title={language.tr("免打扰进度、异常告警与跨端完成推送", "Quiet Progress, Alerts & Cross-Device Push")}
-              description={language.tr(
-                "手机发起长任务时中途静默刷新进度、仅在完成时提醒一次；遇到问答确认、限流报错或长时间卡住会主动提醒；电脑端发起或 /schedule 定时任务完成后自动将结果推送到已绑定的手机会话。",
-                "Updates progress silently mid-task and notifies once on completion; actively alerts on Q&A prompts, errors, or stalls; automatically pushes desktop and /schedule completions to bound mobile chats.",
-              )}
-            >
-              <span class="shrink-0 rounded-[3px] border border-v2-border-border-base px-1.5 py-0.5 text-[10px] leading-none text-v2-text-text-muted">
-                {language.tr("已内置", "Built-in")}
-              </span>
-            </SettingsRow>
           </SettingsList>
         </section>
 
         <section class="settings-section">
-          <div class="flex flex-wrap items-baseline justify-between gap-2">
-            <h3 class="settings-section-title">{language.tr("常用指令", "Commands")}</h3>
-            <span class="text-11-regular text-v2-text-text-faint">
-              {language.tr(
-                "直接发文字即与当前会话对话；点号指令同样支持中文句号 。前缀",
-                "Send plain text to chat; dot commands also accept 。 prefix",
-              )}
-            </span>
-          </div>
+          <h3 class="settings-section-title">
+            {language.tr("手机聊天指令（直接发文字即可对话）", "Chat Commands (Plain text chats directly)")}
+          </h3>
 
           <SettingsList variant="catalog">
             <For each={COMMAND_CHEAT_SHEET}>
               {(item) => (
-                <div class="flex min-h-11 items-center justify-between gap-4 border-b-[0.5px] border-v2-border-border-base py-2.5 last:border-b-0">
-                  <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <span class="text-[13px] font-[530] leading-5 text-v2-text-text-base">
-                      {language.tr(item.titleZh, item.titleEn)}
-                    </span>
-                    <span class="truncate text-11-regular text-v2-text-text-muted">
-                      {language.tr(item.descZh, item.descEn)}
-                    </span>
-                  </div>
+                <div class="flex min-h-10 items-center justify-between gap-4 border-b-[0.5px] border-v2-border-border-base py-2 last:border-b-0">
+                  <span class="truncate text-[13px] font-[530] leading-5 text-v2-text-text-base">
+                    {language.tr(item.titleZh, item.titleEn)}
+                  </span>
                   <div class="flex shrink-0 items-center gap-1.5">
-                    <Show when={item.alias}>
-                      <span class="font-mono text-[11px] text-v2-text-text-faint">{item.alias}</span>
-                    </Show>
-                    <code class="rounded border border-v2-border-border-base bg-v2-background-bg-layer-02 px-1.5 py-0.5 font-mono text-[11px] text-v2-text-text-base">
-                      {item.cmd}
-                    </code>
+                    <For each={item.cmds}>
+                      {(c) => (
+                        <code class="rounded border border-v2-border-border-base bg-v2-background-bg-layer-02 px-2 py-0.5 font-mono text-[12px] text-v2-text-text-base">
+                          {c}
+                        </code>
+                      )}
+                    </For>
                   </div>
                 </div>
               )}
@@ -649,13 +545,7 @@ const DialogImportMigrationCode: Component<{
   return (
     <Dialog fit containerClass="!w-[min(94vw,480px)] !rounded-[12px]">
       <DialogHeader>
-        <DialogTitleGroup
-          title={language.tr("导入机器人迁移码", "Import Migration Code")}
-          description={language.tr(
-            "粘贴 AL-ROBOT-1 或 AL-FEISHU-1 迁移码，自动恢复平台凭证、管理员及白名单配置。",
-            "Paste an AL-ROBOT-1 or AL-FEISHU-1 migration code to restore credentials, owner, and allowlist.",
-          )}
-        />
+        <DialogTitle>{language.tr("粘贴迁移码导入机器人", "Import Robot via Migration Code")}</DialogTitle>
       </DialogHeader>
       <DialogBody class="flex flex-col gap-3 px-4 pb-2 pt-0">
         <div class="flex flex-col gap-1.5">
@@ -1043,16 +933,13 @@ const DialogAddMobileRobot: Component<{
                   onClick={() => choosePlatform(p.id)}
                   class="flex w-full cursor-pointer items-center justify-between gap-3 px-3.5 py-3 text-left transition-colors first:rounded-t-lg last:rounded-b-lg hover:bg-v2-background-bg-layer-02"
                 >
-                  <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-                    <div class="flex items-center gap-2">
-                      <span class="text-[13px] font-[530] text-v2-text-text-base">
-                        {language.tr(p.zhName, p.enName)}
-                      </span>
-                      <span class="rounded-[3px] border border-v2-border-border-base bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[10px] leading-none text-v2-text-text-muted">
-                        {language.tr(p.badgeZh, p.badgeEn)}
-                      </span>
-                    </div>
-                    <span class="text-11-regular text-v2-text-text-muted">{language.tr(p.descZh, p.descEn)}</span>
+                  <div class="flex min-w-0 flex-1 items-center gap-2.5">
+                    <span class="text-[13px] font-[530] text-v2-text-text-base">
+                      {language.tr(p.zhName, p.enName)}
+                    </span>
+                    <span class="rounded-[3px] border border-v2-border-border-base bg-v2-background-bg-layer-02 px-1.5 py-0.5 text-[11px] leading-none text-v2-text-text-muted">
+                      {language.tr(p.badgeZh, p.badgeEn)}
+                    </span>
                   </div>
                   <Icon name="chevron-right" size="small" class="shrink-0 text-v2-icon-icon-muted" />
                 </button>

@@ -2289,6 +2289,47 @@ describe("end-to-end chained mini-task workflow (isolated sandbox)", () => {
         })
         expect(renderCardMarkdownFallback(undoExt.cards[0]!)).toContain("无可撤回记录")
 
+        // 2-level vendor -> model listing on SSH device & Feishu cardAction drill-down
+        const sshVendors = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".m",
+        })
+        expect(sshVendors.cards[0]?.header?.title).toContain("SSH:AutoDL-GPU")
+        const sshVendorsMd = renderCardMarkdownFallback(sshVendors.cards[0]!)
+        expect(sshVendorsMd).toContain("#1 PiguToken")
+        expect(sshVendorsMd).toContain("#2 OpenAI Codex (本地 CLI)")
+
+        const expandVendor2 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".m 2",
+        })
+        expect(expandVendor2.cards[0]?.header?.title).toContain("OpenAI Codex")
+        expect(renderCardMarkdownFallback(expandVendor2.cards[0]!)).toContain("2.1")
+
+        // Switch via two-level index (including Chinese full-width dot `。` from mobile keyboard)
+        const swTwoLevel = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: "。m 1。1",
+        })
+        expect(swTwoLevel.cards[0]?.header?.title).toContain("已切换会话模型")
+        expect(renderCardMarkdownFallback(swTwoLevel.cards[0]!)).toContain("pigutoken/deepseek-v4.1-flash")
+
+        // Switch back via Feishu interactive cardAction `model:pick:...`
+        const swByCardBtn = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: "",
+          cardAction: "model:pick:local/codex/gpt-6.1-sol",
+        })
+        expect(swByCardBtn.cards[0]?.header?.title).toContain("已切换会话模型")
+
         // Prompt via `local/codex/gpt-6.1-sol`, then switch model to `pigutoken/deepseek-v4.1-flash` and prompt again
         const turn1 = yield* mobile.simulateInbound({
           robotId: bot.id,
@@ -2349,6 +2390,300 @@ describe("end-to-end chained mini-task workflow (isolated sandbox)", () => {
           text: "重连后继续发消息",
         })
         expect(recoveredTurn.texts[0]).toContain("pigutoken/deepseek-v4.1-flash 复述暗号 ORION-77")
+      }),
+  )
+
+  test("groups 200+ models by desktop-aligned vendor priority without hiding PiguToken or local CLIs", () => {
+    const rawModels = [
+      ...Array.from({ length: 15 }, (_, i) => ({
+        providerID: "opencode",
+        id: `zen-free-${i + 1}`,
+        name: `Zen Free ${i + 1}`,
+      })),
+      ...Array.from({ length: 20 }, (_, i) => ({
+        providerID: "anthropic",
+        id: `claude-cloud-${i + 1}`,
+        name: `Claude Cloud ${i + 1}`,
+      })),
+      { providerID: "local", id: "agy/gemini-3-pro", name: "gemini-3-pro" },
+      { providerID: "local", id: "deepseek-harness/deepseek-v4", name: "deepseek-v4" },
+      { providerID: "local", id: "codex/gpt-6.1-sol", name: "gpt-6.1-sol" },
+      { providerID: "local", id: "claude/claude-sonnet-5-5", name: "claude-sonnet-5-5" },
+      ...Array.from({ length: 35 }, (_, i) => ({
+        providerID: "pigutoken",
+        id: `pigu-model-${i + 1}`,
+        name: `Pigu Model ${i + 1}`,
+      })),
+    ]
+
+    const groups = Mobile.groupModelsByVendor(rawModels)
+    expect(groups.map((g) => g.key)).toEqual([
+      "pigutoken",
+      "local:claude",
+      "local:codex",
+      "local:agy",
+      "local:deepseek-harness",
+      "anthropic",
+      "opencode",
+    ])
+    expect(groups[0]?.models.length).toBe(35)
+  })
+
+  test("parses pagination and search subcommands across .p, .c, and .m without breaking numeric switch", () => {
+    expect(parseMobileInput(".p ? autodl")).toEqual({ kind: "project", sub: "list", arg: "? autodl" })
+    expect(parseMobileInput(".p list 1 p2")).toEqual({ kind: "project", sub: "list", arg: "1 p2" })
+    expect(parseMobileInput("。p 1。18")).toEqual({ kind: "project", sub: "switch", arg: "1。18" })
+
+    expect(parseMobileInput(".c p2")).toEqual({ kind: "chat", sub: "list", arg: "p2" })
+    expect(parseMobileInput(".c page 3")).toEqual({ kind: "chat", sub: "list", arg: "page 3" })
+    expect(parseMobileInput(".c ? 排查")).toEqual({ kind: "chat", sub: "list", arg: "? 排查" })
+    expect(parseMobileInput(".c 18")).toEqual({ kind: "chat", sub: "switch", arg: "18" })
+
+    expect(parseMobileInput(".m list 1 p2")).toEqual({ kind: "model", sub: "list", arg: "1 p2" })
+  })
+
+  it.live(
+    "paginates and searches 15+ items across .p, .c, and .send with zero truncation and filters child sessions",
+    () =>
+      Effect.gen(function* () {
+        const mobile = yield* Mobile.Service
+        const sessions = yield* Session.Service
+        const tmp = yield* tmpdirScoped("pigu-mobile-pagination-")
+        const localDir = tmp.path
+
+        // Create 18 local files with distinct mtime ordering so #1..#18 are deterministic
+        for (let i = 1; i <= 18; i++) {
+          const pad = String(i).padStart(2, "0")
+          const fPath = path.join(localDir, `artifact-${pad}.txt`)
+          yield* Effect.promise(async () => {
+            await fs.writeFile(fPath, `payload-${pad}\n`, "utf8")
+            const ts = new Date(Date.UTC(2026, 10, 16, 12, 0, 100 - i))
+            await fs.utimes(fPath, ts, ts)
+          })
+        }
+
+        // Mock SSH server with 18 remote projects matching Project.Info schema (`canonical` + bare array)
+        const remoteProjects = Array.from({ length: 18 }, (_, idx) => {
+          const pad = String(idx + 1).padStart(2, "0")
+          return {
+            id: `proj_ssh_${pad}`,
+            name: `gpu-job-${pad}`,
+            canonical: `/root/autodl-tmp/gpu-job-${pad}`,
+            time: { updated: 1_760_000_000_000 - idx * 1000 },
+          }
+        })
+
+        const remoteServer = Bun.serve({
+          port: 0,
+          hostname: "127.0.0.1",
+          fetch(req) {
+            const u = new URL(req.url)
+            if (u.pathname === "/api/project") {
+              return Response.json(remoteProjects)
+            }
+            if (u.pathname === "/api/session" && req.method === "GET") {
+              const projParam = u.searchParams.get("project") ?? ""
+              const dirParam = u.searchParams.get("directory") ?? ""
+              const matched = remoteProjects.find((p) => p.id === projParam || p.canonical === dirParam)
+              if (!matched) return Response.json({ data: [] })
+              return Response.json({
+                data: [
+                  {
+                    id: `ses_${matched.id}`,
+                    title: `${matched.name} 主会话`,
+                    location: { directory: matched.canonical },
+                    time: { updated: 1_760_000_000_000 },
+                  },
+                ],
+              })
+            }
+            if (u.pathname === "/api/model/default") {
+              return Response.json({ data: { providerID: "pigutoken", id: "deepseek-v4.1" } })
+            }
+            if (u.pathname === "/api/session/active") {
+              return Response.json({ data: {} })
+            }
+            return Response.json({ data: {} })
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(() => remoteServer.stop(true)))
+
+        const bot = yield* mobile.create({
+          name: "分页完整性测试机器人",
+          platform: "feishu",
+          enabled: false,
+          ownerID: "ou_page_owner",
+          feishu: { appId: "cli_page_test", appSecret: "sec_page_test" },
+        })
+
+        yield* mobile.syncRemotes([
+          { key: "ssh:cluster18", name: "AutoDL-Cluster", url: `http://127.0.0.1:${remoteServer.port}` },
+        ])
+
+        // Open local project and create 17 more top-level sessions (total 18) + 1 child subagent session
+        yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: `.p new ${localDir}`,
+        })
+
+        let oldestSessionId = ""
+        for (let i = 2; i <= 18; i++) {
+          const pad = String(i).padStart(2, "0")
+          const created = yield* sessions.create({
+            location: Location.Ref.make({ directory: AbsolutePath.make(localDir) }),
+            title: `本地训练轮次-${pad}`,
+          })
+          if (i === 2) oldestSessionId = created.id
+        }
+        // Child session with parentID must NOT appear in `.c`
+        yield* sessions.create({
+          parentID: Session.ID.make(oldestSessionId),
+          title: "隐藏子代理会话-SUBAGENT",
+        })
+
+        // 1. `.p` overview shows all devices + explicit count of remaining projects on #2 SSH:AutoDL-Cluster
+        const pRoot = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".p",
+        })
+        const pRootMd = renderCardMarkdownFallback(pRoot.cards[0]!)
+        expect(pRootMd).toContain("#1 本机")
+        expect(pRootMd).toContain("#2 SSH:AutoDL-Cluster")
+        expect(pRootMd).toContain("共 18 个项目")
+
+        // `.p 2` drills into #2 SSH:AutoDL-Cluster page 1/2 (2.1..2.15), `.p 2 p2` (and cardAction) shows 2.16..2.18
+        const pDev2P1 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".p 2",
+        })
+        const pDev2P1Md = renderCardMarkdownFallback(pDev2P1.cards[0]!)
+        expect(pDev2P1Md).toContain("第 1/2 页（共 18 个项目）")
+        expect(pDev2P1Md).toContain("2.15 gpu-job-15")
+        expect(pDev2P1Md).not.toContain("2.16 gpu-job-16")
+
+        const pDev2P2Card = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: "",
+          cardAction: "proj:dev:ssh:cluster18:2",
+        })
+        const pDev2P2Md = renderCardMarkdownFallback(pDev2P2Card.cards[0]!)
+        expect(pDev2P2Md).toContain("第 2/2 页（共 18 个项目）")
+        expect(pDev2P2Md).toContain("2.18 gpu-job-18")
+
+        // `.p ? job-18` searches across devices, and `。p 2。18` switches to the 18th remote project
+        const pSearch = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".p ? job-18",
+        })
+        expect(renderCardMarkdownFallback(pSearch.cards[0]!)).toContain("2.18 gpu-job-18")
+
+        const pSw18 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: "。p 2。18",
+        })
+        expect(pSw18.cards[0]?.header?.title).toContain("已切换项目")
+        expect(renderCardMarkdownFallback(pSw18.cards[0]!)).toContain("gpu-job-18")
+
+        // Switch back to `#1 本机` project `1.1` via cardAction `proj:pick:1.1`
+        const pBackLocal = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: "",
+          cardAction: "proj:pick:1.1",
+        })
+        expect(pBackLocal.cards[0]?.header?.title).toContain("已切换项目")
+
+        // 2. `.c` paginates all 18 top-level sessions (excluding child subagent session)
+        const cPage1 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".c",
+        })
+        const cPage1Md = renderCardMarkdownFallback(cPage1.cards[0]!)
+        expect(cPage1Md).toContain("第 1/2 页（共 18 个会话）")
+        expect(cPage1Md).not.toContain("隐藏子代理会话-SUBAGENT")
+        expect(cPage1Md).toContain("#15")
+        expect(cPage1Md).not.toContain("#16")
+
+        const cPage2 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".c p2",
+        })
+        const cPage2Md = renderCardMarkdownFallback(cPage2.cards[0]!)
+        expect(cPage2Md).toContain("第 2/2 页（共 18 个会话）")
+        expect(cPage2Md).toContain("#18")
+
+        // `.c 18` switches directly to session #18 on page 2
+        const cSwitch18 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".c 18",
+        })
+        expect(cSwitch18.cards[0]?.header?.title).toContain("已切换会话")
+
+        const cSearch = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".c ? 轮次-17",
+        })
+        expect(renderCardMarkdownFallback(cSearch.cards[0]!)).toContain("本地训练轮次-17")
+
+        // 3. `.send` paginates all 18 files (`.send`, `send:page:2`, `.send 18`, `.send ? artifact-18`)
+        const sendP1 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".send",
+        })
+        const sendP1Md = renderCardMarkdownFallback(sendP1.cards[0]!)
+        expect(sendP1Md).toContain("第 1/2 页（共 18 个文件）")
+        expect(sendP1Md).toContain("#15 artifact-15.txt")
+        expect(sendP1Md).not.toContain("#16 artifact-16.txt")
+
+        const sendP2ViaBtn = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: "",
+          cardAction: "send:page:2",
+        })
+        const sendP2Md = renderCardMarkdownFallback(sendP2ViaBtn.cards[0]!)
+        expect(sendP2Md).toContain("第 2/2 页（共 18 个文件）")
+        expect(sendP2Md).toContain("#18 artifact-18.txt")
+
+        const sendSearch = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".send ? artifact-17",
+        })
+        expect(renderCardMarkdownFallback(sendSearch.cards[0]!)).toContain("#17 artifact-17.txt")
+
+        const sendPick18 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_page_owner",
+          chatId: "oc_page_chat",
+          text: ".send 18",
+        })
+        expect(sendPick18.files.map((f) => f.fileName)).toEqual(["artifact-18.txt"])
       }),
   )
 })

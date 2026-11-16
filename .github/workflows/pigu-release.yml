@@ -67,15 +67,6 @@ jobs:
         with:
           name: pigu-${{ matrix.target }}
           path: pigu-${{ matrix.target }}.tar.gz
-      - name: Attach macOS Archive to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          name: "Pigu ${{ inputs.tag || github.ref_name }}"
-          body_path: CHANGELOG.md
-          draft: false
-          prerelease: false
-          files: pigu-${{ matrix.target }}.tar.gz
 
   build-linux:
     name: Build Linux (${{ matrix.target }})
@@ -113,22 +104,10 @@ jobs:
           chmod 755 release-stage/bin/opencode
           ln -sf opencode release-stage/bin/pigu
           GZIP=-9 tar -czf pigu-${{ matrix.target }}.tar.gz -C release-stage .
-          cp -f install install.sh
       - uses: actions/upload-artifact@v4
         with:
           name: pigu-${{ matrix.target }}
           path: pigu-${{ matrix.target }}.tar.gz
-      - name: Attach Linux Archive to GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          name: "Pigu ${{ inputs.tag || github.ref_name }}"
-          body_path: CHANGELOG.md
-          draft: false
-          prerelease: false
-          files: |
-            pigu-${{ matrix.target }}.tar.gz
-            install.sh
 
   build-windows:
     name: Build Windows (windows-x64.zip)
@@ -191,12 +170,35 @@ jobs:
         with:
           name: pigu-windows-x64
           path: pigu-windows-x64.zip
-      - name: Attach Windows ZIP to GitHub Release
-        uses: softprops/action-gh-release@v2
+
+  publish-release:
+    name: Publish Clean GitHub Release
+    needs: [build-macos, build-linux, build-windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
         with:
-          tag_name: ${{ inputs.tag || github.ref_name }}
-          name: "Pigu ${{ inputs.tag || github.ref_name }}"
-          body_path: CHANGELOG.md
-          draft: false
-          prerelease: false
-          files: pigu-windows-x64.zip
+          path: release-raw
+      - name: Recreate GitHub Release with fresh assets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RAW_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          mkdir -p release-assets
+          cp -f release-raw/*/* release-assets/
+          cp -f install release-assets/install.sh
+          ls -lh release-assets/
+
+          EXISTING_IDS=$(gh api "/repos/${GITHUB_REPOSITORY}/releases?per_page=50" \
+            --jq ".[] | select(.tag_name == \"${RAW_TAG}\" or .name == \"Pigu ${RAW_TAG}\") | .id")
+          for rel_id in $EXISTING_IDS; do
+            echo "Deleting previous release id=${rel_id} (${RAW_TAG})..."
+            gh api -X DELETE "/repos/${GITHUB_REPOSITORY}/releases/${rel_id}"
+          done
+
+          gh release create "${RAW_TAG}" \
+            release-assets/* \
+            --target "${GITHUB_SHA}" \
+            --title "Pigu ${RAW_TAG}" \
+            --notes-file CHANGELOG.md
