@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v0.0.1)"
+        description: "Release tag (e.g. v1.0.0)"
         required: true
-        default: "v0.0.1"
+        default: "v1.0.0"
 
 permissions:
   contents: write
@@ -41,7 +41,8 @@ jobs:
           BUN_COMPILE_RELEASE: bun-v1.4.4
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          export OPENCODE_VERSION="${GITHUB_REF_NAME#v}"
+          RAW_TAG="${{ inputs.tag || github.ref_name }}"
+          export OPENCODE_VERSION="${RAW_TAG#v}"
           cd packages/cli
           bun run script/build.ts --skip-web-ui
       - name: Build & Pack Desktop
@@ -49,7 +50,8 @@ jobs:
           OPENCODE_CHANNEL: prod
           OPENCODE_TARGET: ${{ matrix.target }}
         run: |
-          export OPENCODE_VERSION="${GITHUB_REF_NAME#v}"
+          RAW_TAG="${{ inputs.tag || github.ref_name }}"
+          export OPENCODE_VERSION="${RAW_TAG#v}"
           cd packages/desktop
           bun run build
           bun run pack
@@ -83,7 +85,7 @@ jobs:
       matrix:
         include:
           - target: linux-x64
-            cli_target: linux-x64
+            cli_target: linux-x64-baseline
           - target: linux-arm64
             cli_target: linux-arm64
     steps:
@@ -100,7 +102,8 @@ jobs:
           BUN_COMPILE_RELEASE: bun-v1.4.4
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          export OPENCODE_VERSION="${GITHUB_REF_NAME#v}"
+          RAW_TAG="${{ inputs.tag || github.ref_name }}"
+          export OPENCODE_VERSION="${RAW_TAG#v}"
           cd packages/cli
           bun run script/build.ts --skip-web-ui
       - name: Assemble Linux Release Archive
@@ -110,6 +113,7 @@ jobs:
           chmod 755 release-stage/bin/opencode
           ln -sf opencode release-stage/bin/pigu
           GZIP=-9 tar -czf pigu-${{ matrix.target }}.tar.gz -C release-stage .
+          cp -f install install.sh
       - uses: actions/upload-artifact@v4
         with:
           name: pigu-${{ matrix.target }}
@@ -122,7 +126,9 @@ jobs:
           body_path: CHANGELOG.md
           draft: false
           prerelease: false
-          files: pigu-${{ matrix.target }}.tar.gz
+          files: |
+            pigu-${{ matrix.target }}.tar.gz
+            install.sh
 
   build-windows:
     name: Build Windows (windows-x64.zip)
@@ -142,7 +148,8 @@ jobs:
           BUN_COMPILE_RELEASE: bun-v1.4.4
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          export OPENCODE_VERSION="${GITHUB_REF_NAME#v}"
+          RAW_TAG="${{ inputs.tag || github.ref_name }}"
+          export OPENCODE_VERSION="${RAW_TAG#v}"
           cd packages/cli
           bun run script/build.ts --skip-web-ui
       - name: Build & Pack Desktop (Unpacked Portable Dir)
@@ -151,7 +158,8 @@ jobs:
           OPENCODE_CHANNEL: prod
           OPENCODE_TARGET: windows-x64
         run: |
-          export OPENCODE_VERSION="${GITHUB_REF_NAME#v}"
+          RAW_TAG="${{ inputs.tag || github.ref_name }}"
+          export OPENCODE_VERSION="${RAW_TAG#v}"
           cd packages/desktop
           bun run build
           bun run pack

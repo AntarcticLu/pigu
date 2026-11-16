@@ -16,13 +16,13 @@ Usage: install.sh [options]
 
 Options:
     -h, --help              Display this help message
-    -v, --version <version> Install a specific version (e.g., 0.0.1)
+    -v, --version <version> Install a specific version (e.g., 1.0.0)
     -b, --binary <path>     Install from a local binary instead of downloading
         --no-modify-path    Don't modify shell config files (.zshrc, .bashrc, etc.)
 
 Examples:
     curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
-    curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash -s -- --version 0.0.1
+    curl -fsSL https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash -s -- --version 1.0.0
     ./install --binary /path/to/pigu
 EOF
 }
@@ -184,7 +184,7 @@ else
         specific_version=$(echo "$release_json" | sed -n 's/.*"tag_name":[[:space:]]*"\([^"]*\)".*/\1/p' | head -n 1)
         specific_version="${specific_version#v}"
         if [ -z "$specific_version" ]; then
-            specific_version="0.0.1"
+            specific_version="1.0.0"
         fi
         release_base="https://github.com/$GITHUB_REPO/releases/latest/download"
     else

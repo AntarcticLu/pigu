@@ -1,6 +1,7 @@
 import { Component, Show, createMemo } from "solid-js"
 import { Select } from "@opencode/ui/select"
 import { useLanguage } from "@/runtime/i18n/language"
+import { usePlatform } from "@/runtime/platform/platform"
 import { SettingsList } from "@/settings/list"
 import { SettingsRow } from "@/settings/row"
 import { createShellOptions } from "./behavior"
@@ -79,6 +80,7 @@ const schemeOptions: ("system" | "light" | "dark")[] = ["system", "light", "dark
 
 export const SettingsGeneral: Component = () => {
   const language = useLanguage()
+  const platform = usePlatform()
   const appearance = createAppearanceSettingsController()
 
   const GeneralSection = () => (
@@ -149,7 +151,7 @@ export const SettingsGeneral: Component = () => {
       <SettingsList>
         <SettingsRow title={language.tr("当前版本", "Current version")}>
           <span data-action="settings-current-version" class="text-13-regular text-v2-text-text-muted">
-            v0.0.1
+            v{(platform.version ?? "1.0.0").replace(/^v/, "")}
           </span>
         </SettingsRow>
       </SettingsList>
