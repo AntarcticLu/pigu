@@ -381,6 +381,20 @@ function expandPathForServer(rawPath: string, serverKey: string, remoteProjectDi
   return trimmed
 }
 
+function isEphemeralTempDirectory(dir: string): boolean {
+  const norm = dir.replaceAll("\\", "/").replace(/\/+$/, "")
+  const sysTmp = os.tmpdir().replaceAll("\\", "/").replace(/\/+$/, "")
+  return (
+    norm === "/tmp" ||
+    norm.startsWith("/tmp/") ||
+    norm === "/private/tmp" ||
+    norm.startsWith("/private/tmp/") ||
+    norm.startsWith("/var/folders/") ||
+    norm.startsWith("/private/var/folders/") ||
+    (Boolean(sysTmp) && (norm === sysTmp || norm.startsWith(`${sysTmp}/`)))
+  )
+}
+
 const IS_TEST_RUNTIME =
   process.env.NODE_ENV === "test" ||
   process.env.BUN_ENV === "test" ||
@@ -757,8 +771,9 @@ const layer = Layer.effect(
         }),
       ).catch(() => ({ data: [] }))
       for (const s of globalSessions.data) {
-        if (s.parentID || s.id.startsWith("ses_ext_")) continue
+        if (s.parentID) continue
         const dir = s.location.directory
+        if (s.id.startsWith("ses_ext_") && dir && isEphemeralTempDirectory(dir)) continue
         if (
           dir &&
           !items.some((p) => p.serverKey === "local" && p.directory === dir) &&
@@ -800,28 +815,54 @@ const layer = Layer.effect(
       }
 
       for (const remote of remoteServers.values()) {
-        try {
-          const remoteProjects = await remoteFetchJson<
-            Array<{
-              id: string
-              name?: string
-              canonical: string
-              time?: { active?: number; updated?: number; created?: number }
-            }>
-          >(remote, "/api/project", undefined, 8_000)
-          for (const rp of remoteProjects ?? []) {
-            items.push({
-              serverKey: remote.key,
-              serverLabel: `SSH:${remote.name}`,
-              isRemote: true,
-              id: rp.id,
-              name: rp.name?.trim() || path.posix.basename(rp.canonical) || rp.canonical,
-              directory: rp.canonical,
-              updatedAt: rp.time?.active ?? rp.time?.updated ?? rp.time?.created ?? 0,
-            })
-          }
-        } catch {
-          // Skip unreachable remote server
+        // Query global sessions first so remote SessionExternal.sync() runs before /api/project on fresh servers.
+        const remoteGlobal = await remoteFetchJson<{
+          data?: Array<{
+            id: string
+            parentID?: string
+            location?: { directory?: string }
+            time?: { updated?: number; created?: number }
+          }>
+        }>(remote, "/api/session?project=global&parent=null&archived=false&limit=50", undefined, 8_000).catch(
+          () => undefined,
+        )
+
+        const remoteProjects = await remoteFetchJson<
+          Array<{
+            id: string
+            name?: string
+            canonical: string
+            time?: { active?: number; updated?: number; created?: number }
+          }>
+        >(remote, "/api/project", undefined, 8_000).catch(() => undefined)
+
+        for (const rp of remoteProjects ?? []) {
+          items.push({
+            serverKey: remote.key,
+            serverLabel: `SSH:${remote.name}`,
+            isRemote: true,
+            id: rp.id,
+            name: rp.name?.trim() || path.posix.basename(rp.canonical) || rp.canonical,
+            directory: rp.canonical,
+            updatedAt: rp.time?.active ?? rp.time?.updated ?? rp.time?.created ?? 0,
+          })
+        }
+
+        for (const rs of remoteGlobal?.data ?? []) {
+          if (rs.parentID) continue
+          const dir = rs.location?.directory?.trim() ?? ""
+          if (!dir) continue
+          if (rs.id.startsWith("ses_ext_") && isEphemeralTempDirectory(dir)) continue
+          if (items.some((p) => p.serverKey === remote.key && p.directory === dir)) continue
+          items.push({
+            serverKey: remote.key,
+            serverLabel: `SSH:${remote.name}`,
+            isRemote: true,
+            id: "global",
+            name: path.posix.basename(dir) || dir,
+            directory: dir,
+            updatedAt: rs.time?.updated ?? rs.time?.created ?? 0,
+          })
         }
       }
 
@@ -898,7 +939,7 @@ const layer = Layer.effect(
         if (existing.serverKey === "local" && (await localDirExists(existing.projectDirectory))) {
           return existing
         }
-        if (existing.serverKey !== "local" && remoteServers.has(existing.serverKey)) {
+        if (existing.serverKey !== "local") {
           return existing
         }
         bindings.delete(sessionKey)
@@ -920,6 +961,55 @@ const layer = Layer.effect(
       return next
     }
 
+    function parseServerPrefixedArg(rawArg: string): {
+      readonly serverKey?: string
+      readonly rest: string
+    } {
+      const trimmed = rawArg.trim()
+      if (!trimmed || /^[a-zA-Z]:[\\/]/.test(trimmed)) {
+        return { rest: trimmed }
+      }
+      const lower = trimmed.toLowerCase()
+      if (lower.startsWith("local:")) {
+        return { serverKey: "local", rest: trimmed.slice(6).trim() }
+      }
+      const remotesByKeyLength = Array.from(remoteServers.values()).sort((a, b) => b.key.length - a.key.length)
+      const exactKeyMatch = remotesByKeyLength.find((r) => trimmed.startsWith(`${r.key}:`))
+      if (exactKeyMatch) {
+        return {
+          serverKey: exactKeyMatch.key,
+          rest: trimmed.slice(exactKeyMatch.key.length + 1).trim(),
+        }
+      }
+      const remotesByNameLength = Array.from(remoteServers.values()).sort((a, b) => b.name.length - a.name.length)
+      const sshNameMatch = remotesByNameLength.find(
+        (r) => r.name && lower.startsWith(`ssh:${r.name.toLowerCase()}:`),
+      )
+      if (sshNameMatch) {
+        return {
+          serverKey: sshNameMatch.key,
+          rest: trimmed.slice(`ssh:${sshNameMatch.name}:`.length).trim(),
+        }
+      }
+      const nameMatch = remotesByNameLength.find((r) => r.name && lower.startsWith(`${r.name.toLowerCase()}:`))
+      if (nameMatch) {
+        return {
+          serverKey: nameMatch.key,
+          rest: trimmed.slice(nameMatch.name.length + 1).trim(),
+        }
+      }
+      if (lower.startsWith("ssh:") && remoteServers.size > 0) {
+        const firstRemote = remoteServers.values().next().value
+        if (firstRemote) {
+          return {
+            serverKey: firstRemote.key,
+            rest: trimmed.slice(4).trim(),
+          }
+        }
+      }
+      return { rest: trimmed }
+    }
+
     async function listSessionsForProject(proj: UnifiedProjectItem): Promise<UnifiedSessionItem[]> {
       const fallbackModel = await resolveDefaultModelRef(proj.serverKey, proj.directory)
       const fallbackModelLabel = fallbackModel ? `${fallbackModel.providerID}/${fallbackModel.id} (默认)` : "默认模型"
@@ -930,13 +1020,19 @@ const layer = Layer.effect(
         const res = await remoteFetchJson<{
           data: Array<{
             id: string
+            parentID?: string
             title?: string
+            location?: { directory?: string }
             model?: { providerID: string; id: string }
             time?: { updated?: number; created?: number }
           }>
-        }>(remote, `/api/session?project=${encodeURIComponent(proj.id)}&parent=null&archived=false&limit=20`)
+        }>(remote, `/api/session?project=${encodeURIComponent(proj.id)}&parent=null&archived=false&limit=30`)
         return (res.data ?? [])
-          .filter((s) => !s.id.startsWith("ses_ext_"))
+          .filter(
+            (s) =>
+              !s.parentID &&
+              (proj.id !== "global" || !s.location?.directory || s.location.directory === proj.directory),
+          )
           .map((s) => ({
             id: s.id,
             title: s.title?.trim() || "未命名会话",
@@ -952,12 +1048,7 @@ const layer = Layer.effect(
         }),
       )
       return res.data
-        .filter(
-          (s) =>
-            !s.parentID &&
-            !s.id.startsWith("ses_ext_") &&
-            (proj.id !== "global" || s.location.directory === proj.directory),
-        )
+        .filter((s) => !s.parentID && (proj.id !== "global" || s.location.directory === proj.directory))
         .map((s) => ({
           id: s.id,
           title: s.title?.trim() || "未命名会话",
@@ -1206,18 +1297,16 @@ const layer = Layer.effect(
             elements: [{ kind: "markdown", content: "用法：`.project new /项目目录路径`" }],
           }
         }
-        const colonIdx = trimmedArg.indexOf(":")
-        const explicitPrefix =
-          colonIdx > 1 && !/^[a-zA-Z]:[\\/]/.test(trimmedArg) ? trimmedArg.slice(0, colonIdx) : undefined
+        const prefixed = parseServerPrefixedArg(trimmedArg)
         const targetServerKey =
-          explicitPrefix === "local"
+          prefixed.serverKey === "local"
             ? "local"
-            : explicitPrefix && remoteServers.has(explicitPrefix)
-              ? explicitPrefix
+            : prefixed.serverKey && remoteServers.has(prefixed.serverKey)
+              ? prefixed.serverKey
               : current?.serverKey && current.serverKey !== "local" && remoteServers.has(current.serverKey)
                 ? current.serverKey
                 : "local"
-        const pathPart = explicitPrefix ? trimmedArg.slice(colonIdx + 1) : trimmedArg
+        const pathPart = prefixed.rest
         const rawDir = expandPathForServer(
           pathPart,
           targetServerKey,
@@ -1291,23 +1380,26 @@ const layer = Layer.effect(
       const allProjects = await listAllProjects()
       if (sub === "switch" && arg.trim()) {
         const rawQuery = arg.trim()
-        const colonIdx = rawQuery.indexOf(":")
-        const serverFilter =
-          colonIdx > 1 && !/^[a-zA-Z]:[\\/]/.test(rawQuery) ? rawQuery.slice(0, colonIdx) : undefined
-        const hasValidFilter = serverFilter === "local" || (serverFilter !== undefined && remoteServers.has(serverFilter))
-        const query = hasValidFilter ? rawQuery.slice(colonIdx + 1) : rawQuery
-        const pool = hasValidFilter ? allProjects.filter((p) => p.serverKey === serverFilter) : allProjects
+        const prefixed = parseServerPrefixedArg(rawQuery)
+        const hasValidFilter =
+          prefixed.serverKey === "local" || (prefixed.serverKey !== undefined && remoteServers.has(prefixed.serverKey))
+        const query = hasValidFilter ? prefixed.rest : rawQuery
+        const pool = hasValidFilter ? allProjects.filter((p) => p.serverKey === prefixed.serverKey) : allProjects
         const qLower = query.toLowerCase()
         const idx = Number(rawQuery)
         const matched =
           Number.isInteger(idx) && idx >= 1 && idx <= allProjects.length
             ? allProjects[idx - 1]
-            : (pool.find(
-                (p) =>
-                  p.id === query ||
-                  p.name.toLowerCase() === qLower ||
-                  p.directory.toLowerCase() === qLower,
-              ) ?? pool.find((p) => p.name.toLowerCase().includes(qLower)))
+            : !query && pool.length > 0
+              ? pool[0]
+              : (pool.find(
+                  (p) =>
+                    p.id === query ||
+                    p.name.toLowerCase() === qLower ||
+                    p.directory.toLowerCase() === qLower,
+                ) ??
+                pool.find((p) => p.name.toLowerCase().includes(qLower)) ??
+                pool.find((p) => p.serverLabel.toLowerCase().includes(qLower)))
         if (!matched) {
           return {
             header: { title: "未找到匹配项目", color: "red" },
@@ -1392,6 +1484,17 @@ const layer = Layer.effect(
           elements: [{ kind: "markdown", content: "尚未绑定项目，请先使用 `.project new <路径>` 打开项目。" }],
         }
       }
+      if (binding.serverKey !== "local" && !remoteServers.has(binding.serverKey)) {
+        return {
+          header: { title: "SSH 远程服务器未连接", color: "orange" },
+          elements: [
+            {
+              kind: "markdown",
+              content: "当前绑定的 SSH 服务器暂未连接，请恢复连接或发送 `.project` 切换其他项目。",
+            },
+          ],
+        }
+      }
 
       const allProjects = await listAllProjects()
       const currentProj: UnifiedProjectItem = allProjects.find(
@@ -1467,7 +1570,9 @@ const layer = Layer.effect(
               remote,
               `/api/session/${encodeURIComponent(binding.sessionId)}/context`,
             )
-            const lastUser = [...(ctxRes.data ?? [])].reverse().find((m) => m.type === "user")
+            const lastUser = [...(ctxRes.data ?? [])]
+              .reverse()
+              .find((m) => m.type === "user" && !String(m.id ?? "").startsWith("msg_ext_"))
             if (!lastUser) {
               return {
                 header: { title: "撤回上一轮", color: "orange" },
@@ -1485,7 +1590,9 @@ const layer = Layer.effect(
           if (!currentProj.isRemote) {
             const sessionID = Session.ID.make(binding.sessionId)
             const msgs = await runEffect(sessions.context(sessionID))
-            const lastUser = [...msgs].reverse().find((m) => m.type === "user")
+            const lastUser = [...msgs]
+              .reverse()
+              .find((m) => m.type === "user" && !String(m.id ?? "").startsWith("msg_ext_"))
             if (!lastUser) {
               return {
                 header: { title: "撤回上一轮", color: "orange" },
@@ -1621,6 +1728,17 @@ const layer = Layer.effect(
         return {
           header: { title: "模型管理", color: "orange" },
           elements: [{ kind: "markdown", content: "请先通过 `.project` 选择项目。" }],
+        }
+      }
+      if (binding.serverKey !== "local" && !remoteServers.has(binding.serverKey)) {
+        return {
+          header: { title: "SSH 远程服务器未连接", color: "orange" },
+          elements: [
+            {
+              kind: "markdown",
+              content: "当前绑定的 SSH 服务器暂未连接，请恢复连接或发送 `.project` 切换其他项目。",
+            },
+          ],
         }
       }
 
@@ -2199,6 +2317,21 @@ const layer = Layer.effect(
       return undefined
     }
 
+    async function listRemoteProjectFiles(
+      remote: RemoteServerTarget,
+      dir: string,
+    ): Promise<Array<{ name: string; size: number; mtimeMs: number }>> {
+      const res = await remoteFetchJson<{
+        data?: Array<{ path: string; type: "file" | "directory" }>
+      }>(remote, `/api/fs/list?location%5Bdirectory%5D=${encodeURIComponent(dir)}`, undefined, 8_000).catch(
+        () => undefined,
+      )
+      return (res?.data ?? [])
+        .filter((entry) => entry.type === "file" && entry.path && !path.posix.basename(entry.path).startsWith("."))
+        .slice(0, 8)
+        .map((entry) => ({ name: entry.path, size: -1, mtimeMs: 0 }))
+    }
+
     async function handleSendFileCommand(
       connector: MobilePlatformConnector,
       replyContext: unknown,
@@ -2213,7 +2346,22 @@ const layer = Layer.effect(
         })
         return
       }
-      const recentFiles = binding.serverKey === "local" ? await listRecentProjectFiles(binding.projectDirectory) : []
+      if (binding.serverKey !== "local" && !remoteServers.has(binding.serverKey)) {
+        await connector.sendCard(replyContext, {
+          header: { title: "SSH 远程服务器未连接", color: "orange" },
+          elements: [
+            {
+              kind: "markdown",
+              content: "当前绑定的 SSH 服务器暂未连接，请恢复连接或发送 `.project` 切换其他项目。",
+            },
+          ],
+        })
+        return
+      }
+      const recentFiles =
+        binding.serverKey === "local"
+          ? await listRecentProjectFiles(binding.projectDirectory)
+          : await listRemoteProjectFiles(remoteServers.get(binding.serverKey)!, binding.projectDirectory)
       const targetRel = expandPathForServer(rawFilePath, binding.serverKey, binding.projectDirectory)
       if (!targetRel) {
         const elements: MobileCard["elements"][number][] = [
@@ -2224,10 +2372,11 @@ const layer = Layer.effect(
         ]
         if (recentFiles.length > 0) {
           for (const [i, f] of recentFiles.entries()) {
-            const kb = f.size < 1024 ? `${f.size} B` : `${(f.size / 1024).toFixed(1)} KB`
+            const sizeSuffix =
+              f.size < 0 ? "" : ` (${f.size < 1024 ? `${f.size} B` : `${(f.size / 1024).toFixed(1)} KB`})`
             elements.push({
               kind: "list_item",
-              text: `- **#${i + 1} ${f.name}** (${kb})`,
+              text: `- **#${i + 1} ${f.name}**${sizeSuffix}`,
             })
           }
         }

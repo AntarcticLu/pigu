@@ -10,6 +10,7 @@ import { InstructionState } from "../instruction-state.js"
 import { SessionCompaction } from "../compaction.js"
 import { SessionContext } from "../context.js"
 import { SessionEvent } from "../event.js"
+import { SessionExternal } from "../external.js"
 import { SessionInbox } from "../inbox.js"
 import { SessionBackground } from "../background.js"
 import { Job } from "../../job.js"
@@ -78,6 +79,9 @@ const layer = Layer.effect(
       yield* plugins.awaitActivation
       yield* settleStaleCompactions(sessionID)
       yield* settleStaleToolCalls(sessionID)
+      if (sessionID.startsWith("ses_ext_")) {
+        yield* SessionExternal.prepareMessagesRead({ db, sessionID, request: { sessionID } })
+      }
 
       const advanceToStep = Effect.fn("SessionRunner.advanceToStep")(() =>
         Effect.uninterruptibleMask((restore) =>

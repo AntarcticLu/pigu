@@ -2092,4 +2092,263 @@ describe("end-to-end chained mini-task workflow (isolated sandbox)", () => {
         expect(vanillaSwitchModel.cards.some((c) => c.header?.title?.includes("已切换会话模型"))).toBe(true)
       }),
   )
+
+  comboIt.live(
+    "discovers remote non-git global directories, ses_ext_codex_* sessions, colon-prefixed SSH keys, remote .send listing, and disconnect guard",
+    () =>
+      Effect.gen(function* () {
+        const mobile = yield* Mobile.Service
+        const extSessionId = "ses_ext_codex_remote_99"
+        let activeModel = { providerID: "local/codex", id: "gpt-6.1-sol" }
+        const remoteHistory: Array<{
+          id: string
+          type: string
+          text?: string
+          model?: { providerID: string; id: string }
+          content?: Array<{ type: string; text?: string }>
+        }> = [
+          { id: "msg_ext_1", type: "user", text: "记住远端暗号 ORION-77" },
+          {
+            id: "msg_ext_2",
+            type: "assistant",
+            model: { providerID: "local/codex", id: "gpt-6.1-sol" },
+            content: [{ type: "text", text: "已记住远端暗号 ORION-77。" }],
+          },
+        ]
+
+        const remoteServer = Bun.serve({
+          port: 0,
+          hostname: "127.0.0.1",
+          async fetch(req) {
+            const url = new URL(req.url)
+            const pathname = url.pathname
+            if (pathname === "/api/experimental/mobile/robots") {
+              return Response.json([])
+            }
+            if (pathname === "/api/project") {
+              return Response.json([])
+            }
+            if (pathname === "/api/session" && req.method === "GET") {
+              const proj = url.searchParams.get("project")
+              if (proj === "global") {
+                return Response.json({
+                  data: [
+                    {
+                      id: extSessionId,
+                      title: "AutoDL Codex 训练排查",
+                      location: { directory: "/root/autodl-tmp" },
+                      model: activeModel,
+                      time: { updated: Date.now() + 5_000 },
+                    },
+                  ],
+                })
+              }
+              return Response.json({ data: [] })
+            }
+            if (pathname === "/api/session" && req.method === "POST") {
+              const body = (await req.json()) as { location?: { directory?: string } }
+              const dir = body.location?.directory ?? "/root/exp2"
+              return Response.json({
+                data: {
+                  id: "ses_remote_created",
+                  projectID: "global",
+                  location: { directory: dir },
+                },
+              })
+            }
+            if (pathname === `/api/session/${extSessionId}` && req.method === "GET") {
+              return Response.json({
+                data: {
+                  id: extSessionId,
+                  title: "AutoDL Codex 训练排查",
+                  model: activeModel,
+                },
+              })
+            }
+            if (pathname === "/api/session/active") {
+              return Response.json({ data: {} })
+            }
+            if (pathname === "/api/model/default") {
+              return Response.json({ data: activeModel })
+            }
+            if (pathname === "/api/model") {
+              return Response.json({
+                data: [
+                  { providerID: "local/codex", id: "gpt-6.1-sol", name: "GPT-6.1 Sol (Codex CLI)" },
+                  { providerID: "pigutoken", id: "deepseek-v4.1-flash", name: "DeepSeek V4.1 Flash" },
+                ],
+              })
+            }
+            if (pathname === `/api/session/${extSessionId}/model` && req.method === "POST") {
+              const body = (await req.json()) as { model: { providerID: string; id: string } }
+              activeModel = { providerID: body.model.providerID, id: body.model.id }
+              return new Response(null, { status: 204 })
+            }
+            if (pathname === `/api/session/${extSessionId}/context` && req.method === "GET") {
+              return Response.json({ data: remoteHistory })
+            }
+            if (pathname === `/api/session/${extSessionId}/prompt` && req.method === "POST") {
+              const body = (await req.json()) as { text?: string }
+              const uid = `msg_u_${remoteHistory.length + 1}`
+              remoteHistory.push({ id: uid, type: "user", text: body.text ?? "" })
+              remoteHistory.push({
+                id: `msg_a_${remoteHistory.length + 1}`,
+                type: "assistant",
+                model: activeModel,
+                content: [{ type: "text", text: `远端 ${activeModel.providerID}/${activeModel.id} 复述暗号 ORION-77` }],
+              })
+              return Response.json({ data: { id: uid } })
+            }
+            if (pathname === `/api/experimental/session/${extSessionId}/wait` && req.method === "POST") {
+              return new Response(null, { status: 204 })
+            }
+            if (pathname === `/api/session/${extSessionId}/form` || pathname === `/api/session/${extSessionId}/permission`) {
+              return Response.json({ data: [] })
+            }
+            if (pathname === "/api/fs/list" && req.method === "GET") {
+              return Response.json({
+                data: [
+                  { path: "metrics.json", type: "file" },
+                  { path: "checkpoints", type: "directory" },
+                ],
+              })
+            }
+            if (pathname === "/api/fs/read/metrics.json" && req.method === "GET") {
+              return new Response('{"acc":0.992}\n', { status: 200 })
+            }
+            return new Response("Not Found", { status: 404 })
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(() => remoteServer.stop(true)))
+        const baseUrl = `http://127.0.0.1:${remoteServer.port}`
+
+        const bot = yield* mobile.create({
+          name: "飞书SSH测试机器人",
+          platform: "feishu",
+          enabled: false,
+          ownerID: "ou_feishu_owner",
+          feishu: { appId: "cli_test_ssh", appSecret: "sec_test_ssh" },
+        })
+
+        // Desktop SSH GUI plugin keys contain colons (`ssh:<id>`)
+        yield* mobile.syncRemotes([{ key: "ssh:9f4a8b12", name: "AutoDL-GPU", url: baseUrl }])
+
+        const projList = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".project",
+        })
+        const projMd = renderCardMarkdownFallback(projList.cards[0]!)
+        expect(projMd).toContain("autodl-tmp")
+        expect(projMd).toContain("SSH:AutoDL-GPU")
+
+        // Colon-prefixed SSH key switch (`ssh:9f4a8b12:/root/autodl-tmp`) works cleanly
+        const swProj = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".project ssh:9f4a8b12:/root/autodl-tmp",
+        })
+        expect(swProj.cards[0]?.header?.title).toContain("已切换项目")
+        expect(renderCardMarkdownFallback(swProj.cards[0]!)).toContain("AutoDL Codex 训练排查")
+
+        // Friendly server name prefix (`AutoDL-GPU:~/exp2`) also works for `.project new`
+        const openByName = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh_exp",
+          text: ".project new AutoDL-GPU:~/exp2",
+        })
+        expect(renderCardMarkdownFallback(openByName.cards[0]!)).toContain("/root/exp2")
+
+        // `.chat` lists external Codex CLI session (`ses_ext_codex_*`) and `.history` reads its turns
+        const chatList = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".chat",
+        })
+        expect(renderCardMarkdownFallback(chatList.cards[0]!)).toContain("AutoDL Codex 训练排查")
+        expect(renderCardMarkdownFallback(chatList.cards[0]!)).toContain("local/codex/gpt-6.1-sol")
+
+        const histRes = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".history",
+        })
+        expect(renderCardMarkdownFallback(histRes.cards[0]!)).toContain("ORION-77")
+
+        // `.undo` on pure `msg_ext_*` history refuses cleanly without 404
+        const undoExt = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".undo",
+        })
+        expect(renderCardMarkdownFallback(undoExt.cards[0]!)).toContain("无可撤回记录")
+
+        // Prompt via `local/codex/gpt-6.1-sol`, then switch model to `pigutoken/deepseek-v4.1-flash` and prompt again
+        const turn1 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: "复述远端暗号",
+        })
+        expect(turn1.texts[0]).toContain("local/codex/gpt-6.1-sol 复述暗号 ORION-77")
+
+        const swModel = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".model pigutoken/deepseek-v4.1-flash",
+        })
+        expect(swModel.cards[0]?.header?.title).toContain("已切换会话模型")
+
+        const turn2 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: "切换模型后再次复述暗号",
+        })
+        expect(turn2.texts[0]).toContain("pigutoken/deepseek-v4.1-flash 复述暗号 ORION-77")
+
+        // `.send` lists remote files via `/api/fs/list` and `.send 1` delivers `metrics.json`
+        const sendList = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".send",
+        })
+        expect(renderCardMarkdownFallback(sendList.cards[0]!)).toContain("#1 metrics.json")
+
+        const sendFile1 = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: ".send 1",
+        })
+        expect(sendFile1.files.map((f) => f.fileName)).toEqual(["metrics.json"])
+
+        // Transient SSH disconnect preserves binding and warns explicitly instead of running locally
+        yield* mobile.syncRemotes([])
+        const offlineTurn = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: "断线期间发消息",
+        })
+        expect(offlineTurn.texts[0]).toContain("当前绑定的 SSH 服务器未连接")
+
+        yield* mobile.syncRemotes([{ key: "ssh:9f4a8b12", name: "AutoDL-GPU", url: baseUrl }])
+        const recoveredTurn = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "ou_feishu_owner",
+          chatId: "oc_feishu_ssh",
+          text: "重连后继续发消息",
+        })
+        expect(recoveredTurn.texts[0]).toContain("pigutoken/deepseek-v4.1-flash 复述暗号 ORION-77")
+      }),
+  )
 })

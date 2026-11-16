@@ -466,6 +466,9 @@ const layer = Layer.effect(
       }),
       context: Effect.fn("Session.context")(function* (sessionID) {
         yield* result.get(sessionID)
+        if (sessionID.startsWith("ses_ext_")) {
+          yield* SessionExternal.prepareMessagesRead({ db, sessionID, request: { sessionID } })
+        }
         return yield* store.context(sessionID)
       }),
       diff: Effect.fn("Session.diff")(function* (input) {
