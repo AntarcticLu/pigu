@@ -1,3 +1,4 @@
+import fsSync from "node:fs"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
 import { Effect, Fiber } from "effect"
@@ -34,9 +35,11 @@ import {
   buildCliAttachmentFlags,
   buildPromptWithAttachments,
   extractPromptTurns,
+  unwrapWindowsCodexBinary,
 } from "@opencode/core/plugin/provider/native-cli"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Global } from "@opencode/util/global"
+import { tmpdir } from "../fixture/tmpdir"
 import { drain } from "../lib/clock"
 import { testEffect } from "../lib/effect"
 import { PluginTestLayer } from "./fixture"
@@ -1102,4 +1105,68 @@ describe("PiguProviderPlugin", () => {
       ])
     }),
   )
+
+  test("unwraps Windows codex.cmd shims directly to native codex.exe across npm, pnpm, and Scoop layouts", async () => {
+    await using tmp = await tmpdir("pigu-win-codex-")
+
+    // 1. Standard npm global nested layout
+    const npmBin = path.join(tmp.path, "npm")
+    const npmCmd = path.join(npmBin, "codex.cmd")
+    const npmExe = path.join(
+      npmBin,
+      "node_modules",
+      "@openai",
+      "codex",
+      "node_modules",
+      "@openai",
+      "codex-win32-x64",
+      "vendor",
+      "x86_64-pc-windows-msvc",
+      "bin",
+      "codex.exe",
+    )
+    fsSync.mkdirSync(path.dirname(npmExe), { recursive: true })
+    fsSync.writeFileSync(npmCmd, '@ECHO off\r\n"%dp0%\\node.exe" "%dp0%\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n')
+    fsSync.writeFileSync(npmExe, "")
+
+    expect(unwrapWindowsCodexBinary(npmCmd, "win32", "x64")).toBe(npmExe)
+    expect(unwrapWindowsCodexBinary(npmCmd, "darwin", "x64")).toBe(npmCmd)
+    expect(unwrapWindowsCodexBinary(npmExe, "win32", "x64")).toBe(npmExe)
+
+    // 2. pnpm global virtual-store .cmd shim layout (%~dp0\global\5\.pnpm\...)
+    const pnpmBin = path.join(tmp.path, "pnpm")
+    const pnpmCmd = path.join(pnpmBin, "codex.cmd")
+    const pnpmStore = path.join(pnpmBin, "global", "5", ".pnpm", "@openai+codex@0.118.0", "node_modules", "@openai")
+    const pnpmJs = path.join(pnpmStore, "codex", "bin", "codex.js")
+    const pnpmExe = path.join(pnpmStore, "codex-win32-arm64", "vendor", "aarch64-pc-windows-msvc", "bin", "codex.exe")
+    fsSync.mkdirSync(path.dirname(pnpmJs), { recursive: true })
+    fsSync.mkdirSync(path.dirname(pnpmExe), { recursive: true })
+    fsSync.writeFileSync(
+      pnpmCmd,
+      '"%_prog%" "%~dp0\\global\\5\\.pnpm\\@openai+codex@0.118.0\\node_modules\\@openai\\codex\\bin\\codex.js" %*\r\n',
+    )
+    fsSync.writeFileSync(pnpmJs, "")
+    fsSync.writeFileSync(pnpmExe, "")
+
+    expect(unwrapWindowsCodexBinary(pnpmCmd, "win32", "arm64")).toBe(pnpmExe)
+
+    // 3. Scoop .cmd shim directly quoting codex.exe
+    const scoopShims = path.join(tmp.path, "scoop", "shims")
+    const scoopCmd = path.join(scoopShims, "codex.cmd")
+    const scoopExe = path.join(tmp.path, "scoop", "apps", "codex", "current", "codex.exe")
+    fsSync.mkdirSync(scoopShims, { recursive: true })
+    fsSync.mkdirSync(path.dirname(scoopExe), { recursive: true })
+    fsSync.writeFileSync(scoopCmd, `@"${scoopExe}" %*\r\n`)
+    fsSync.writeFileSync(scoopExe, "")
+
+    expect(unwrapWindowsCodexBinary(scoopCmd, "win32", "x64")).toBe(scoopExe)
+
+    // 4. Graceful fallback when native binary is absent
+    const fallbackBin = path.join(tmp.path, "fallback")
+    const fallbackCmd = path.join(fallbackBin, "codex.cmd")
+    fsSync.mkdirSync(fallbackBin, { recursive: true })
+    fsSync.writeFileSync(fallbackCmd, "@ECHO off\r\n")
+
+    expect(unwrapWindowsCodexBinary(fallbackCmd, "win32", "x64")).toBe(fallbackCmd)
+  })
 })

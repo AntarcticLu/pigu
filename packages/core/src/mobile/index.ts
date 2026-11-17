@@ -1,6 +1,6 @@
 export * as Mobile from "./index.js"
 
-import { spawn } from "node:child_process"
+import { execFile, spawn } from "node:child_process"
 import { randomUUID } from "node:crypto"
 import { readdir, stat } from "node:fs/promises"
 import os from "node:os"
@@ -591,10 +591,12 @@ function formatRelativeTime(timestampMs: number): string {
 function runLocalShellCommand(command: string, cwd: string, timeoutMs = 60_000): Promise<{ exitCode: number; output: string }> {
   return new Promise((resolve) => {
     const shell = process.platform === "win32" ? "powershell.exe" : "/bin/sh"
-    const args = process.platform === "win32" ? ["-NoProfile", "-Command", command] : ["-c", command]
+    const args =
+      process.platform === "win32" ? ["-NoProfile", "-NonInteractive", "-Command", command] : ["-c", command]
     const child = spawn(shell, args, {
       cwd,
       env: process.env,
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     })
     const chunks: Buffer[] = []
@@ -608,6 +610,10 @@ function runLocalShellCommand(command: string, cwd: string, timeoutMs = 60_000):
     child.stdout.on("data", onData)
     child.stderr.on("data", onData)
     const timer = setTimeout(() => {
+      if (process.platform === "win32" && child.pid) {
+        execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {})
+        return
+      }
       child.kill("SIGKILL")
     }, timeoutMs)
     child.on("close", (code) => {

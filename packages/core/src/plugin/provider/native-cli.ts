@@ -347,13 +347,73 @@ function shouldUseWindowsShell(binary: string) {
   return process.platform === "win32" && /\.(cmd|bat)$/i.test(binary)
 }
 
+function killLocalChildProcess(child: childProcess.ChildProcess) {
+  if (process.platform === "win32" && child.pid) {
+    childProcess.execFile("taskkill", ["/pid", String(child.pid), "/T", "/F"], { windowsHide: true }, () => {})
+    return
+  }
+  child.kill("SIGTERM")
+}
+
+export function unwrapWindowsCodexBinary(
+  candidate: string,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch,
+): string {
+  if (platform !== "win32" || !/\.(cmd|bat)$/i.test(candidate)) return candidate
+
+  const binDir = path.dirname(candidate)
+  const archPkg = arch === "arm64" ? "codex-win32-arm64" : "codex-win32-x64"
+  const triple = arch === "arm64" ? "aarch64-pc-windows-msvc" : "x86_64-pc-windows-msvc"
+  const vendorTail = path.join("vendor", triple, "bin", "codex.exe")
+
+  const directCandidates = [
+    path.join(binDir, "node_modules", "@openai", "codex", "node_modules", "@openai", archPkg, vendorTail),
+    path.join(binDir, "node_modules", "@openai", archPkg, vendorTail),
+    path.join(binDir, "node_modules", "@openai", "codex", vendorTail),
+    path.join(binDir, "global", "5", "node_modules", "@openai", archPkg, vendorTail),
+  ]
+  const directHit = directCandidates.find((file) => fs.existsSync(file))
+  if (directHit) return directHit
+
+  const stat = fs.statSync(candidate, { throwIfNoEntry: false })
+  if (!stat || !stat.isFile() || stat.size <= 0 || stat.size > 16_384) return candidate
+
+  const scriptText = Option.getOrUndefined(Option.liftThrowable(() => fs.readFileSync(candidate, "utf8"))())
+  if (!scriptText) return candidate
+
+  const normalizeShimRef = (rawRef: string) => {
+    const expanded = rawRef.replace(/^%(?:~dp0|dp0%)[\\/]*/i, `${binDir}${path.sep}`)
+    const normalized = expanded.replace(/[\\/]+/g, path.sep)
+    return path.resolve(binDir, normalized)
+  }
+
+  const exeMatch = /"([^"]*?codex\.exe)"/i.exec(scriptText)
+  if (exeMatch?.[1]) {
+    const resolvedExe = normalizeShimRef(exeMatch[1])
+    if (fs.existsSync(resolvedExe)) return resolvedExe
+  }
+
+  const jsMatch = /"([^"]*?codex\.js)"/i.exec(scriptText) ?? /(\S*?codex\.js)/i.exec(scriptText)
+  if (!jsMatch?.[1]) return candidate
+
+  const codexPkgDir = path.dirname(path.dirname(normalizeShimRef(jsMatch[1])))
+  const shimCandidates = [
+    path.join(codexPkgDir, "node_modules", "@openai", archPkg, vendorTail),
+    path.join(codexPkgDir, "..", archPkg, vendorTail),
+    path.join(codexPkgDir, vendorTail),
+  ]
+  return shimCandidates.find((file) => fs.existsSync(file)) ?? candidate
+}
+
 function resolveEngineBinary(engine: LocalEngine) {
   if (engine === "claude") {
     return resolveGlobalExecutable(["claude"]) ?? resolveAppBundledCli("claude")
   }
 
   if (engine === "codex") {
-    return resolveGlobalExecutable(["codex"]) ?? resolveAppBundledCli("codex")
+    const resolved = resolveGlobalExecutable(["codex"]) ?? resolveAppBundledCli("codex")
+    return resolved ? unwrapWindowsCodexBinary(resolved) : undefined
   }
 
   if (engine === "agy") {
@@ -1087,6 +1147,7 @@ async function runStreamJsonProcess(input: {
       cwd: input.cwd,
       env,
       shell: shouldUseWindowsShell(input.binary),
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -1101,7 +1162,7 @@ async function runStreamJsonProcess(input: {
     }
 
     const onAbort = () => {
-      child.kill("SIGTERM")
+      killLocalChildProcess(child)
     }
     input.signal.addEventListener("abort", onAbort, { once: true })
 
@@ -1369,6 +1430,7 @@ async function runCodexProcess(input: {
       cwd: input.cwd,
       env,
       shell: shouldUseWindowsShell(input.binary),
+      windowsHide: true,
       stdio: ["pipe", "pipe", "pipe"],
     })
     child.stdin.on("error", () => {})
@@ -1383,7 +1445,7 @@ async function runCodexProcess(input: {
     }
 
     const onAbort = () => {
-      child.kill("SIGTERM")
+      killLocalChildProcess(child)
     }
     input.signal.addEventListener("abort", onAbort, { once: true })
 
@@ -1575,6 +1637,7 @@ async function runPlainCliProcess(input: {
       cwd: input.cwd,
       env,
       shell: shouldUseWindowsShell(input.binary),
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -1583,7 +1646,7 @@ async function runPlainCliProcess(input: {
     }
 
     const onAbort = () => {
-      child.kill("SIGTERM")
+      killLocalChildProcess(child)
     }
     input.signal.addEventListener("abort", onAbort, { once: true })
 
@@ -1633,6 +1696,7 @@ async function runOpencodeProcess(input: {
       cwd: input.cwd,
       env,
       shell: shouldUseWindowsShell(input.binary),
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -1670,7 +1734,7 @@ async function runOpencodeProcess(input: {
       if ((partType === "step-finish" || row.type === "step_finish") && part?.reason === "stop") {
         if (state.stopTimer) clearTimeout(state.stopTimer)
         state.stopTimer = setTimeout(() => {
-          child.kill("SIGTERM")
+          killLocalChildProcess(child)
         }, 1200)
         return
       }
@@ -1681,7 +1745,7 @@ async function runOpencodeProcess(input: {
 
     const onAbort = () => {
       if (state.stopTimer) clearTimeout(state.stopTimer)
-      child.kill("SIGTERM")
+      killLocalChildProcess(child)
     }
     input.signal.addEventListener("abort", onAbort, { once: true })
 
@@ -2285,6 +2349,7 @@ async function runDshProcess(input: {
       cwd: input.cwd,
       env,
       shell: shouldUseWindowsShell(input.binary),
+      windowsHide: true,
       stdio: ["ignore", "pipe", "pipe"],
     })
 
@@ -2368,7 +2433,7 @@ async function runDshProcess(input: {
     }
 
     const onAbort = () => {
-      child.kill("SIGTERM")
+      killLocalChildProcess(child)
     }
     input.signal.addEventListener("abort", onAbort, { once: true })
 
@@ -3182,6 +3247,7 @@ function refreshAgyModelsCache(home: string, onUpdated: () => void) {
     {
       timeout: 15_000,
       shell: shouldUseWindowsShell(binary),
+      windowsHide: true,
       env: { ...process.env, PATH: buildAugmentedPath() },
     },
     (err, stdout) => {
@@ -3831,6 +3897,7 @@ export const refreshLocalEngineModels = Effect.fn("NativeCliProvider.refreshLoca
             {
               timeout: 15_000,
               shell: shouldUseWindowsShell(binary),
+              windowsHide: true,
               env: { ...process.env, PATH: buildAugmentedPath() },
             },
             (_err, stdout) => {
