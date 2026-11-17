@@ -221,6 +221,7 @@ export function remoteConfigSyncScript() {
   const protocolsB64 = readLocalCompanionConfigBase64("pigu-model-protocols.json")
   // Only upgrade legacy JS-bundle wrapper scripts; never overwrite compiled ELF binaries.
   const wrapperCheck = `if [ -f "$HOME/.pigu/app/index.js" ] && [ -x "$HOME/.pigu/bun/bin/bun" ] && grep -q '\\.pigu/app/index\\.js' "$HOME/.pigu/bin/pigu" 2>/dev/null && ! grep -q 'OPENCODE_CONFIG_DIR=' "$HOME/.pigu/bin/pigu" 2>/dev/null; then
+  rm -f "$HOME/.pigu/bin/pigu"
   printf '${bundleWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
   chmod 755 "$HOME/.pigu/bin/pigu"
   ${syncShimsSnippet}
@@ -510,6 +511,7 @@ if [ -d "$HOME/.pigu/app" ]; then
 fi
 mv "$stage_app" "$HOME/.pigu/app"
 rm -rf "$HOME/.pigu/app.prev"
+rm -f "$HOME/.pigu/bin/pigu"
 printf '${bundleWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
 chmod 755 "$HOME/.pigu/bin/pigu"
 ${syncShimsSnippet}
@@ -536,6 +538,7 @@ if [ -z "$bin_src" ]; then
 fi
 chmod 755 "$bin_src"
 mv -f "$bin_src" "$HOME/.pigu/libexec/pigu-bin"
+rm -f "$HOME/.pigu/bin/pigu"
 printf '${releaseWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
 chmod 755 "$HOME/.pigu/bin/pigu"
 ${syncShimsSnippet}
@@ -554,6 +557,7 @@ mkdir -p "$HOME/.pigu/libexec" "$HOME/.pigu/bin"
 if [ -x "$HOME/.opencode/bin/opencode" ]; then
   cp -f "$HOME/.opencode/bin/opencode" "$HOME/.pigu/libexec/pigu-bin"
   chmod 755 "$HOME/.pigu/libexec/pigu-bin"
+  rm -f "$HOME/.pigu/bin/pigu"
   printf '${releaseWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
   chmod 755 "$HOME/.pigu/bin/pigu"
   ${syncShimsSnippet}

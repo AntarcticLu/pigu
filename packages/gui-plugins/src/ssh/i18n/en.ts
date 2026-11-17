@@ -22,7 +22,8 @@ export default {
   "error.platform":
     "This remote platform is not supported. Automatic setup currently requires Linux or macOS on x64 or arm64.",
   "error.version": "The remote Pigu CLI version must match this Desktop version before connecting.",
-  "error.install": "Pigu CLI was not found on the remote server. Please install Pigu CLI on the remote server before connecting.",
+  "error.install":
+    "Could not automatically install Pigu CLI on the remote server. Check connectivity, disk space, and that tar is installed.",
   "error.unpublished": "Pigu CLI was not found on the remote server. Please install Pigu CLI on the remote server before connecting.",
   "error.service": "SSH connected, but the remote Pigu server did not become ready. Please make sure Pigu CLI is installed on the remote server.",
   "error.host-key":

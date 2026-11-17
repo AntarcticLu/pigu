@@ -82,7 +82,13 @@ test("detects outdated remote archive stamp and preserves standalone binary wrap
     expect(outdatedRun.status).toBe(0)
     expect(outdatedRun.stdout).toContain("OPENCODE_SSH_ARCHIVE_OUTDATED=1")
 
-    // 3. autoInstallReleaseArchiveScript safely replaces symlinks and records .installed-sha256
+    // 3. autoInstallReleaseArchiveScript safely replaces symlinks (including ~/.pigu/bin/pigu -> ~/.opencode/bin/opencode) and records .installed-sha256
+    rmSync(path.join(tempHome, ".pigu", "bin", "pigu"), { force: true })
+    symlinkSync(
+      path.join(tempHome, ".opencode", "bin", "opencode"),
+      path.join(tempHome, ".pigu", "bin", "pigu"),
+    )
+
     const stageTarDir = mkdtempSync(path.join(tmpdir(), "pigu-ssh-tar-"))
     mkdirSync(path.join(stageTarDir, "bin"), { recursive: true })
     writeFileSync(path.join(stageTarDir, "bin", "opencode"), "#!/bin/sh\necho new-release-bin \"$@\"\n")
@@ -97,12 +103,19 @@ test("detects outdated remote archive stamp and preserves standalone binary wrap
     rmSync(stageTarDir, { recursive: true, force: true })
     expect(installRun.status).toBe(0)
     expect(readFileSync(path.join(tempHome, ".pigu", ".installed-sha256"), "utf8").trim()).toBe("expected-sha-123")
+    expect(lstatSync(path.join(tempHome, ".pigu", "bin", "pigu")).isSymbolicLink()).toBe(false)
     expect(lstatSync(path.join(tempHome, ".opencode", "bin", "pigu")).isSymbolicLink()).toBe(false)
+    expect(lstatSync(path.join(tempHome, ".opencode", "bin", "opencode")).isSymbolicLink()).toBe(false)
     const execWrapper = spawnSync(path.join(tempHome, ".pigu", "bin", "pigu"), ["--version"], {
       env: { ...process.env, HOME: tempHome, PATH: "/usr/bin:/bin" },
       encoding: "utf8",
     })
     expect(execWrapper.stdout.trim()).toBe("new-release-bin --version")
+    const execOpencodeShim = spawnSync(path.join(tempHome, ".opencode", "bin", "opencode"), ["--version"], {
+      env: { ...process.env, HOME: tempHome, PATH: "/usr/bin:/bin" },
+      encoding: "utf8",
+    })
+    expect(execOpencodeShim.stdout.trim()).toBe("new-release-bin --version")
   } finally {
     rmSync(tempHome, { recursive: true, force: true })
   }

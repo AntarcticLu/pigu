@@ -382,7 +382,9 @@ EOF
     chmod 755 "$INSTALL_DIR/pigu" 2>/dev/null || true
     mkdir -p "$HOME/.local/bin" "$HOME/.pigu/bin" 2>/dev/null || true
     ln -sf "$INSTALL_DIR/opencode" "$HOME/.local/bin/pigu" 2>/dev/null || cp -f "$INSTALL_DIR/opencode" "$HOME/.local/bin/pigu" 2>/dev/null || true
-    ln -sf "$INSTALL_DIR/opencode" "$HOME/.pigu/bin/pigu" 2>/dev/null || cp -f "$INSTALL_DIR/opencode" "$HOME/.pigu/bin/pigu" 2>/dev/null || true
+    rm -f "$HOME/.pigu/bin/pigu" 2>/dev/null || true
+    printf '#!/bin/sh\nexec "%s" "$@"\n' "$INSTALL_DIR/opencode" > "$HOME/.pigu/bin/pigu" 2>/dev/null || cp -f "$INSTALL_DIR/opencode" "$HOME/.pigu/bin/pigu" 2>/dev/null || true
+    chmod 755 "$HOME/.pigu/bin/pigu" 2>/dev/null || true
     cat > "$INSTALL_DIR/opencode2" <<'EOF'
 #!/bin/sh
 exec "$(dirname "$0")/opencode" "$@"

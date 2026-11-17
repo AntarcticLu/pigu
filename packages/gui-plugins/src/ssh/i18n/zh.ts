@@ -20,7 +20,7 @@ export default {
   "error.connection": "无法建立 SSH 连接。请检查您的网络和 SSH 配置。",
   "error.platform": "此远程平台不受支持。自动设置目前需要在 x64 或 arm64 上运行的 Linux 或 macOS。",
   "error.version": "在连接之前，远程 Pigu CLI 版本必须与桌面端版本匹配。",
-  "error.install": "未在远程服务器上检测到 Pigu CLI，请先在远程服务器上安装 Pigu CLI 后再连接。",
+  "error.install": "自动在远程服务器安装 Pigu CLI 失败。请检查网络连接、磁盘空间以及远程服务器是否已安装 tar。",
   "error.unpublished": "未在远程服务器上检测到 Pigu CLI，请先在远程服务器上安装 Pigu CLI 后再连接。",
   "error.service": "SSH 已连接，但远程 Pigu 服务未准备就绪。请确认远程服务器已安装 Pigu CLI。",
   "error.host-key": "无法验证主机的身份。在更新 SSH 已知主机之前，请验证其指纹。",
