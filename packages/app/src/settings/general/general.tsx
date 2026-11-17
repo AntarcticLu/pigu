@@ -147,7 +147,7 @@ export const SettingsGeneral: Component = () => {
   )
 
   const VersionSection = () => {
-    const currentVer = () => (platform.version ?? "1.0.1").replace(/^v/i, "")
+    const currentVer = () => (platform.version ?? "1.0.2").replace(/^v/i, "")
     const [updateState, setUpdateState] = createSignal<SelfUpdateState>({
       status: "idle",
       currentVersion: currentVer(),

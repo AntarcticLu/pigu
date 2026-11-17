@@ -1,5 +1,20 @@
 # Changelog
 
+## v1.0.2 (2026-11-18)
+
+### ✨ 原生 CLI 命令直通、Windows 无感调用与 SSH 自动部署修复
+
+- **⚡ 本地 / 远程 CLI 原生 `/compact`、`/review`、`/init`、`/goal` 分流与 `/` 补全**：
+  - 选中 `Antigravity (agy)`、`Claude Code (claude)`、`OpenAI Codex (codex)` 时，`/compact` 自动调用各引擎原生原地压缩（保留原会话 ID、附件与子代理状态，并将原生检查点摘要同步回 Pigu 时间线）；API 模型继续使用 Pigu 自身压缩。
+  - `/review` 在 Codex 下自动调用原生 `codex exec review` 审查管线，在 Claude Code 下直通原生 `/review`；`/init` 在 Claude Code 下直通生成 `CLAUDE.md`；`/goal` 在 Antigravity 与 Claude Code 下直通原生自主目标模式。
+  - 输入框 `/` 补全菜单根据当前所选本地引擎动态提示原生斜杠命令（如 `/boost`、`/plan`、`/teamwork`、`/security-review`、`/simplify` 等）及本地/远端自定义 Skills。
+- **🪟 修复 Windows 调用外部 CLI（如 Codex）每次弹出 `cmd` 黑框问题**：
+  - 为全部本地引擎调用与移动端命令执行补齐 `windowsHide: true`（`CREATE_NO_WINDOW`），并在 Windows 下自动穿透 `codex.cmd` 直接启动底层原生 `codex.exe`（兼容 npm / pnpm / Scoop），彻底消除控制台弹窗与额外包装进程开销。
+- **🖥️ 修复全新 SSH 服务器自动安装 Pigu CLI 时的软链接覆盖失败问题**：
+  - 修复远端首次自动部署时 `~/.pigu/bin/pigu` 软链接在同步 shim 过程中产生断链导致误报未安装的问题，并优化自动安装失败提示文案。
+
+---
+
 ## v1.0.1 (2026-11-17)
 
 ### 🛠️ 应用内一键更新、全端版本对齐与体验修复

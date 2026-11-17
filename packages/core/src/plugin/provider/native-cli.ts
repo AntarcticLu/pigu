@@ -4450,7 +4450,7 @@ async function runCodexNativeCompact(input: {
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "pigu", version: "1.0.1" } },
+      params: { clientInfo: { name: "pigu", version: "1.0.2" } },
     })
   })
 }
