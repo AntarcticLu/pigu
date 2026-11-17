@@ -89,6 +89,7 @@ const SessionCliStateSchema = Schema.Struct({
   ),
   lastPromptCount: Schema.optional(Schema.Number),
   lastCheckpointHead: Schema.optional(Schema.String),
+  nativelyCompactedEngine: Schema.optional(Schema.String),
   claudeSessionId: Schema.optional(Schema.String),
   claudeFilePath: Schema.optional(Schema.String),
   codexSessionId: Schema.optional(Schema.String),
@@ -443,7 +444,7 @@ function resolveEngineBinary(engine: LocalEngine) {
   return resolveGlobalExecutable(["workbuddy", "codebuddy"]) ?? resolveAppBundledCli("workbuddy")
 }
 
-function normalizeEngine(modelId: string): LocalEngine {
+export function normalizeEngine(modelId: string): LocalEngine {
   const slashIndex = modelId.indexOf("/")
   const baseId = slashIndex >= 0 ? modelId.slice(0, slashIndex) : modelId
 
@@ -464,6 +465,40 @@ function normalizeEngine(modelId: string): LocalEngine {
   if (baseId === "workbuddy" || baseId === "codebuddy") return "workbuddy"
 
   return "claude"
+}
+
+export function supportsNativeSlashCommand(
+  engine: LocalEngine,
+  command: "init" | "review" | "goal",
+  home = os.homedir(),
+  projectDir?: string,
+): boolean {
+  if (command === "init") {
+    return engine === "claude" || engine === "opencode"
+  }
+
+  if (command === "goal") {
+    return engine === "agy" || engine === "claude"
+  }
+
+  if (engine === "codex" || engine === "claude" || engine === "opencode") {
+    return true
+  }
+
+  if (engine === "agy") {
+    const skillCandidates = [
+      path.join(home, ".gemini", "antigravity", "skills", "review", "SKILL.md"),
+      ...(projectDir
+        ? [
+            path.join(projectDir, ".agents", "skills", "review", "SKILL.md"),
+            path.join(projectDir, ".claude", "skills", "review", "SKILL.md"),
+          ]
+        : []),
+    ]
+    return skillCandidates.some((candidate) => fs.existsSync(candidate))
+  }
+
+  return false
 }
 
 function extractSubModel(modelId: string): string | undefined {
@@ -1366,11 +1401,45 @@ async function runStreamJsonProcess(input: {
   })
 }
 
+export function resolveCodexReviewInvocation(
+  cwd: string,
+  rawArg: string,
+): { readonly flags: readonly string[]; readonly stdinText: string } {
+  const trimmed = rawArg.trim()
+  if (!trimmed) return { flags: ["--uncommitted"], stdinText: "" }
+
+  if (!/\s/.test(trimmed) && !trimmed.startsWith("-")) {
+    const branchRefs = [`refs/heads/${trimmed}`, `refs/remotes/${trimmed}`, `refs/remotes/origin/${trimmed}`]
+    const isBranch = branchRefs.some(
+      (ref) =>
+        childProcess.spawnSync("git", ["show-ref", "--verify", "--quiet", ref], {
+          cwd,
+          windowsHide: true,
+          stdio: "ignore",
+          timeout: 3_000,
+        }).status === 0,
+    )
+    if (isBranch) return { flags: ["--base", trimmed], stdinText: "" }
+
+    const isCommit =
+      childProcess.spawnSync("git", ["rev-parse", "--verify", "--quiet", `${trimmed}^{commit}`], {
+        cwd,
+        windowsHide: true,
+        stdio: "ignore",
+        timeout: 3_000,
+      }).status === 0
+    if (isCommit) return { flags: ["--commit", trimmed], stdinText: "" }
+  }
+
+  return { flags: ["-"], stdinText: trimmed }
+}
+
 async function runCodexProcess(input: {
   binary: string
   cwd: string
   home: string
   prompt: string
+  reviewArg?: string
   imageFlags?: ReadonlyArray<string>
   sessionId?: string
   resume: boolean
@@ -1390,10 +1459,25 @@ async function runCodexProcess(input: {
       input.variant === "xhigh")
       ? ["-c", `model_reasoning_effort="${input.variant}"`]
       : []
+  const reviewInvocation =
+    input.reviewArg !== undefined ? resolveCodexReviewInvocation(input.cwd, input.reviewArg) : undefined
+
   // Pass "-" so Codex reads the prompt from stdin rather than argv, avoiding Windows 32KB CreateProcess
   // command-line truncation, cmd.exe quoting hazards, and leading "-" flag collisions.
-  const args =
-    input.resume && input.sessionId
+  const args = reviewInvocation
+    ? [
+        "exec",
+        "review",
+        ...reviewInvocation.flags,
+        "--json",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--skip-git-repo-check",
+        ...modelFlag,
+        ...effortFlag,
+        "-o",
+        lastMsgFile,
+      ]
+    : input.resume && input.sessionId
       ? [
           "exec",
           "resume",
@@ -1424,6 +1508,7 @@ async function runCodexProcess(input: {
         ]
 
   const env = buildLocalChildEnv(input.home)
+  const stdinPayload = reviewInvocation ? reviewInvocation.stdinText : input.prompt
 
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(input.binary, args, {
@@ -1434,7 +1519,12 @@ async function runCodexProcess(input: {
       stdio: ["pipe", "pipe", "pipe"],
     })
     child.stdin.on("error", () => {})
-    child.stdin.end(input.prompt, "utf8")
+    if (stdinPayload) {
+      child.stdin.end(stdinPayload, "utf8")
+    }
+    if (!stdinPayload) {
+      child.stdin.end()
+    }
 
     const state = {
       detectedSessionId: input.sessionId,
@@ -2627,6 +2717,7 @@ async function dispatchLocalEngineRun(input: {
   readonly cwd: string
   readonly home: string
   readonly prompt: string
+  readonly codexReviewArg?: string
   readonly cliAttachmentFlags: ReadonlyArray<string>
   readonly sessionId?: string
   readonly filePath?: string
@@ -2660,6 +2751,7 @@ async function dispatchLocalEngineRun(input: {
       cwd: input.cwd,
       home: input.home,
       prompt: input.prompt,
+      ...(input.codexReviewArg !== undefined ? { reviewArg: input.codexReviewArg } : {}),
       imageFlags: input.cliAttachmentFlags,
       sessionId: input.sessionId,
       resume: input.canResume,
@@ -2945,19 +3037,25 @@ class LocalLanguageModel implements LanguageModelV3 {
                   )
                 : Boolean(currentRecord.sessionId && currentRecord.filePath && fs.existsSync(currentRecord.filePath))
 
-          const canResume = rawCanResume && !(hasCompactionReset && !sessionID.startsWith("ses_ext_"))
+          const wasNativelyCompactedInPlace = saved.nativelyCompactedEngine === currentEngine
+          const canResume =
+            rawCanResume &&
+            (wasNativelyCompactedInPlace || !(hasCompactionReset && !sessionID.startsWith("ses_ext_")))
 
           const isSameEngineWithoutGap =
             priorTurns.length === 0 ||
             (canResume &&
-              ((saved.lastPromptCount === undefined && effectiveLastEngine === currentEngine) ||
-                (saved.lastPromptCount !== undefined &&
-                  effectiveLastEngine === currentEngine &&
-                  (saved.lastPromptCount === priorTurns.length ||
-                    (hasCompactionReset && priorTurns.length === 1)))))
+              effectiveLastEngine === currentEngine &&
+              (wasNativelyCompactedInPlace ||
+                saved.lastPromptCount === undefined ||
+                saved.lastPromptCount === priorTurns.length ||
+                (hasCompactionReset && priorTurns.length === 1)))
+
+          const codexReviewMatch =
+            currentEngine === "codex" ? /^\/review(?:\s+([\s\S]*))?$/.exec(userText.trim()) : null
 
           const contextFileToRead = (() => {
-            if (isSameEngineWithoutGap) return undefined
+            if (isSameEngineWithoutGap || codexReviewMatch !== null) return undefined
 
             if (priorTurns.length > 0) {
               return writeFallbackContextJsonl(home, sessionID || "temp", priorTurns)
@@ -2971,7 +3069,7 @@ class LocalLanguageModel implements LanguageModelV3 {
           })()
 
           const inlineContext = (() => {
-            if (isSameEngineWithoutGap || priorTurns.length === 0) return ""
+            if (isSameEngineWithoutGap || codexReviewMatch !== null || priorTurns.length === 0) return ""
             const recent = priorTurns.slice(-12)
             const formatted = recent
               .map((turn) => `[${turn.role === "user" ? "用户" : "助手"}]: ${turn.text}`)
@@ -3000,6 +3098,7 @@ class LocalLanguageModel implements LanguageModelV3 {
             cwd,
             home,
             prompt: finalPrompt,
+            ...(codexReviewMatch !== null ? { codexReviewArg: codexReviewMatch[1]?.trim() ?? "" } : {}),
             cliAttachmentFlags,
             sessionId: canResume ? currentRecord.sessionId : undefined,
             filePath: canResume ? currentRecord.filePath : undefined,
@@ -3010,7 +3109,10 @@ class LocalLanguageModel implements LanguageModelV3 {
             emitter,
           })
 
-          const nextSessionId = runResult.sessionId ?? (canResume ? currentRecord.sessionId : undefined)
+          const nextSessionId =
+            codexReviewMatch !== null
+              ? (currentRecord.sessionId ?? runResult.sessionId)
+              : (runResult.sessionId ?? (canResume ? currentRecord.sessionId : undefined))
           const nextFilePath =
             findEngineSessionFile(home, currentEngine, nextSessionId) ??
             (canResume ? currentRecord.filePath : undefined)
@@ -3915,6 +4017,444 @@ export const refreshLocalEngineModels = Effect.fn("NativeCliProvider.refreshLoca
   }
 })
 
+export type NativeCompactionTokens = {
+  readonly input: number
+  readonly output: number
+  readonly reasoning: number
+  readonly cache: {
+    readonly read: number
+    readonly write: number
+  }
+}
+
+export function extractAgyLatestCheckpointSummary(transcriptPath: string | undefined): string | undefined {
+  if (!transcriptPath || !fs.existsSync(transcriptPath)) return undefined
+  const raw = Option.getOrUndefined(Option.liftThrowable(() => fs.readFileSync(transcriptPath, "utf8"))())
+  if (!raw) return undefined
+  const lines = raw.split(/\r?\n/)
+  for (let idx = lines.length - 1; idx >= 0; idx--) {
+    const trimmed = lines[idx]?.trim()
+    if (!trimmed) continue
+    const decoded = decodeJsonUnknown(trimmed)
+    if (Option.isNone(decoded) || !isRecord(decoded.value)) continue
+    if (decoded.value.type !== "CHECKPOINT" || typeof decoded.value.content !== "string") continue
+    const content = decoded.value.content.trim()
+    if (!content) continue
+    const summaryMatch = /<summary>([\s\S]*?)<\/summary>/i.exec(content)
+    if (summaryMatch?.[1]?.trim()) return summaryMatch[1].trim()
+    return content
+  }
+  return undefined
+}
+
+export function extractClaudeLatestCompactSummary(filePath: string | undefined): string | undefined {
+  if (!filePath || !fs.existsSync(filePath)) return undefined
+  const raw = Option.getOrUndefined(Option.liftThrowable(() => fs.readFileSync(filePath, "utf8"))())
+  if (!raw) return undefined
+  const rows = raw
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .flatMap((line) => {
+      if (!line) return []
+      const decoded = decodeJsonUnknown(line)
+      return Option.isSome(decoded) && isRecord(decoded.value) ? [decoded.value] : []
+    })
+
+  const boundaryIdx = rows.findLastIndex(
+    (row) => row.type === "system" && row.subtype === "compact_boundary",
+  )
+  if (boundaryIdx < 0) return undefined
+
+  for (let idx = boundaryIdx + 1; idx < rows.length; idx++) {
+    const row = rows[idx]
+    if (!row) continue
+    const msg = isRecord(row.message) ? row.message : undefined
+    if (typeof msg?.content === "string" && msg.content.trim()) {
+      return msg.content.trim()
+    }
+    if (Array.isArray(msg?.content)) {
+      const text = msg.content
+        .flatMap((part) => (isRecord(part) && typeof part.text === "string" && part.text.trim() ? [part.text.trim()] : []))
+        .join("\n\n")
+      if (text) return text
+    }
+  }
+  return undefined
+}
+
+async function runAgyNativeCompact(input: {
+  readonly binary: string
+  readonly cwd: string
+  readonly home: string
+  readonly sessionId: string
+  readonly subModel?: string
+}): Promise<{ summary: string; tokens?: NativeCompactionTokens } | undefined> {
+  const modelFlag = input.subModel ? ["--model", input.subModel] : []
+  const args = [
+    "--output-format",
+    "stream-json",
+    "--dangerously-skip-permissions",
+    ...modelFlag,
+    "--effort",
+    "low",
+    "--conversation",
+    input.sessionId,
+    "-p",
+    "/compact",
+  ]
+  const env = buildLocalChildEnv(input.home)
+
+  return new Promise((resolve) => {
+    const child = childProcess.spawn(input.binary, args, {
+      cwd: input.cwd,
+      env,
+      shell: shouldUseWindowsShell(input.binary),
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+
+    const state = {
+      buffer: "",
+      checkpointDone: false,
+      resultFailed: false,
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+    }
+
+    const timer = setTimeout(() => {
+      killLocalChildProcess(child)
+    }, 180_000)
+
+    const handleLine = (line: string) => {
+      const trimmed = line.trim()
+      if (!trimmed) return
+      const decoded = decodeJsonUnknown(trimmed)
+      if (Option.isNone(decoded) || !isRecord(decoded.value)) return
+      const row = decoded.value
+
+      if (row.event === "step_update" && isRecord(row.step_update)) {
+        const step = row.step_update
+        if (step.step_type === "checkpoint" && step.state === "DONE") {
+          state.checkpointDone = true
+          if (isRecord(step.usage)) {
+            if (typeof step.usage.input_tokens === "number") state.inputTokens = step.usage.input_tokens
+            if (typeof step.usage.output_tokens === "number") state.outputTokens = step.usage.output_tokens
+            if (typeof step.usage.thinking_tokens === "number") state.reasoningTokens = step.usage.thinking_tokens
+            if (typeof step.usage.cache_read_tokens === "number") state.cacheReadTokens = step.usage.cache_read_tokens
+          }
+        }
+      }
+
+      if (row.event === "result" && isRecord(row.result)) {
+        if (row.result.status === "ERROR" || typeof row.result.error === "string") {
+          state.resultFailed = true
+        }
+      }
+    }
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      state.buffer += chunk.toString("utf8")
+      const lines = state.buffer.split(/\r?\n/)
+      state.buffer = lines.pop() ?? ""
+      lines.forEach(handleLine)
+    })
+
+    child.on("error", () => {
+      clearTimeout(timer)
+      resolve(undefined)
+    })
+
+    child.on("close", (code) => {
+      clearTimeout(timer)
+      if (state.buffer.trim()) handleLine(state.buffer)
+      if (code !== 0 || state.resultFailed || !state.checkpointDone) {
+        resolve(undefined)
+        return
+      }
+      const transcriptPath = findAgySessionFile(input.home, input.sessionId)
+      const extracted = extractAgyLatestCheckpointSummary(transcriptPath)
+      const summary = extracted || `[Antigravity 原生上下文压缩已完成 · 会话 ${input.sessionId}]`
+      const hasTokens =
+        state.inputTokens + state.outputTokens + state.reasoningTokens + state.cacheReadTokens > 0
+      resolve({
+        summary,
+        ...(hasTokens
+          ? {
+              tokens: {
+                input: state.inputTokens,
+                output: state.outputTokens,
+                reasoning: state.reasoningTokens,
+                cache: { read: state.cacheReadTokens, write: 0 },
+              },
+            }
+          : {}),
+      })
+    })
+  })
+}
+
+async function runClaudeNativeCompact(input: {
+  readonly binary: string
+  readonly cwd: string
+  readonly home: string
+  readonly sessionId: string
+  readonly filePath: string
+  readonly subModel?: string
+}): Promise<{ summary: string; tokens?: NativeCompactionTokens } | undefined> {
+  const modelFlag = input.subModel ? ["--model", input.subModel] : []
+  const args = [
+    "-p",
+    "--output-format",
+    "stream-json",
+    "--verbose",
+    "--dangerously-skip-permissions",
+    ...modelFlag,
+    "--resume",
+    input.sessionId,
+    "/compact",
+  ]
+  const env = buildLocalChildEnv(input.home)
+
+  return new Promise((resolve) => {
+    const child = childProcess.spawn(input.binary, args, {
+      cwd: input.cwd,
+      env,
+      shell: shouldUseWindowsShell(input.binary),
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+
+    const state = {
+      buffer: "",
+      compactFailed: false,
+      sawCompacting: false,
+      resultText: "",
+      inputTokens: 0,
+      outputTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+    }
+
+    const timer = setTimeout(() => {
+      killLocalChildProcess(child)
+    }, 180_000)
+
+    const handleLine = (line: string) => {
+      const trimmed = line.trim()
+      if (!trimmed) return
+      const decoded = decodeJsonUnknown(trimmed)
+      if (Option.isNone(decoded) || !isRecord(decoded.value)) return
+      const row = decoded.value
+
+      if (row.type === "system") {
+        if (row.status === "compacting" || row.subtype === "compact_boundary") {
+          state.sawCompacting = true
+        }
+        if (row.compact_result === "failed") {
+          state.compactFailed = true
+        }
+      }
+
+      if (row.type === "result") {
+        if (row.is_error === true) state.compactFailed = true
+        if (typeof row.result === "string" && row.result.trim()) {
+          state.resultText = row.result.trim()
+        }
+        if (isRecord(row.usage)) {
+          if (typeof row.usage.input_tokens === "number") state.inputTokens = row.usage.input_tokens
+          if (typeof row.usage.output_tokens === "number") state.outputTokens = row.usage.output_tokens
+          if (typeof row.usage.cache_read_input_tokens === "number") {
+            state.cacheReadTokens = row.usage.cache_read_input_tokens
+          }
+          if (typeof row.usage.cache_creation_input_tokens === "number") {
+            state.cacheWriteTokens = row.usage.cache_creation_input_tokens
+          }
+        }
+      }
+    }
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      state.buffer += chunk.toString("utf8")
+      const lines = state.buffer.split(/\r?\n/)
+      state.buffer = lines.pop() ?? ""
+      lines.forEach(handleLine)
+    })
+
+    child.on("error", () => {
+      clearTimeout(timer)
+      resolve(undefined)
+    })
+
+    child.on("close", (code) => {
+      clearTimeout(timer)
+      if (state.buffer.trim()) handleLine(state.buffer)
+      if (code !== 0 || state.compactFailed || !state.sawCompacting) {
+        resolve(undefined)
+        return
+      }
+      const extracted = extractClaudeLatestCompactSummary(input.filePath)
+      const summary =
+        extracted || state.resultText || `[Claude Code 原生上下文压缩已完成 · 会话 ${input.sessionId}]`
+      const hasTokens =
+        state.inputTokens + state.outputTokens + state.cacheReadTokens + state.cacheWriteTokens > 0
+      resolve({
+        summary,
+        ...(hasTokens
+          ? {
+              tokens: {
+                input: state.inputTokens,
+                output: state.outputTokens,
+                reasoning: 0,
+                cache: { read: state.cacheReadTokens, write: state.cacheWriteTokens },
+              },
+            }
+          : {}),
+      })
+    })
+  })
+}
+
+async function runCodexNativeCompact(input: {
+  readonly binary: string
+  readonly cwd: string
+  readonly home: string
+  readonly sessionId: string
+  readonly filePath: string
+  readonly subModel?: string
+}): Promise<{ summary: string; tokens?: NativeCompactionTokens } | undefined> {
+  const modelFlag = input.subModel ? ["-c", `model="${input.subModel}"`] : []
+  const args = ["app-server", ...modelFlag, "--listen", "stdio://"]
+  const env = buildLocalChildEnv(input.home)
+
+  return new Promise((resolve) => {
+    const child = childProcess.spawn(input.binary, args, {
+      cwd: input.cwd,
+      env,
+      shell: shouldUseWindowsShell(input.binary),
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"],
+    })
+    child.stdin.on("error", () => {})
+
+    const state = {
+      buffer: "",
+      settled: false,
+      compacted: false,
+    }
+
+    const finish = (value: { summary: string; tokens?: NativeCompactionTokens } | undefined) => {
+      if (state.settled) return
+      state.settled = true
+      clearTimeout(timer)
+      killLocalChildProcess(child)
+      resolve(value)
+    }
+
+    const timer = setTimeout(() => {
+      finish(undefined)
+    }, 150_000)
+
+    const sendRpc = (payload: Record<string, unknown>) => {
+      if (child.stdin.writable && !child.stdin.destroyed) {
+        child.stdin.write(`${JSON.stringify(payload)}\n`, "utf8")
+      }
+    }
+
+    const handleLine = (line: string) => {
+      const trimmed = line.trim()
+      if (!trimmed) return
+      const decoded = decodeJsonUnknown(trimmed)
+      if (Option.isNone(decoded) || !isRecord(decoded.value)) return
+      const msg = decoded.value
+
+      if (msg.id === 1) {
+        if (msg.error) {
+          finish(undefined)
+          return
+        }
+        sendRpc({ jsonrpc: "2.0", method: "initialized", params: {} })
+        sendRpc({
+          jsonrpc: "2.0",
+          id: 2,
+          method: "thread/resume",
+          params: { threadId: input.sessionId },
+        })
+        return
+      }
+
+      if (msg.id === 2) {
+        if (msg.error) {
+          finish(undefined)
+          return
+        }
+        sendRpc({
+          jsonrpc: "2.0",
+          id: 3,
+          method: "thread/compact/start",
+          params: { threadId: input.sessionId },
+        })
+        return
+      }
+
+      if (msg.id === 3 && msg.error) {
+        finish(undefined)
+        return
+      }
+
+      if (msg.method === "thread/compacted") {
+        state.compacted = true
+        finish({
+          summary: `[Codex 原生上下文压缩已完成 · 线程 ${input.sessionId}]`,
+        })
+        return
+      }
+
+      if (
+        msg.method === "item/completed" &&
+        isRecord(msg.params) &&
+        isRecord(msg.params.item) &&
+        msg.params.item.type === "contextCompaction"
+      ) {
+        state.compacted = true
+        finish({
+          summary: `[Codex 原生上下文压缩已完成 · 线程 ${input.sessionId}]`,
+        })
+      }
+    }
+
+    child.stdout.on("data", (chunk: Buffer) => {
+      state.buffer += chunk.toString("utf8")
+      const lines = state.buffer.split(/\r?\n/)
+      state.buffer = lines.pop() ?? ""
+      lines.forEach(handleLine)
+    })
+
+    child.on("error", () => {
+      finish(undefined)
+    })
+
+    child.on("close", () => {
+      if (state.buffer.trim()) handleLine(state.buffer)
+      if (!state.settled) {
+        finish(
+          state.compacted
+            ? { summary: `[Codex 原生上下文压缩已完成 · 线程 ${input.sessionId}]` }
+            : undefined,
+        )
+      }
+    })
+
+    sendRpc({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "initialize",
+      params: { clientInfo: { name: "pigu", version: "1.0.1" } },
+    })
+  })
+}
+
 export const NativeCliProviderPlugin = define({
   id: "pigu.provider.local",
   effect: Effect.fn("NativeCliProvider.Plugin")(function* (ctx: Context) {
@@ -4007,6 +4547,91 @@ export const NativeCliProviderPlugin = define({
           // Local tools run inside the native local agent process itself, not via Pigu's API tool loop.
           event.tools = {}
           event.messages = event.messages.filter((message) => message.role !== "system")
+        }),
+      { providerID: LOCAL_PROVIDER_ID },
+    )
+
+    yield* ctx.session.hook(
+      "compaction",
+      (event) =>
+        Effect.gen(function* () {
+          const currentEngine = normalizeEngine(event.model.id)
+          if (currentEngine !== "agy" && currentEngine !== "claude" && currentEngine !== "codex") return
+
+          const binary = resolveEngineBinary(currentEngine)
+          if (!binary) return
+
+          const sessionOpt = yield* ctx.session.get({ sessionID: event.sessionID }).pipe(Effect.option)
+          const cwd = Option.isSome(sessionOpt) ? sessionOpt.value.location.directory : ctx.location.directory
+          const rawMeta = Option.isSome(sessionOpt) ? JSON.stringify(sessionOpt.value.metadata ?? {}) : undefined
+          const parsedMetadata = rawMeta ? Option.getOrUndefined(decodeSessionMetadata(rawMeta)) : undefined
+
+          const saved = yield* Effect.promise(() => getSessionState(event.sessionID))
+          const initialExternalSource: LocalEngine | undefined =
+            saved.lastEngine === undefined &&
+            (parsedMetadata?.source === "claude" ||
+              parsedMetadata?.source === "codex" ||
+              parsedMetadata?.source === "agy")
+              ? parsedMetadata.source
+              : undefined
+
+          const currentRecord = getEngineRecord(saved, currentEngine, initialExternalSource, parsedMetadata, home)
+          if (!currentRecord.sessionId) return
+
+          const subModel = extractSubModel(event.model.id)
+          const nativeCompacted = yield* Effect.promise(async () => {
+            if (currentEngine === "agy") {
+              if (!isAgyCliSession(home, currentRecord.sessionId!)) return undefined
+              return runAgyNativeCompact({
+                binary,
+                cwd,
+                home,
+                sessionId: currentRecord.sessionId!,
+                subModel,
+              })
+            }
+
+            if (currentEngine === "claude") {
+              if (!currentRecord.filePath || !fs.existsSync(currentRecord.filePath)) return undefined
+              return runClaudeNativeCompact({
+                binary,
+                cwd,
+                home,
+                sessionId: currentRecord.sessionId!,
+                filePath: currentRecord.filePath,
+                subModel,
+              })
+            }
+
+            if (!currentRecord.filePath || !fs.existsSync(currentRecord.filePath)) return undefined
+            return runCodexNativeCompact({
+              binary,
+              cwd,
+              home,
+              sessionId: currentRecord.sessionId!,
+              filePath: currentRecord.filePath,
+              subModel,
+            })
+          })
+
+          if (!nativeCompacted) return
+
+          yield* Effect.promise(() =>
+            setSessionState(event.sessionID, {
+              ...saved,
+              lastEngine: currentEngine,
+              nativelyCompactedEngine: currentEngine,
+            }),
+          )
+
+          event.result = {
+            summary: nativeCompacted.summary,
+            metadata: {
+              nativeCliEngine: currentEngine,
+              engineSessionId: currentRecord.sessionId,
+            },
+            ...(nativeCompacted.tokens ? { tokens: nativeCompacted.tokens } : {}),
+          }
         }),
       { providerID: LOCAL_PROVIDER_ID },
     )

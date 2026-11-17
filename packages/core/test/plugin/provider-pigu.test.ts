@@ -34,11 +34,16 @@ import { AbsolutePath } from "@opencode/core/schema"
 import {
   buildCliAttachmentFlags,
   buildPromptWithAttachments,
+  extractAgyLatestCheckpointSummary,
+  extractClaudeLatestCompactSummary,
   extractPromptTurns,
+  resolveCodexReviewInvocation,
+  supportsNativeSlashCommand,
   unwrapWindowsCodexBinary,
 } from "@opencode/core/plugin/provider/native-cli"
 import { FSUtil } from "@opencode/util/fs-util"
 import { Global } from "@opencode/util/global"
+import { initRepo } from "../fixture/git"
 import { tmpdir } from "../fixture/tmpdir"
 import { drain } from "../lib/clock"
 import { testEffect } from "../lib/effect"
@@ -1168,5 +1173,70 @@ describe("PiguProviderPlugin", () => {
     fsSync.writeFileSync(fallbackCmd, "@ECHO off\r\n")
 
     expect(unwrapWindowsCodexBinary(fallbackCmd, "win32", "x64")).toBe(fallbackCmd)
+  })
+
+  test("extracts native compaction summaries and routes native slash commands per local CLI engine", async () => {
+    await using tmp = await tmpdir("pigu-native-slash-")
+
+    // 1. Antigravity CHECKPOINT transcript extraction
+    const agyTranscript = path.join(tmp.path, "transcript.jsonl")
+    fsSync.writeFileSync(
+      agyTranscript,
+      [
+        JSON.stringify({ step_index: 0, type: "USER_INPUT", content: "hello" }),
+        JSON.stringify({
+          step_index: 2,
+          type: "CHECKPOINT",
+          content: "# Resuming from a compaction\n\n<summary>\n1. **Task Overview**\n   - Built native /compact\n</summary>\n",
+        }),
+      ].join("\n"),
+    )
+    expect(extractAgyLatestCheckpointSummary(agyTranscript)).toBe("1. **Task Overview**\n   - Built native /compact")
+
+    // 2. Claude compact_boundary transcript extraction
+    const claudeTranscript = path.join(tmp.path, "claude-session.jsonl")
+    fsSync.writeFileSync(
+      claudeTranscript,
+      [
+        JSON.stringify({ type: "user", message: { role: "user", content: "hi" } }),
+        JSON.stringify({ type: "system", subtype: "compact_boundary" }),
+        JSON.stringify({
+          type: "user",
+          message: { role: "user", content: [{ type: "text", text: "Claude compacted summary body" }] },
+        }),
+      ].join("\n"),
+    )
+    expect(extractClaudeLatestCompactSummary(claudeTranscript)).toBe("Claude compacted summary body")
+
+    // 3. Engine-specific slash command routing matrix
+    expect(supportsNativeSlashCommand("claude", "init", tmp.path, tmp.path)).toBe(true)
+    expect(supportsNativeSlashCommand("claude", "review", tmp.path, tmp.path)).toBe(true)
+    expect(supportsNativeSlashCommand("claude", "goal", tmp.path, tmp.path)).toBe(true)
+    expect(supportsNativeSlashCommand("codex", "review", tmp.path, tmp.path)).toBe(true)
+    expect(supportsNativeSlashCommand("codex", "goal", tmp.path, tmp.path)).toBe(false)
+    expect(supportsNativeSlashCommand("agy", "goal", tmp.path, tmp.path)).toBe(true)
+    expect(supportsNativeSlashCommand("agy", "review", tmp.path, tmp.path)).toBe(false)
+
+    const agyReviewSkill = path.join(tmp.path, ".gemini", "antigravity", "skills", "review", "SKILL.md")
+    fsSync.mkdirSync(path.dirname(agyReviewSkill), { recursive: true })
+    fsSync.writeFileSync(agyReviewSkill, "---\nname: review\n---\n")
+    expect(supportsNativeSlashCommand("agy", "review", tmp.path, tmp.path)).toBe(true)
+
+    // 4. Codex native `codex exec review` argument resolution
+    const repoDir = path.join(tmp.path, "repo")
+    fsSync.mkdirSync(repoDir, { recursive: true })
+    await initRepo(repoDir)
+    const headSha = Bun.spawnSync(["git", "rev-parse", "--short", "HEAD"], { cwd: repoDir }).stdout.toString().trim()
+    const branchName = Bun.spawnSync(["git", "symbolic-ref", "--short", "HEAD"], { cwd: repoDir })
+      .stdout.toString()
+      .trim()
+
+    expect(resolveCodexReviewInvocation(repoDir, "")).toEqual({ flags: ["--uncommitted"], stdinText: "" })
+    expect(resolveCodexReviewInvocation(repoDir, branchName)).toEqual({ flags: ["--base", branchName], stdinText: "" })
+    expect(resolveCodexReviewInvocation(repoDir, headSha)).toEqual({ flags: ["--commit", headSha], stdinText: "" })
+    expect(resolveCodexReviewInvocation(repoDir, "focus on concurrency bugs")).toEqual({
+      flags: ["-"],
+      stdinText: "focus on concurrency bugs",
+    })
   })
 })

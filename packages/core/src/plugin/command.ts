@@ -1,10 +1,14 @@
 export * as CommandPlugin from "./command.js"
 
+import os from "node:os"
 import { define } from "@opencode/plugin/effect/plugin"
-import { Effect, Stream } from "effect"
+import type { Session } from "@opencode/schema/session"
+import { Effect, Exit, Option, Stream } from "effect"
 import { Bus } from "../bus.js"
+import { Config } from "../config.js"
 import { Location } from "../location.js"
 import { Mcp } from "../mcp/index.js"
+import { LOCAL_PROVIDER_ID, normalizeEngine, supportsNativeSlashCommand } from "./provider/native-cli.js"
 import PROMPT_INITIALIZE from "./command/initialize.txt"
 import PROMPT_REVIEW from "./command/review.txt"
 
@@ -12,6 +16,7 @@ export const Plugin = define({
   id: "opencode.command",
   effect: Effect.fn(function* (ctx) {
     const location = yield* Location.Service
+    const configOpt = yield* Effect.serviceOption(Config.Service)
     const mcp = yield* Mcp.Service
     const bus = yield* Bus.Service
     const loaded = { prompts: [] as Mcp.Prompt[] }
@@ -25,32 +30,73 @@ export const Plugin = define({
       Effect.forkScoped({ startImmediately: true }),
     )
     loaded.prompts = yield* mcp.prompts()
+
+    const resolveEffectiveModel = (sessionID: Session.ID) =>
+      Effect.gen(function* () {
+        const sessionExit = yield* Effect.exit(ctx.session.get({ sessionID }))
+        if (Exit.isSuccess(sessionExit)) {
+          const session = sessionExit.value
+          if (session.model) return session.model
+          if (session.agent) {
+            const agentExit = yield* Effect.exit(ctx.agent.get({ agentID: session.agent }))
+            if (Exit.isSuccess(agentExit) && agentExit.value.data?.model) return agentExit.value.data.model
+          }
+        }
+        const cfgModel = Option.isSome(configOpt) ? Config.latest(configOpt.value.snapshot(), "model") : undefined
+        if (cfgModel) return { providerID: cfgModel.providerID, id: cfgModel.model }
+        return undefined
+      })
+
     yield* ctx.command.transform((editor) => {
       editor.add({
         name: "init",
         description: "guided AGENTS.md setup",
         execute: (input) =>
-          ctx.session
-            .prompt({
+          Effect.gen(function* () {
+            const activeModel = yield* resolveEffectiveModel(input.sessionID)
+            const useNative =
+              activeModel?.providerID === LOCAL_PROVIDER_ID &&
+              supportsNativeSlashCommand(
+                normalizeEngine(activeModel.id),
+                "init",
+                os.homedir(),
+                location.project.directory,
+              )
+            const text = useNative
+              ? formatNativeSlash("init", input.prompt.text)
+              : append(PROMPT_INITIALIZE.replace("${path}", location.project.directory), input.prompt.text)
+            yield* ctx.session.prompt({
               ...input.prompt,
               sessionID: input.sessionID,
-              text: append(PROMPT_INITIALIZE.replace("${path}", location.project.directory), input.prompt.text),
+              text,
               delivery: input.delivery,
             })
-            .pipe(Effect.asVoid),
+          }).pipe(Effect.asVoid),
       })
       editor.add({
         name: "review",
         description: "review changes [commit|branch|pr], defaults to uncommitted",
         execute: (input) =>
-          ctx.session
-            .prompt({
+          Effect.gen(function* () {
+            const activeModel = yield* resolveEffectiveModel(input.sessionID)
+            const useNative =
+              activeModel?.providerID === LOCAL_PROVIDER_ID &&
+              supportsNativeSlashCommand(
+                normalizeEngine(activeModel.id),
+                "review",
+                os.homedir(),
+                location.project.directory,
+              )
+            const text = useNative
+              ? formatNativeSlash("review", input.prompt.text)
+              : append(PROMPT_REVIEW.replace("${path}", location.project.directory), input.prompt.text)
+            yield* ctx.session.prompt({
               ...input.prompt,
               sessionID: input.sessionID,
-              text: append(PROMPT_REVIEW.replace("${path}", location.project.directory), input.prompt.text),
+              text,
               delivery: input.delivery,
             })
-            .pipe(Effect.asVoid),
+          }).pipe(Effect.asVoid),
       })
       for (const prompt of loaded.prompts) {
         editor.add({
@@ -82,6 +128,11 @@ export const Plugin = define({
     })
   }),
 })
+
+function formatNativeSlash(name: string, input: string) {
+  const value = input.trim()
+  return value ? `/${name} ${value}` : `/${name}`
+}
 
 function append(template: string, input: string) {
   const value = input.trim()

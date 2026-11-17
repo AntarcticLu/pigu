@@ -36,6 +36,7 @@ import { createComposerSubmit } from "./submit"
 import { composerSubmitView } from "./machine"
 import { useAttachmentDestination } from "./attachments/destination"
 import { parseClientSlashCommand } from "./client-slash-command"
+import { nativeCommandBadge, nativeEngineSlashItems, resolveLocalCliEngine } from "./native-slash-commands"
 import { localizeSkillDescription, useExtensionScopeStore } from "@/shell/titlebar/extension-scope-store"
 
 export type ComposerModel = ComposerEditorModel & {
@@ -281,25 +282,69 @@ export function createComposerModel(adapter: ComposerAdapter, options?: { queue?
     })),
   ])
 
-  const slashCommands = createMemo(() => [
-    ...(data.location.command.list({ directory: sdk().directory }) ?? []).map((item) => ({
-      id: `custom.${item.name}`,
-      trigger: item.name,
-      title: item.name,
-      description: item.description,
-      type: "custom" as const,
-    })),
-    ...command.options
-      .filter((item) => !item.disabled && !item.id.startsWith("suggested.") && item.slash)
-      .map((item) => ({
-        id: item.id,
-        trigger: item.slash!,
-        title: item.title,
-        description: item.description,
-        arguments: item.slashArguments,
-        type: "builtin" as const,
+  const slashCommands = createMemo(() => {
+    const localEngine = resolveLocalCliEngine(adapter.controls().model.selection.key())
+    const locale = language.locale()
+    const withBadge = (trigger: string, description: string | undefined) => {
+      const badge = nativeCommandBadge(localEngine, trigger, locale)
+      if (!badge) return description
+      return description ? `${description} (${badge})` : badge
+    }
+
+    const baseItems = [
+      ...(data.location.command.list({ directory: sdk().directory }) ?? []).map((item) => ({
+        id: `custom.${item.name}`,
+        trigger: item.name,
+        title: item.name,
+        description: withBadge(item.name, item.description),
+        type: "custom" as const,
       })),
-  ])
+      ...command.options
+        .filter((item) => !item.disabled && !item.id.startsWith("suggested.") && item.slash)
+        .map((item) => ({
+          id: item.id,
+          trigger: item.slash!,
+          title: item.title,
+          description: withBadge(item.slash!, item.description),
+          arguments: item.slashArguments,
+          type: "builtin" as const,
+        })),
+    ]
+
+    if (!localEngine) return baseItems
+
+    const seen = new Set(baseItems.map((item) => item.trigger))
+    const nativeItems = nativeEngineSlashItems(localEngine, locale)
+      .filter((item) => !seen.has(item.trigger))
+      .map((item) => {
+        seen.add(item.trigger)
+        return {
+          id: `native-cli.${localEngine}.${item.trigger}`,
+          trigger: item.trigger,
+          title: item.title,
+          description: item.description,
+          type: "custom" as const,
+        }
+      })
+
+    const skillSlashItems =
+      localEngine === "agy" || localEngine === "claude" || localEngine === "codex" || localEngine === "opencode"
+        ? skills()
+            .filter((skill) => /^[a-zA-Z0-9:_-]+$/.test(skill.id) && !seen.has(skill.id))
+            .map((skill) => {
+              seen.add(skill.id)
+              return {
+                id: `native-skill.${skill.id}`,
+                trigger: skill.id,
+                title: skill.name || skill.id,
+                description: localizeSkillDescription(skill, locale),
+                type: "custom" as const,
+              }
+            })
+        : []
+
+    return [...baseItems, ...nativeItems, ...skillSlashItems]
+  })
 
   const commands = createMemo<ComposerSuggestion[]>(() => [
     ...slashCommands().map((item) => ({

@@ -6,11 +6,12 @@ import type { SessionIdleBackground } from "@opencode/plugin/effect/session"
 import { Goal } from "@opencode/schema/goal"
 import { Session } from "@opencode/schema/session"
 import { isExactRootFallback } from "@opencode/util/session-title-fallback"
-import { Cause, Clock, DateTime, Duration, Effect, FiberMap, Option, Schema, Stream } from "effect"
+import { Cause, Clock, DateTime, Duration, Effect, Exit, FiberMap, Option, Schema, Stream } from "effect"
 import CONTINUATION from "./goal/continuation.txt"
 import JUDGE from "./goal/judge.txt"
 import KICKOFF from "./goal/kickoff.txt"
 import REMINDER from "./goal/reminder.txt"
+import { LOCAL_PROVIDER_ID, normalizeEngine, supportsNativeSlashCommand } from "./provider/native-cli.js"
 
 export const MAX_OBJECTIVE = 4_000
 export const MAX_ROUNDS = 50
@@ -349,6 +350,27 @@ export const Plugin = define({
             const text = unquote(input.prompt.text.trim())
             const control = text.toLowerCase()
             const goal = yield* read(input.sessionID)
+
+            const isExistingGoalControl =
+              Boolean(goal) && (control === "pause" || control === "resume" || control === "clear")
+            if (!isExistingGoalControl) {
+              const sessionExit = yield* Effect.exit(ctx.session.get({ sessionID: input.sessionID }))
+              const activeModel = Exit.isSuccess(sessionExit) ? sessionExit.value.model : undefined
+              if (
+                activeModel?.providerID === LOCAL_PROVIDER_ID &&
+                supportsNativeSlashCommand(normalizeEngine(activeModel.id), "goal")
+              ) {
+                return yield* ctx.session
+                  .prompt({
+                    ...input.prompt,
+                    sessionID: input.sessionID,
+                    text: text ? `/goal ${text}` : "/goal",
+                    delivery: input.delivery,
+                  })
+                  .pipe(Effect.asVoid)
+              }
+            }
+
             if (text === "") return yield* Effect.fail(new Error(goal ? `${describe(goal)}\n${USAGE}` : USAGE))
 
             if (control === "pause") {
