@@ -220,6 +220,7 @@ function MultimodalManagerBody() {
               <TextInput
                 type="text"
                 appearance="base"
+                class="!w-full self-stretch"
                 value={reclassifyQuery()}
                 placeholder={language.tr("搜索要修改模态归属的模型名称...", "Search text models to reclassify...")}
                 onInput={(event) => setReclassifyQuery(event.currentTarget.value)}

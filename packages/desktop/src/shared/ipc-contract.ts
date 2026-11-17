@@ -36,6 +36,28 @@ export type SaveFilePickerOptions = {
   defaultPath?: string
 }
 
+export type SelfUpdateStatus =
+  | "idle"
+  | "checking"
+  | "offline"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "microsoft-store"
+  | "error"
+
+export type SelfUpdateState = {
+  status: SelfUpdateStatus
+  currentVersion: string
+  latestVersion?: string
+  assetName?: string
+  totalBytes?: number
+  downloadedBytes?: number
+  percent?: number
+  message?: string
+}
+
 export type ClipboardImage = {
   buffer: ArrayBuffer
   width: number

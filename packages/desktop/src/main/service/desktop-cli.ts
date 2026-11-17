@@ -2,6 +2,7 @@ export * as DesktopCli from "./desktop-cli"
 
 import { execFile, spawn } from "node:child_process"
 import { existsSync, readFileSync } from "node:fs"
+import { chmod, copyFile, lstat, rename, rm } from "node:fs/promises"
 import { promisify } from "node:util"
 import { app } from "electron"
 import { Context, Effect, FileSystem, Layer, Option, Path, Schema } from "effect"
@@ -9,7 +10,7 @@ import installer from "../../../../../install?raw"
 import { DesktopPaths } from "../paths"
 import { BUNDLED_CLI_VERSION_KEY } from "../storage/keys"
 import { getStore } from "../storage/store"
-import { parseCliVersion, stageName } from "./cli-version"
+import { cleanReleaseSemver, compareReleaseSemver, parseCliVersion, stageName } from "./cli-version"
 import { DesktopCliState } from "./desktop-cli-state"
 
 const execFileAsync = promisify(execFile)
@@ -91,8 +92,60 @@ const resolveBundledCli = Effect.fn("DesktopCli.resolveBundled")(function* (isol
   const version = yield* bundledVersion(bundled)
   const binary = app.isPackaged || isolated ? yield* installCli(bundled, version) : bundled
 
+  if (app.isPackaged && !isolated && cleanReleaseSemver(version)) {
+    void syncUserInstalledClis(binary, version, app.getPath("home"), path)
+  }
+
   return { version, binary, command: [binary] }
 })
+
+const MIN_STANDALONE_CLI_BYTES = 1024 * 1024
+
+async function syncUserInstalledClis(
+  stagedBinary: string,
+  bundledVersion: string,
+  homeDir: string,
+  path: Path.Path,
+) {
+  const exe = process.platform === "win32" ? ".exe" : ""
+  const candidates = [
+    path.join(homeDir, ".opencode", "bin", `opencode${exe}`),
+    path.join(homeDir, ".pigu", "libexec", `pigu-bin${exe}`),
+  ]
+
+  for (const target of candidates) {
+    const st = await lstat(target).catch(() => undefined)
+
+    // Only upgrade standalone compiled binaries; skip symlinks and small shell wrappers.
+    if (!st || !st.isFile() || st.isSymbolicLink() || st.size < MIN_STANDALONE_CLI_BYTES) continue
+    const rawOut = await execFileAsync(target, ["--version"], { windowsHide: true, timeout: 10_000 })
+      .then((res) => res.stdout.trim())
+      .catch(() => "")
+
+    if (!rawOut) continue
+    const installedVer = rawOut.includes(" v") ? rawOut.slice(rawOut.lastIndexOf(" v") + 2).trim() : rawOut
+    const cmp = compareReleaseSemver(installedVer, bundledVersion)
+
+    // Upgrade only when the installed CLI is strictly older; never downgrade a newer CLI.
+    if (cmp === undefined || cmp >= 0) continue
+    const temp = `${target}.${process.pid}.tmp`
+    const copied = await copyFile(stagedBinary, temp)
+      .then(() => true)
+      .catch(() => false)
+
+    if (!copied) continue
+
+    if (process.platform !== "win32") {
+      await chmod(temp, 0o755).catch(() => undefined)
+    }
+
+    if (process.platform === "darwin") {
+      await execFileAsync("/usr/bin/xattr", ["-d", "com.apple.quarantine", temp]).catch(() => undefined)
+    }
+
+    await rename(temp, target).catch(() => rm(temp, { force: true }).catch(() => undefined))
+  }
+}
 
 // Spawning the bundled executable for `--version` costs ~400 ms of startup on a 200 MB binary (and
 // several seconds on the first launch after an update, while the antivirus scans it). The build

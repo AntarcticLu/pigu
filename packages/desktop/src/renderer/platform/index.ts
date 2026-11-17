@@ -46,6 +46,10 @@ export function createDesktopPlatform(api: ElectronAPI, windowState: DesktopWind
     getSpellcheckEnabled: () => api.getSpellcheckEnabled(),
     setSpellcheckEnabled: (enabled) => api.setSpellcheckEnabled(enabled),
     setPreventSleep: (enabled) => api.setPreventSleep(enabled),
+    getSelfUpdateState: () => api.getSelfUpdateState(),
+    checkSelfUpdate: () => api.checkSelfUpdate(),
+    installSelfUpdate: () => api.installSelfUpdate(),
+    onSelfUpdateChanged: (cb) => api.onSelfUpdateChanged(cb),
     onDragCancel: (callback) => {
       window.addEventListener(DragCancelEvent, callback)
 

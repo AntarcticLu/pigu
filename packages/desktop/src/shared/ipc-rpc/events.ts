@@ -2,6 +2,7 @@ import { desktopZoomLevels } from "@opencode/app/desktop-menu"
 import { Schema } from "effect"
 import { Rpc, RpcGroup } from "effect/rpc"
 import { PluginInstalled, PluginMenubarItem, PluginPayload, PluginGuis } from "./plugins"
+import { SelfUpdateStateSchema } from "./app"
 
 export class DeepLinksOpened extends Schema.TaggedClass<DeepLinksOpened>()("DeepLinksOpened", {
   attempt: Schema.Number,
@@ -76,9 +77,14 @@ export class SidecarChanged extends Schema.TaggedClass<SidecarChanged>()("Sideca
   url: Schema.String,
 }) {}
 
+export class SelfUpdateChanged extends Schema.TaggedClass<SelfUpdateChanged>()("SelfUpdateChanged", {
+  state: SelfUpdateStateSchema,
+}) {}
+
 export const DesktopEvent = Schema.Union([
   DeepLinksOpened,
   SidecarChanged,
+  SelfUpdateChanged,
   MenuCommandTriggered,
   WindowFullscreenChanged,
   WindowFocusChanged,

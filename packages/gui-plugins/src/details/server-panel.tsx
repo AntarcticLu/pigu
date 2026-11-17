@@ -1263,7 +1263,7 @@ function McpSignInDialog(props: {
   })
 
   return (
-    <Dialog>
+    <Dialog fit>
       <DialogHeader>
         <DialogTitleGroup title={ctx.t("mcp.signIn.open", { name: props.name })} />
       </DialogHeader>

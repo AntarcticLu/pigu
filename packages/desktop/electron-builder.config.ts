@@ -82,6 +82,7 @@ const getBase = (appId: string): Configuration => {
       "out/**/*",
       "resources/**/*",
       "!resources/opencode-cli*",
+      "!resources/appx{,/**/*}",
       // Keep only the target platform's node-pty prebuild when cross-packaging with --cpu=*.
       ...CLI_BINARIES.filter((item) => item.os !== target.os || item.cpu !== target.cpu).map(
         (item) => `!**/node_modules/@lydell/node-pty-${item.os}-${item.cpu}{,/**/*}`,
@@ -188,6 +189,17 @@ const getBase = (appId: string): Configuration => {
       perMachine: false,
       installerIcon: `resources/icons/icon.ico`,
       installerHeaderIcon: `resources/icons/icon.ico`,
+    },
+    appx: {
+      artifactName: "pigu-windows-store-${arch}.${ext}",
+      identityName: "AntarcticaLu.pigu",
+      publisher: "CN=54BAE957-6621-4FA8-912F-2D8C7AADDB37",
+      publisherDisplayName: "AntarcticaLu",
+      applicationId: "Pigu",
+      displayName: "Pigu",
+      backgroundColor: "#18181B",
+      languages: ["zh-CN", "en-US"],
+      showNameOnTiles: true,
     },
     linux: {
       icon: `resources/icons`,

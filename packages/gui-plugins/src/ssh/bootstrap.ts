@@ -1,11 +1,21 @@
+import { execFile } from "node:child_process"
 import { createHash } from "node:crypto"
-import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs"
+import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs"
+import http from "node:http"
 import { homedir } from "node:os"
 import path from "node:path"
+import { promisify } from "node:util"
+import { cleanReleaseSemver } from "@opencode/util/semver"
 import { Effect, Option, Schema } from "effect"
-import { HttpClient, HttpClientResponse } from "effect/http"
 import { parseTarget, quote, runSsh, sshArgs, SshFailure } from "./command"
 import { RemoteCli } from "./remote-cli"
+
+const execFileAsync = promisify(execFile)
+
+const MIN_RELEASE_ARCHIVE_BYTES = 5 * 1024 * 1024
+
+const setGlobalProxy = (http as { setGlobalProxyFromEnv?: (env?: Record<string, string>) => void })
+  .setGlobalProxyFromEnv
 
 // Use commands supported by released V2 CLIs. The registration is the service's
 // complete private discovery contract; no remote Python/Node runtime is needed.
@@ -52,11 +62,26 @@ function computeFileSha256(filePath: string) {
   return createHash("sha256").update(readFileSync(filePath)).digest("hex")
 }
 
-function resolveLocalArchiveForPlatform(cacheDir: string, platform: RemotePlatform): LocalArchive | undefined {
-  const candidates: ReadonlyArray<{ readonly kind: LocalArchiveKind; readonly filePath: string }> = [
-    { kind: "bundle", filePath: path.join(cacheDir, `pigu-bundle-${platform}.tar.gz`) },
-    { kind: "release", filePath: path.join(cacheDir, `pigu-${platform}.tar.gz`) },
-  ]
+function resolveLocalArchiveForPlatform(
+  cacheDir: string,
+  platform: RemotePlatform,
+  options?: { releaseVersion?: string; development?: boolean },
+): LocalArchive | undefined {
+  const candidates: Array<{ readonly kind: LocalArchiveKind; readonly filePath: string }> = []
+
+  if (options?.development || !options?.releaseVersion) {
+    candidates.push({ kind: "bundle", filePath: path.join(cacheDir, `pigu-bundle-${platform}.tar.gz`) })
+  }
+
+  if (options?.releaseVersion) {
+    candidates.push({
+      kind: "release",
+      filePath: path.join(cacheDir, `pigu-v${options.releaseVersion}-${platform}.tar.gz`),
+    })
+  } else {
+    candidates.push({ kind: "release", filePath: path.join(cacheDir, `pigu-${platform}.tar.gz`) })
+  }
+
   const found = candidates
     .flatMap((item) => {
       const st = statSync(item.filePath, { throwIfNoEntry: false })
@@ -75,10 +100,13 @@ function resolveLocalArchiveForPlatform(cacheDir: string, platform: RemotePlatfo
   return found[0]
 }
 
-function resolveLocalArchives(cacheDir = path.join(homedir(), ".pigu", "cache")) {
+function resolveLocalArchives(
+  cacheDir = path.join(homedir(), ".pigu", "cache"),
+  options?: { releaseVersion?: string; development?: boolean },
+) {
   return new Map(
     remotePlatforms.flatMap((platform) => {
-      const archive = resolveLocalArchiveForPlatform(cacheDir, platform)
+      const archive = resolveLocalArchiveForPlatform(cacheDir, platform, options)
       return archive ? [[platform, archive] as const] : []
     }),
   )
@@ -303,6 +331,46 @@ fi
 `
 }
 
+function remoteVersionCheckSnippet(requiredReleaseVersion?: string) {
+  const cleanVer = cleanReleaseSemver(requiredReleaseVersion)
+
+  if (!cleanVer) return ""
+
+  // Upgrade remote only when remote < local (`ver_cmp = -1`).
+  // When remote === local (`0`) or remote > local (`1`), preserve the remote binary untouched.
+  return `remote_ver=$("$cli" --version 2>/dev/null | awk 'NR==1 { sub(/^.*v/, "", $0); print $1 }' || true)
+case "$remote_ver" in
+  [0-9]*.[0-9]*.[0-9]*)
+    ver_cmp=$(printf '%s %s\\n' "$remote_ver" ${quote(cleanVer)} | awk '{
+      split($1, a, /[.-]/); split($2, b, /[.-]/);
+      if (a[1]+0 != b[1]+0) { print (a[1]+0 < b[1]+0 ? -1 : 1); exit }
+      if (a[2]+0 != b[2]+0) { print (a[2]+0 < b[2]+0 ? -1 : 1); exit }
+      if (a[3]+0 != b[3]+0) { print (a[3]+0 < b[3]+0 ? -1 : 1); exit }
+      print 0
+    }')
+    if [ "$ver_cmp" = "-1" ]; then
+      ${emitRemotePlatformMarkers}
+      printf 'OPENCODE_SSH_REMOTE_VERSION=%s\\n' "$remote_ver"
+      printf 'OPENCODE_SSH_VERSION_OUTDATED=1\\n'
+      exit 0
+    fi
+    ;;
+esac
+`
+}
+
+const restartIfRunningDaemonMismatchSnippet = `cli_ver_now=$("$cli" --version 2>/dev/null | awk 'NR==1 { sub(/^.*v/, "", $0); print $1 }' || true)
+  if [ -n "$cli_ver_now" ]; then
+    for reg_file in "\${XDG_STATE_HOME:-$HOME/.local/state}"/pigu/service*.json "\${XDG_STATE_HOME:-$HOME/.local/state}"/opencode/service*.json; do
+      if [ ! -f "$reg_file" ] || ! grep -qF "$status" "$reg_file" 2>/dev/null; then continue; fi
+      reg_ver=$(sed -n 's/.*"version"[[:space:]]*:[[:space:]]*"\\([^"]*\\)".*/\\1/p' "$reg_file" | head -n 1)
+      if [ -n "$reg_ver" ] && [ "$reg_ver" != "$cli_ver_now" ]; then
+        "$cli" service restart
+        break
+      fi
+    done
+  fi`
+
 export const discoverScript = `set -eu
 ${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
 if [ -z "$cli" ]; then
@@ -316,7 +384,12 @@ if [ "$status" = stopped ]; then
 fi
 ${registrationScript}`
 
-export function startScript(version: string, replace = false, expectedHashes?: ExpectedPlatformHashes) {
+export function startScript(
+  version: string,
+  replace = false,
+  expectedHashes?: ExpectedPlatformHashes,
+  requiredReleaseVersion?: string,
+) {
   void RemoteCli.requireVersion(version)
 
   return `set -eu
@@ -326,17 +399,19 @@ if [ -z "$cli" ]; then
   printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
   exit 0
 fi
-${archiveFreshnessCheckSnippet(expectedHashes)}${remoteConfigSyncScript()}
+${remoteVersionCheckSnippet(requiredReleaseVersion)}${archiveFreshnessCheckSnippet(expectedHashes)}${remoteConfigSyncScript()}
 status=$("$cli" service status 2>/dev/null || printf 'stopped\\n')
 if [ "$status" = stopped ]; then
   "$cli" service start
 elif [ "${replace ? "1" : "0"}" = 1 ] || [ "$pigu_config_changed" = 1 ]; then
   "$cli" service restart
+else
+  ${restartIfRunningDaemonMismatchSnippet}
 fi
 ${registrationScript}`
 }
 
-export function discoverWithSyncScript(expectedHashes?: ExpectedPlatformHashes) {
+export function discoverWithSyncScript(expectedHashes?: ExpectedPlatformHashes, requiredReleaseVersion?: string) {
   return `set -eu
 ${RemoteCli.discoverScript({ fromPath: true, cache: { directory: ".opencode/desktop-ssh", prefix: "0.0.0-beta-" } })}
 if [ -z "$cli" ]; then
@@ -344,12 +419,14 @@ if [ -z "$cli" ]; then
   printf 'OPENCODE_SSH_CLI_MISSING=1\\n'
   exit 0
 fi
-${archiveFreshnessCheckSnippet(expectedHashes)}${remoteConfigSyncScript()}
+${remoteVersionCheckSnippet(requiredReleaseVersion)}${archiveFreshnessCheckSnippet(expectedHashes)}${remoteConfigSyncScript()}
 status=$("$cli" service status 2>/dev/null || printf 'stopped\\n')
 if [ "$status" = stopped ]; then
   "$cli" service start
 elif [ "$pigu_config_changed" = 1 ]; then
   "$cli" service restart
+else
+  ${restartIfRunningDaemonMismatchSnippet}
 fi
 ${registrationScript}`
 }
@@ -465,11 +542,14 @@ ${syncShimsSnippet}
 ${sha256 ? `printf '%s\\n' ${quote(sha256)} > "$HOME/.pigu/.installed-sha256"\n` : ""}`
 }
 
-const remoteGitHubInstallScript = `set -eu
+function remoteGitHubInstallScript(releaseVersion?: string) {
+  const versionArg = releaseVersion ? ` -s -- --version ${quote(releaseVersion)}` : ""
+
+  return `set -eu
 if [ -f /etc/network_turbo ] && [ -z "\${http_proxy:-}" ]; then
   . /etc/network_turbo >/dev/null 2>&1 || true
 fi
-curl -fsSL --connect-timeout 15 --max-time 180 https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash
+curl -fsSL --connect-timeout 15 --max-time 180 https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash${versionArg}
 mkdir -p "$HOME/.pigu/libexec" "$HOME/.pigu/bin"
 if [ -x "$HOME/.opencode/bin/opencode" ]; then
   cp -f "$HOME/.opencode/bin/opencode" "$HOME/.pigu/libexec/pigu-bin"
@@ -479,6 +559,106 @@ if [ -x "$HOME/.opencode/bin/opencode" ]; then
   ${syncShimsSnippet}
 fi
 `
+}
+
+async function detectLocalHttpProxy(): Promise<string | undefined> {
+  const fromEnv =
+    process.env.HTTPS_PROXY ||
+    process.env.https_proxy ||
+    process.env.HTTP_PROXY ||
+    process.env.http_proxy ||
+    undefined
+
+  if (fromEnv && /^https?:\/\//i.test(fromEnv.trim())) {
+    return fromEnv.trim()
+  }
+
+  if (process.platform === "darwin") {
+    const out = await execFileAsync("/usr/sbin/scutil", ["--proxy"], { timeout: 2_000 })
+      .then((res) => res.stdout)
+      .catch(() => "")
+    const entries = new Map<string, string>()
+
+    for (const rawLine of out.split(/\r?\n/)) {
+      const match = /^\s*([A-Za-z0-9_]+)\s*:\s*(.+?)\s*$/.exec(rawLine)
+
+      if (match?.[1] && match[2]) entries.set(match[1], match[2])
+    }
+
+    if (entries.get("HTTPSEnable") === "1" && entries.get("HTTPSProxy") && entries.get("HTTPSPort")) {
+      return `http://${entries.get("HTTPSProxy")}:${entries.get("HTTPSPort")}`
+    }
+
+    if (entries.get("HTTPEnable") === "1" && entries.get("HTTPProxy") && entries.get("HTTPPort")) {
+      return `http://${entries.get("HTTPProxy")}:${entries.get("HTTPPort")}`
+    }
+  }
+
+  if (process.platform === "win32") {
+    const out = await execFileAsync(
+      "reg.exe",
+      ["query", "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Internet Settings"],
+      { windowsHide: true, timeout: 2_000 },
+    )
+      .then((res) => res.stdout)
+      .catch(() => "")
+
+    if (/ProxyEnable\s+REG_DWORD\s+0x0*1\b/i.test(out)) {
+      const match = /ProxyServer\s+REG_SZ\s+([^\r\n]+)/i.exec(out)
+      const raw = match?.[1]?.trim()
+
+      if (raw) {
+        const hostPort = raw.includes("=")
+          ? /https=([^;]+)/i.exec(raw)?.[1]?.trim() || /http=([^;]+)/i.exec(raw)?.[1]?.trim()
+          : raw
+
+        if (hostPort) return /^https?:\/\//i.test(hostPort) ? hostPort : `http://${hostPort}`
+      }
+    }
+  }
+
+  return undefined
+}
+
+async function downloadReleaseArchiveBytes(url: string): Promise<Uint8Array> {
+  const proxyUrl = await detectLocalHttpProxy()
+  const attempts = proxyUrl ? [proxyUrl, undefined] : [undefined]
+
+  for (const activeProxy of attempts) {
+    if (setGlobalProxy) {
+      setGlobalProxy(
+        activeProxy
+          ? { HTTP_PROXY: activeProxy, HTTPS_PROXY: activeProxy, NO_PROXY: "127.0.0.1,localhost,::1" }
+          : {},
+      )
+    }
+
+    const bytes = await fetch(url, {
+      redirect: "follow",
+      signal: AbortSignal.timeout(180_000),
+      headers: { "User-Agent": "Pigu-SSH-Sync" },
+    })
+      .then(async (res) => {
+        if (!res.ok) return undefined
+        const buf = new Uint8Array(await res.arrayBuffer())
+
+        return buf.byteLength >= MIN_RELEASE_ARCHIVE_BYTES ? buf : undefined
+      })
+      .catch(() => undefined)
+
+    if (bytes) return bytes
+  }
+
+  throw new SshFailure("install")
+}
+
+function needsRemoteInstallOrUpdate(output: string) {
+  return (
+    output.includes("OPENCODE_SSH_CLI_MISSING=1") ||
+    output.includes("OPENCODE_SSH_VERSION_OUTDATED=1") ||
+    output.includes("OPENCODE_SSH_ARCHIVE_OUTDATED=1")
+  )
+}
 
 export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
   target: ReturnType<typeof parseTarget>
@@ -494,13 +674,21 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
       stdin: script,
     })
 
-  const localArchives = resolveLocalArchives()
-  const expectedHashes: ExpectedPlatformHashes = Object.fromEntries(
-    [...localArchives.entries()].map(([platform, archive]) => [platform, archive.sha256]),
-  )
+  const targetReleaseVersion = input.development ? undefined : cleanReleaseSemver(input.version)
+  const localArchives = resolveLocalArchives(undefined, {
+    releaseVersion: targetReleaseVersion,
+    development: input.development,
+  })
+  // Hash-stamp checks only apply to unversioned local dev bundles; release builds use semver comparison
+  // so a cached local release archive never downgrades a newer remote server.
+  const expectedHashes: ExpectedPlatformHashes | undefined = targetReleaseVersion
+    ? undefined
+    : Object.fromEntries([...localArchives.entries()].map(([platform, archive]) => [platform, archive.sha256]))
 
   const firstOutput = yield* run(
-    input.replace ? startScript(input.version, true, expectedHashes) : discoverWithSyncScript(expectedHashes),
+    input.replace
+      ? startScript(input.version, true, expectedHashes, targetReleaseVersion)
+      : discoverWithSyncScript(expectedHashes, targetReleaseVersion),
   )
 
   const installRemoteFallback = Effect.fnUntraced(function* (platform: RemotePlatform) {
@@ -519,29 +707,33 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
       return
     }
 
-    const directSuccess = yield* run(remoteGitHubInstallScript).pipe(
+    const directSuccess = yield* run(remoteGitHubInstallScript(targetReleaseVersion)).pipe(
       Effect.as(true),
       Effect.orElseSucceed(() => false),
     )
     if (directSuccess) return
 
     const cacheDir = path.join(homedir(), ".pigu", "cache")
-    const cachedRelease = path.join(cacheDir, `pigu-${platform}.tar.gz`)
-    const http = yield* HttpClient.HttpClient
-    const bytes = yield* http
-      .get(`https://github.com/AntarcticLu/pigu/releases/latest/download/pigu-${platform}.tar.gz`)
-      .pipe(
-        Effect.flatMap(HttpClientResponse.filterStatusOk),
-        Effect.flatMap((res) => res.arrayBuffer),
-        Effect.timeout("180 seconds"),
-        Effect.map((buf) => new Uint8Array(buf)),
-        Effect.mapError(() => new SshFailure("install")),
-      )
+    const cacheFileName = targetReleaseVersion
+      ? `pigu-v${targetReleaseVersion}-${platform}.tar.gz`
+      : `pigu-${platform}.tar.gz`
+    const cachedRelease = path.join(cacheDir, cacheFileName)
+    const releaseUrl = targetReleaseVersion
+      ? `https://github.com/AntarcticLu/pigu/releases/download/v${targetReleaseVersion}/pigu-${platform}.tar.gz`
+      : `https://github.com/AntarcticLu/pigu/releases/latest/download/pigu-${platform}.tar.gz`
+
+    const bytes = yield* Effect.tryPromise({
+      try: () => downloadReleaseArchiveBytes(releaseUrl),
+      catch: () => new SshFailure("install"),
+    })
 
     const downloadedSha = createHash("sha256").update(bytes).digest("hex")
     yield* Effect.sync(() => {
       mkdirSync(cacheDir, { recursive: true })
-      writeFileSync(cachedRelease, bytes)
+      const tempCache = `${cachedRelease}.${process.pid}.tmp`
+      writeFileSync(tempCache, bytes)
+      renameSync(tempCache, cachedRelease)
+      rmSync(tempCache, { force: true })
     }).pipe(Effect.ignore)
 
     yield* runSsh({
@@ -551,18 +743,15 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
     }).pipe(Effect.mapError(() => new SshFailure("install")))
   })
 
-  const needsInstallOrUpdate =
-    firstOutput.includes("OPENCODE_SSH_CLI_MISSING=1") || firstOutput.includes("OPENCODE_SSH_ARCHIVE_OUTDATED=1")
-
   const resolveOutput = Effect.fnUntraced(function* () {
-    if (!needsInstallOrUpdate) return firstOutput
+    if (!needsRemoteInstallOrUpdate(firstOutput)) return firstOutput
     yield* installRemoteFallback(parseRemotePlatform(firstOutput))
     return yield* run(startScript(input.version, true))
   })
 
   const output = yield* resolveOutput()
 
-  if (output.includes("OPENCODE_SSH_CLI_MISSING=1") || output.includes("OPENCODE_SSH_ARCHIVE_OUTDATED=1")) {
+  if (needsRemoteInstallOrUpdate(output)) {
     return yield* Effect.fail(new SshFailure("install"))
   }
 

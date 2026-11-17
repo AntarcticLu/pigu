@@ -107,3 +107,79 @@ test("detects outdated remote archive stamp and preserves standalone binary wrap
     rmSync(tempHome, { recursive: true, force: true })
   }
 })
+
+test("compares remote CLI version against local release version (upgrades older, reuses equal, preserves newer)", () => {
+  if (process.platform === "win32") return
+  const tempHome = mkdtempSync(path.join(tmpdir(), "pigu-ssh-ver-"))
+  try {
+    mkdirSync(path.join(tempHome, ".pigu", "bin"), { recursive: true })
+    mkdirSync(path.join(tempHome, ".local", "state", "opencode"), { recursive: true })
+    const restartMarker = path.join(tempHome, "restarted.flag")
+
+    const writeFakeCli = (cliVersion: string, runningVersion: string) => {
+      rmSync(restartMarker, { force: true })
+      writeFileSync(
+        path.join(tempHome, ".local", "state", "opencode", "service.json"),
+        JSON.stringify({ url: "http://127.0.0.1:4321", password: "pw", version: runningVersion, pid: 12345 }),
+      )
+      const script = `#!/bin/sh
+if [ "$1" = "--version" ]; then
+  echo "opencode v${cliVersion}"
+  exit 0
+fi
+if [ "$1" = "service" ] && [ "$2" = "status" ]; then
+  echo "http://127.0.0.1:4321"
+  exit 0
+fi
+if [ "$1" = "service" ] && [ "$2" = "restart" ]; then
+  echo "restarted" > "${restartMarker}"
+  exit 0
+fi
+exit 0
+`
+      writeFileSync(path.join(tempHome, ".pigu", "bin", "pigu"), script, { mode: 0o755 })
+    }
+
+    const testEnv = {
+      ...process.env,
+      HOME: tempHome,
+      XDG_STATE_HOME: path.join(tempHome, ".local", "state"),
+      PATH: "/usr/bin:/bin",
+    }
+
+    // Case 1: remote (1.0.0) < local (1.0.1) -> marks outdated for upgrade
+    writeFakeCli("1.0.0", "1.0.0")
+    const olderRun = spawnSync("sh", ["-c", discoverWithSyncScript(undefined, "1.0.1")], {
+      env: testEnv,
+      encoding: "utf8",
+    })
+    expect(olderRun.status).toBe(0)
+    expect(olderRun.stdout).toContain("OPENCODE_SSH_VERSION_OUTDATED=1")
+    expect(olderRun.stdout).toContain("OPENCODE_SSH_REMOTE_VERSION=1.0.0")
+
+    // Case 2: remote (1.0.1) === local (1.0.1) -> reuses without upgrade; steady-state run does not restart
+    writeFakeCli("1.0.1", "1.0.1")
+    spawnSync("sh", ["-c", discoverWithSyncScript(undefined, "1.0.1")], { env: testEnv, encoding: "utf8" })
+    rmSync(restartMarker, { force: true })
+    const equalRun = spawnSync("sh", ["-c", discoverWithSyncScript(undefined, "1.0.1")], {
+      env: testEnv,
+      encoding: "utf8",
+    })
+    expect(equalRun.status).toBe(0)
+    expect(equalRun.stdout).not.toContain("OPENCODE_SSH_VERSION_OUTDATED=1")
+    expect(parseRegistration(equalRun.stdout)?.version).toBe("1.0.1")
+    expect(spawnSync("test", ["-f", restartMarker]).status).not.toBe(0)
+
+    // Case 3: remote (1.0.2) > local (1.0.1) -> NEVER downgrades; restarts daemon only if daemon lagged binary
+    writeFakeCli("1.0.2", "1.0.0")
+    const newerRun = spawnSync("sh", ["-c", discoverWithSyncScript(undefined, "1.0.1")], {
+      env: testEnv,
+      encoding: "utf8",
+    })
+    expect(newerRun.status).toBe(0)
+    expect(newerRun.stdout).not.toContain("OPENCODE_SSH_VERSION_OUTDATED=1")
+    expect(spawnSync("test", ["-f", restartMarker]).status).toBe(0)
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+  }
+})

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test"
-import { keptStages, serviceVersion, shouldRetryEnsure } from "./cli-version"
+import { keptStages, serviceVersion, serviceVersionMatcher, shouldRetryEnsure } from "./cli-version"
 
 describe("cli-version", () => {
   test.each([
@@ -8,6 +8,19 @@ describe("cli-version", () => {
     { channel: "prod" as const, isolated: false, mode: "initial" as const, version: "2.0.32", expected: "2.0.32" },
   ])("serviceVersion($channel, isolated=$isolated) -> $expected", (input) => {
     expect(serviceVersion(input)).toBe(input.expected)
+  })
+
+  test("serviceVersionMatcher upgrades older services while preserving equal or newer release services", () => {
+    expect(serviceVersionMatcher(undefined)).toBeUndefined()
+    expect(serviceVersionMatcher("0.0.0-beta-2")).toBe("0.0.0-beta-2")
+    const matcher = serviceVersionMatcher("1.0.1")
+    expect(typeof matcher).toBe("function")
+    if (typeof matcher !== "function") return
+    expect(matcher("1.0.0")).toBe(false)
+    expect(matcher("1.0.1")).toBe(true)
+    expect(matcher("1.0.2")).toBe(true)
+    expect(matcher("2.0.0")).toBe(true)
+    expect(matcher("local")).toBe(false)
   })
 
   test.each([

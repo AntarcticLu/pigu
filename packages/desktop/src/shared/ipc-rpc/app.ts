@@ -63,6 +63,41 @@ export const AppSetSpellcheckEnabled = Rpc.make("AppSetSpellcheckEnabled", {
   payload: { enabled: Schema.Boolean },
 })
 
+export const SelfUpdateStatusSchema = Schema.Literals([
+  "idle",
+  "checking",
+  "offline",
+  "up-to-date",
+  "available",
+  "downloading",
+  "installing",
+  "microsoft-store",
+  "error",
+])
+
+export const SelfUpdateStateSchema = Schema.Struct({
+  status: SelfUpdateStatusSchema,
+  currentVersion: Schema.String,
+  latestVersion: Schema.optionalKey(Schema.String),
+  assetName: Schema.optionalKey(Schema.String),
+  totalBytes: Schema.optionalKey(Schema.Number),
+  downloadedBytes: Schema.optionalKey(Schema.Number),
+  percent: Schema.optionalKey(Schema.Number),
+  message: Schema.optionalKey(Schema.String),
+})
+
+export const AppGetSelfUpdateState = Rpc.make("AppGetSelfUpdateState", {
+  success: SelfUpdateStateSchema,
+})
+
+export const AppCheckSelfUpdate = Rpc.make("AppCheckSelfUpdate", {
+  success: SelfUpdateStateSchema,
+})
+
+export const AppInstallSelfUpdate = Rpc.make("AppInstallSelfUpdate", {
+  success: SelfUpdateStateSchema,
+})
+
 export const AppSetPreventSleep = Rpc.make("AppSetPreventSleep", {
   payload: { enabled: Schema.Boolean },
   success: Schema.Boolean,
@@ -89,6 +124,9 @@ export const AppRpcs = RpcGroup.make(
   AppGetSpellcheckEnabled,
   AppSetSpellcheckEnabled,
   AppSetPreventSleep,
+  AppGetSelfUpdateState,
+  AppCheckSelfUpdate,
+  AppInstallSelfUpdate,
   AppRecordFatalRendererError,
   AppSetNativeTranslations,
   AppRelaunch,

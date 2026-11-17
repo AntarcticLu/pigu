@@ -60,6 +60,13 @@ if (!app && os === "mac") {
 if (!app && os === "win") {
   await $`bunx electron-builder ${flags} --dir`
   const unpacked = path.join("dist", cli.cpu === "arm64" ? "win-arm64-unpacked" : "win-unpacked")
+
+  if (resolveChannel() === "prod") {
+    await $`bunx electron-builder --win appx --${cli.cpu} --prepackaged ${unpacked} --publish never --config electron-builder.config.ts`
+    const appxName = `pigu-windows-store-${cli.cpu}.appx`
+    await cp(path.join("dist", appxName), path.join(out, appxName))
+  }
+
   await writeUpdateConfig(path.join(unpacked, "resources"))
   await cp(unpacked, path.join(out, "app"), { recursive: true })
 }

@@ -1,5 +1,5 @@
 import { Schema } from "effect"
-import { createEffect, createMemo, For, Show, onCleanup, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, For, Show, onCleanup, untrack, type Accessor, type JSX } from "solid-js"
 import { Key } from "@solid-primitives/keyed"
 import { createStore } from "solid-js/store"
 import { useQuery } from "@tanstack/solid-query"
@@ -322,16 +322,25 @@ function ProjectList(props: {
     enabled: ctx()?.sdk.connection.status() === "connected",
   }))
 
+  // Archived projects and external CLI directories may legitimately remain absent from the unarchived
+  // `/api/project` list, so avoid tracking `projects.list()` here and attempt one refresh per unseen project ID.
+  const attemptedProjectRefresh = new WeakMap<object, Set<string>>()
+
   createEffect(() => {
     const current = ctx()
     const list = sessions.data?.()
 
-    if (!current || !list || list.length === 0) return
-    const known = new Set(current.projects.list().map((project) => project.id))
+    if (!current || !current.sync.project.ready() || !list || list.length === 0) return
+    const attempted = attemptedProjectRefresh.get(current) ?? new Set<string>()
+    attemptedProjectRefresh.set(current, attempted)
+    const known = new Set(untrack(() => current.projects.list()).map((project) => project.id))
+    const missing = list.flatMap((session) =>
+      !known.has(session.projectID) && !attempted.has(session.projectID) ? [session.projectID] : [],
+    )
 
-    if (list.some((session) => !known.has(session.projectID))) {
-      void current.sync.project.refresh()
-    }
+    if (missing.length === 0) return
+    missing.forEach((id) => attempted.add(id))
+    void current.sync.project.refresh()
   })
 
   createEffect((prevCount: number | undefined) => {

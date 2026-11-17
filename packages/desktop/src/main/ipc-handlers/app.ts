@@ -15,6 +15,7 @@ import { ApplicationLifecycle } from "../lifecycle"
 import { finishFirstLaunchOnboarding, isFirstLaunchOnboardingPending } from "../lifecycle/onboarding"
 import { BackgroundService } from "../service/background-service"
 import { DesktopCli } from "../service/desktop-cli"
+import { checkSelfUpdate, getSelfUpdateState, installSelfUpdate } from "../service/self-update"
 import { SidecarCredentials } from "../service/sidecar-credentials"
 import { getLastFocusedWindow, getWindowID, setBackgroundColor } from "../windows"
 import { sender } from "./context"
@@ -51,6 +52,9 @@ export const appHandlers = AppRpcs.toLayer(
       AppGetSpellcheckEnabled: () => Effect.sync(getSpellcheckEnabled),
       AppSetSpellcheckEnabled: ({ enabled }) => Effect.sync(() => setSpellcheckEnabled(enabled)),
       AppSetPreventSleep: ({ enabled }) => Effect.sync(() => setPreventSleepBlocker(enabled)),
+      AppGetSelfUpdateState: () => Effect.sync(getSelfUpdateState),
+      AppCheckSelfUpdate: () => promise(() => checkSelfUpdate()),
+      AppInstallSelfUpdate: () => promise(() => installSelfUpdate(lifecycle.relaunch)),
       AppExportDebugLogs: () => logging.exportDebug,
       AppSetForceFocus: ({ enabled }, context) => promise(() => setForceFocus(sender(handoff, context), enabled)),
       AppRecordFatalRendererError: ({ error }) =>

@@ -6,8 +6,11 @@ import { Switch } from "@opencode/ui/switch"
 import { type Component, createMemo, createSignal, For, type JSX, Show } from "solid-js"
 import { createStore } from "solid-js/store"
 import { Schema } from "effect"
+import { cleanReleaseSemver, compareReleaseSemver } from "@opencode/util/semver"
 import { useLanguage } from "@/runtime/i18n/language"
 import { Persistence } from "@/runtime/persistence/schema"
+import { usePlatform } from "@/runtime/platform/platform"
+import { selectServerVersion } from "@/runtime/server/health-machine"
 import { useGlobal } from "@/runtime/server/runtime"
 import { ServerConnection } from "@/runtime/server/registry"
 import { useModels } from "@/providers/models/models"
@@ -201,8 +204,16 @@ export const SettingsModels: Component<{
   const language = useLanguage()
   const dialog = useDialog()
   const global = useGlobal()
+  const platform = usePlatform()
   const surface = useSettingsSurface()
   const inventory = useSettingsServers()
+
+  const newerServerVersion = (entry: SettingsServer) => {
+    const serverVer = selectServerVersion(global.servers.health[entry.key])
+    const cmp = compareReleaseSemver(serverVer, platform.version)
+
+    return cmp === 1 ? cleanReleaseSemver(serverVer) : undefined
+  }
 
   const [query, setQuery] = createSignal("")
   const [expandedDevices, setExpandedDevices] = createStore<Record<string, boolean>>({})
@@ -295,6 +306,18 @@ export const SettingsModels: Component<{
                     <div class="min-w-0 flex-1">
                       <ServerConnectionRow entry={entry} onServerChange={selectServer} />
                     </div>
+                    <Show when={newerServerVersion(entry)}>
+                      {(ver) => (
+                        <Button
+                          size="small"
+                          variant="outline"
+                          data-action={`device-client-outdated-${entry.key}`}
+                          onClick={() => surface.select("general")}
+                        >
+                          {language.tr(`服务端 v${ver()} · 更新本机`, `Server v${ver()} · Update Client`)}
+                        </Button>
+                      )}
+                    </Show>
                     <Show when={isDeviceExpanded(entry) && isReachable(entry) && addProviderHandlers[entry.key]}>
                       {(openAdd) => (
                         <Button

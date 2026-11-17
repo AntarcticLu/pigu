@@ -149,6 +149,7 @@ function ProjectBasicInfoSection(props: {
                 data-action="settings-project-name"
                 type="text"
                 appearance="base"
+                class="!w-full self-stretch"
                 value={model.store.name}
                 placeholder={model.folderName()}
                 aria-label={language.t("project.settings.name.title")}

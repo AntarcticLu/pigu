@@ -81,6 +81,8 @@ export const DialogConnectProvider: Component<{
 }> = (props) => {
   const fallback = useProviderConnectController()
   const controller = props.controller ?? fallback
+  const language = useLanguage()
+  const dialog = useDialog()
 
   const [state, setState] = createStore<{
     completed: boolean
@@ -98,11 +100,8 @@ export const DialogConnectProvider: Component<{
     picked: true,
     stepBack: false,
     accounts: false,
-    title: "Pigu API",
+    title: language.tr("新增供应商 (API)", "Add Provider (API)"),
   })
-
-  const language = useLanguage()
-  const dialog = useDialog()
 
   const [welcome, setWelcome, , welcomeReady] = persisted(
     Persist.global("chatgpt-plan-welcome.v1"),
@@ -217,7 +216,7 @@ export const DialogConnectProvider: Component<{
           <Match when={controller.selected()}>
             {(provider) => (
               <div class="flex min-w-0 flex-1 items-center gap-2">
-                <Show when={!props.standalone || state.stepBack}>
+                <Show when={(!props.standalone && provider() !== "pigu") || state.stepBack}>
                   <button
                     type="button"
                     class="-my-0.5 -ms-0.5 flex size-5 shrink-0 items-center justify-center rounded-sm text-v2-icon-icon-muted hover:bg-v2-overlay-simple-overlay-hover focus-visible:bg-v2-overlay-simple-overlay-hover focus-visible:outline-none"
@@ -782,6 +781,9 @@ function ProviderConnection(props: {
     if (props.provider === "anthropic" && view().method?.label?.toLowerCase().includes("max"))
       return props.onTitle(language.t("provider.connect.title.anthropicProMax"))
 
+    if (props.provider === "pigu")
+      return props.onTitle(language.tr("新增供应商 (API)", "Add Provider (API)"))
+
     props.onTitle(
       language.t("provider.connect.title", {
         provider: props.provider === "opencode" ? language.t("provider.connect.opencode.name") : provider().name,
@@ -1322,12 +1324,14 @@ function ProviderConnection(props: {
       name: string
       baseURL: string
       apiKey: string
+      customModels: string
       saving: boolean
       localError?: string
     }>({
       name: "",
       baseURL: defaultUrl(),
       apiKey: "",
+      customModels: "",
       saving: false,
     })
 
@@ -1342,6 +1346,7 @@ function ProviderConnection(props: {
       const cleanName = localState.name.trim()
       const cleanUrl = localState.baseURL.trim()
       const cleanKey = localState.apiKey.trim()
+      const cleanModels = localState.customModels.trim()
 
       if (!cleanUrl) {
         setLocalState("localError", language.tr("请输入 API 地址 (URL)", "Please enter API Base URL"))
@@ -1368,6 +1373,7 @@ function ProviderConnection(props: {
               piguAction: "upsert",
               ...(cleanName ? { name: cleanName } : {}),
               baseURL: cleanUrl,
+              ...(cleanModels ? { customModels: cleanModels } : {}),
             },
           },
         })
@@ -1383,7 +1389,7 @@ function ProviderConnection(props: {
         showToast({
           variant: "success",
           icon: "circle-check",
-          title: language.tr("已配置并连接供应商", "Provider configured and connected"),
+          title: language.tr("已添加供应商", "Provider added"),
           description: cleanName || cleanUrl,
         })
         dialog.close()
@@ -1396,23 +1402,17 @@ function ProviderConnection(props: {
     }
 
     return (
-      <div class="flex flex-col gap-5 px-3 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-muted">
-        <p>
-          {language.tr(
-            "同时输入兼容接口的供应商名称、API 地址与密钥，连接后将自动拉取可用模型列表。",
-            "Enter the compatible provider name, API Base URL, and API Key to connect and automatically fetch available models.",
-          )}
-        </p>
-        <form onSubmit={(event) => void handleSubmit(event)} class="flex flex-col items-start gap-4 self-stretch">
-          <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
-            {language.tr("供应商名称", "Provider name")}
+      <div class="flex flex-col gap-3.5 px-3 pb-2 text-[13px] font-[440] leading-5 tracking-[-0.04px] text-v2-text-text-muted">
+        <form onSubmit={(event) => void handleSubmit(event)} class="flex flex-col items-start gap-3.5 self-stretch">
+          <label class="flex w-full flex-col gap-1.5 font-[530] leading-4 text-v2-text-text-base">
+            {language.tr("供应商名称", "Provider Name")}
             <TextInput
               class="!w-full"
               name="providerName"
               data-input="provider-name"
               placeholder={language.tr(
                 "例如：PiguToken / DeepSeek（留空自动根据域名命名）",
-                "e.g. PiguToken / DeepSeek (optional, auto-named from domain)",
+                "e.g. PiguToken / DeepSeek (leave empty to name by domain)",
               )}
               value={localState.name}
               readOnly={localState.saving}
@@ -1421,7 +1421,7 @@ function ProviderConnection(props: {
               onInput={(event) => setLocalState({ name: event.currentTarget.value, localError: undefined })}
             />
           </label>
-          <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
+          <label class="flex w-full flex-col gap-1.5 font-[530] leading-4 text-v2-text-text-base">
             {language.tr("API 地址 (URL)", "API Base URL")}
             <TextInput
               ref={urlRef}
@@ -1436,10 +1436,11 @@ function ProviderConnection(props: {
               onInput={(event) => setLocalState({ baseURL: event.currentTarget.value, localError: undefined })}
             />
           </label>
-          <label class="flex w-full flex-col gap-2 font-[530] leading-4 text-v2-text-text-base">
+          <label class="flex w-full flex-col gap-1.5 font-[530] leading-4 text-v2-text-text-base">
             {language.tr("API 密钥 (Key)", "API Key")}
             <TextInput
               class="!w-full"
+              type="password"
               name="apiKey"
               data-input="provider-api-key"
               placeholder="sk-..."
@@ -1452,24 +1453,46 @@ function ProviderConnection(props: {
               onInput={(event) => setLocalState({ apiKey: event.currentTarget.value, localError: undefined })}
             />
           </label>
+          <label class="flex w-full flex-col gap-1.5 font-[530] leading-4 text-v2-text-text-base">
+            {language.tr("补充模型 ID（可选）", "Additional Model IDs (optional)")}
+            <TextInput
+              class="!w-full"
+              name="customModels"
+              data-input="provider-custom-models"
+              placeholder={language.tr(
+                "自动拉取 /models；火山接入点等无列表接口可手动填写，逗号分隔",
+                "Auto-fetched via /models; add comma-separated IDs if needed",
+              )}
+              value={localState.customModels}
+              readOnly={localState.saving}
+              autocomplete="off"
+              spellcheck={false}
+              onInput={(event) => setLocalState({ customModels: event.currentTarget.value, localError: undefined })}
+            />
+          </label>
           <Show when={combinedError()}>
             {(error) => (
-              <div id={errorID} role="alert" class="-mt-2 text-xs text-v2-state-fg-danger">
+              <div id={errorID} role="alert" class="-mt-1 text-xs text-v2-state-fg-danger">
                 {error()}
               </div>
             )}
           </Show>
-          <Button
-            type="submit"
-            variant="contrast"
-            data-action="provider-connect-submit"
-            disabled={localState.saving}
-            aria-busy={localState.saving}
-          >
-            {localState.saving
-              ? language.tr("正在配置并拉取模型...", "Saving and fetching models...")
-              : language.tr("配置并连接", "Save & Connect")}
-          </Button>
+          <div class="flex w-full items-center justify-end gap-2 pt-1">
+            <Button type="button" variant="ghost-muted" onClick={() => dialog.close()}>
+              {language.tr("取消", "Cancel")}
+            </Button>
+            <Button
+              type="submit"
+              variant="contrast"
+              data-action="provider-connect-submit"
+              disabled={localState.saving}
+              aria-busy={localState.saving}
+            >
+              {localState.saving
+                ? language.tr("正在保存并拉取模型...", "Saving and fetching models...")
+                : language.tr("保存并连接", "Save & Connect")}
+            </Button>
+          </div>
         </form>
       </div>
     )
@@ -2021,7 +2044,9 @@ function ProviderConnection(props: {
         class={
           isConsole
             ? `flex min-h-0 flex-1 flex-col overflow-y-auto ${showAccounts() ? "" : "pb-4"}`
-            : "flex min-h-0 flex-1 flex-col"
+            : isCombinedUrlAndKey()
+              ? "flex min-h-0 flex-1 flex-col overflow-y-auto"
+              : "flex min-h-0 flex-1 flex-col"
         }
       >
         <Show when={remote}>

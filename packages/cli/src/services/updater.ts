@@ -480,10 +480,16 @@ const make = Effect.gen(function* () {
           const installer = path.join(directory, "install")
           yield* runUpgrade({
             method,
-            command: ["curl", "-fsSL", "-o", installer, "https://opencode.ai/v2/install"],
-            displayCommand: ["curl", "-fsSL", "https://opencode.ai/v2/install"],
-            title: "Could not download the OpenCode installer",
-            retry: "Check your network, then run opencode upgrade again.",
+            command: [
+              "curl",
+              "-fsSL",
+              "-o",
+              installer,
+              "https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install",
+            ],
+            displayCommand: ["curl", "-fsSL", "https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install"],
+            title: "Could not download the Pigu installer",
+            retry: "Check your network, then run pigu upgrade again.",
           })
           return yield* retaining(
             method,

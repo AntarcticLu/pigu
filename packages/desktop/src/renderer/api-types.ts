@@ -8,6 +8,7 @@ import type {
   FilePickerOptions,
   PickedFiles,
   SaveFilePickerOptions,
+  SelfUpdateState,
   ServerReadyData,
   TitlebarTheme,
 } from "../shared/ipc-contract"
@@ -76,6 +77,10 @@ export type ElectronAPI = {
   getSpellcheckEnabled(): Promise<boolean>
   setSpellcheckEnabled(enabled: boolean): Promise<void>
   setPreventSleep(enabled: boolean): Promise<boolean>
+  getSelfUpdateState(): Promise<SelfUpdateState>
+  checkSelfUpdate(): Promise<SelfUpdateState>
+  installSelfUpdate(): Promise<SelfUpdateState>
+  onSelfUpdateChanged(cb: (state: SelfUpdateState) => void): () => void
   recordFatalRendererError(error: FatalRendererError): Promise<void>
   setNativeTranslations(bundle: DesktopNativeBundle): Promise<void>
 }

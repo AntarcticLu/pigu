@@ -20,12 +20,12 @@ type MobileSettingsView = Awaited<ReturnType<SdkApi["experimental"]["mobile"]["s
 type MobilePlatform = "feishu" | "weixin" | "dingtalk" | "wecom" | "qqbot"
 
 const LabeledInput: Component<TextInputProps & { label: string }> = (props) => {
-  const [local, inputProps] = splitProps(props, ["label"])
+  const [local, inputProps] = splitProps(props, ["label", "class"])
 
   return (
     <div class="flex flex-col gap-1.5">
       <label class="text-[13px] font-[530] leading-5 text-v2-text-text-base">{local.label}</label>
-      <TextInput {...inputProps} />
+      <TextInput {...inputProps} class={local.class ? `!w-full self-stretch ${local.class}` : "!w-full self-stretch"} />
     </div>
   )
 }
@@ -255,7 +255,7 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
     const api = localApi()
 
     if (!api) return
-    dialog.push(() => (
+    void dialog.show(() => (
       <DialogAddMobileRobot
         api={api}
         onSaved={() => {
@@ -269,7 +269,7 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
     const api = localApi()
 
     if (!api) return
-    dialog.push(() => (
+    void dialog.show(() => (
       <DialogImportMigrationCode
         api={api}
         onSaved={() => {
@@ -283,7 +283,7 @@ export const SettingsMobile: Component<{ active: boolean }> = (props) => {
     const api = localApi()
 
     if (!api) return
-    dialog.push(() => (
+    void dialog.show(() => (
       <DialogEditMobileRobot
         api={api}
         robot={robot}
@@ -640,8 +640,10 @@ const DialogAddMobileRobot: Component<{
     setQrUrl("")
     setQrStatus("")
     const meta = platformMeta(p)
+    const trimmedName = name().trim()
+    const isPresetName = !trimmedName || PLATFORMS.some((item) => item.zhName === trimmedName || item.enName === trimmedName)
 
-    if (!name().trim()) setName(meta.zhName)
+    if (isPresetName) setName(language.tr(meta.zhName, meta.enName))
     const supportsQr = p === "feishu" || p === "weixin"
     setMode(supportsQr ? "qr" : "manual")
     setStep(2)

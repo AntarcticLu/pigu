@@ -1,7 +1,8 @@
 {
   "name": "@opencode/desktop",
+  "description": "Pigu AI Desktop Workspace",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "license": "MIT",
   "homepage": "https://github.com/AntarcticLu/pigu",

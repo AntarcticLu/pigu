@@ -25,6 +25,28 @@ type PlatformName = "web" | "desktop"
 
 type DesktopOS = "macos" | "windows" | "linux"
 
+export type SelfUpdateStatus =
+  | "idle"
+  | "checking"
+  | "offline"
+  | "up-to-date"
+  | "available"
+  | "downloading"
+  | "installing"
+  | "microsoft-store"
+  | "error"
+
+export type SelfUpdateState = {
+  status: SelfUpdateStatus
+  currentVersion: string
+  latestVersion?: string
+  assetName?: string
+  totalBytes?: number
+  downloadedBytes?: number
+  percent?: number
+  message?: string
+}
+
 export type FatalRendererErrorLog = {
   error: string
   url: string
@@ -37,6 +59,10 @@ type PlatformBase = {
   requestMicrophone?(): Promise<boolean>
   setVoiceCallActive?(active: boolean): Promise<void>
   setPreventSleep?(enabled: boolean): Promise<boolean>
+  getSelfUpdateState?(): Promise<SelfUpdateState>
+  checkSelfUpdate?(): Promise<SelfUpdateState>
+  installSelfUpdate?(): Promise<SelfUpdateState>
+  onSelfUpdateChanged?(cb: (state: SelfUpdateState) => void): () => void
   /** App version */
   version?: string
 

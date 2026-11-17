@@ -99,6 +99,10 @@ export const api: ElectronAPI = {
   getSpellcheckEnabled: () => invoke("AppGetSpellcheckEnabled"),
   setSpellcheckEnabled: (enabled) => invoke("AppSetSpellcheckEnabled", { enabled }),
   setPreventSleep: (enabled) => invoke("AppSetPreventSleep", { enabled }),
+  getSelfUpdateState: () => invoke("AppGetSelfUpdateState").then(mutable),
+  checkSelfUpdate: () => invoke("AppCheckSelfUpdate").then(mutable),
+  installSelfUpdate: () => invoke("AppInstallSelfUpdate").then(mutable),
+  onSelfUpdateChanged: (cb) => listen("SelfUpdateChanged", (event) => cb(mutable(event.state))),
   recordFatalRendererError: (error) => invoke("AppRecordFatalRendererError", { error }),
   setNativeTranslations: (bundle) => invoke("AppSetNativeTranslations", { value: bundle }),
 }

@@ -666,6 +666,7 @@ export const SettingsExtensions: Component<{
                 <div class="min-w-0 flex-1 max-w-[260px]">
                   <TextInput
                     type="search"
+                    class="!w-full self-stretch"
                     value={mcpForm.query}
                     onInput={(event) => setMcpForm("query", event.currentTarget.value)}
                     placeholder={language.tr("搜索 MCP...", "Search MCPs...")}
@@ -723,6 +724,7 @@ export const SettingsExtensions: Component<{
                     </div>
                   </div>
                   <TextInput
+                    class="!w-full self-stretch"
                     value={mcpForm.name}
                     onInput={(event) => setMcpForm("name", event.currentTarget.value)}
                     placeholder={language.tr("MCP 名称（例如 filesystem）", "MCP name (e.g. filesystem)")}
@@ -731,6 +733,7 @@ export const SettingsExtensions: Component<{
                     when={mcpForm.type === "local"}
                     fallback={
                       <TextInput
+                        class="!w-full self-stretch"
                         value={mcpForm.url}
                         onInput={(event) => setMcpForm("url", event.currentTarget.value)}
                         placeholder={language.tr("远程 MCP 地址（例如 https://example.com/mcp）", "Remote MCP URL (e.g. https://example.com/mcp)")}
@@ -738,6 +741,7 @@ export const SettingsExtensions: Component<{
                     }
                   >
                     <TextInput
+                      class="!w-full self-stretch"
                       value={mcpForm.command}
                       onInput={(event) => setMcpForm("command", event.currentTarget.value)}
                       placeholder={language.tr("启动命令（例如 npx -y @modelcontextprotocol/server-filesystem /path）", "Command (e.g. npx -y @modelcontextprotocol/server-filesystem /path)")}
@@ -845,6 +849,7 @@ export const SettingsExtensions: Component<{
                 <div class="min-w-0 flex-1 max-w-[260px]">
                   <TextInput
                     type="search"
+                    class="!w-full self-stretch"
                     value={pluginForm.query}
                     onInput={(event) => setPluginForm("query", event.currentTarget.value)}
                     placeholder={language.tr("搜索插件...", "Search plugins...")}
@@ -893,16 +898,19 @@ export const SettingsExtensions: Component<{
                       : language.tr("新增插件", "Add Plugin")}
                   </span>
                   <TextInput
+                    class="!w-full self-stretch"
                     value={pluginForm.name}
                     onInput={(event) => setPluginForm("name", event.currentTarget.value)}
                     placeholder={language.tr("插件名称（例如 my-plugin）", "Plugin name (e.g. my-plugin)")}
                   />
                   <TextInput
+                    class="!w-full self-stretch"
                     value={pluginForm.target}
                     onInput={(event) => setPluginForm("target", event.currentTarget.value)}
                     placeholder={language.tr("NPM 包名或本地路径（例如 @scope/plugin）", "NPM package or local path (e.g. @scope/plugin)")}
                   />
                   <TextInput
+                    class="!w-full self-stretch"
                     value={pluginForm.description}
                     onInput={(event) => setPluginForm("description", event.currentTarget.value)}
                     placeholder={language.tr("插件说明（可选）", "Description (optional)")}
@@ -980,6 +988,7 @@ export const SettingsExtensions: Component<{
                 <div class="min-w-0 flex-1 max-w-[260px]">
                   <TextInput
                     type="search"
+                    class="!w-full self-stretch"
                     value={skillForm.query}
                     onInput={(event) => setSkillForm("query", event.currentTarget.value)}
                     placeholder={language.tr("搜索技能...", "Search skills...")}
@@ -1018,11 +1027,13 @@ export const SettingsExtensions: Component<{
                       : language.tr("新增技能", "Add Skill")}
                   </span>
                   <TextInput
+                    class="!w-full self-stretch"
                     value={skillForm.name}
                     onInput={(event) => setSkillForm("name", event.currentTarget.value)}
                     placeholder={language.tr("技能标识名称（例如 code-review）", "Skill ID (e.g. code-review)")}
                   />
                   <TextInput
+                    class="!w-full self-stretch"
                     value={skillForm.description}
                     onInput={(event) => setSkillForm("description", event.currentTarget.value)}
                     placeholder={language.tr("技能简短描述", "Short description")}

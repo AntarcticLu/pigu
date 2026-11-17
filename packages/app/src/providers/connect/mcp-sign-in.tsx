@@ -103,7 +103,7 @@ export function DialogMcpSignIn(props: {
   })
 
   return (
-    <Dialog size="normal">
+    <Dialog fit size="normal">
       <DialogHeader>
         <DialogTitleGroup title={language.t("dialog.mcp.signIn.open", { name: props.name })} />
       </DialogHeader>

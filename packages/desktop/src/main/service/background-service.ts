@@ -7,7 +7,7 @@ import { emitIpcEvent } from "../ipc-events"
 import { getMainWindows } from "../windows"
 import { BackgroundServiceMachine } from "./background-service-machine"
 import { cleanStages } from "./cli-stages"
-import { keptStages, serviceVersion, shouldRetryEnsure } from "./cli-version"
+import { keptStages, serviceVersion, serviceVersionMatcher, shouldRetryEnsure } from "./cli-version"
 import { DesktopCli } from "./desktop-cli"
 import { SidecarCredentials } from "./sidecar-credentials"
 import { takeSidecarProbe } from "./sidecar-probe"
@@ -58,7 +58,7 @@ const ensure = Effect.fn("BackgroundService.ensure")(function* (mode: Background
   const runFork = Effect.runForkWith(yield* Effect.context<FileSystem.FileSystem | Path.Path>())
   const setup = yield* prepare(mode)
 
-  const run = (version = setup.version) =>
+  const run = (version: string | ((runningVersion: string) => boolean) | undefined = serviceVersionMatcher(setup.version)) =>
     setup.client.Service.ensure({
       file: setup.file,
       version,
@@ -78,7 +78,7 @@ const ensure = Effect.fn("BackgroundService.ensure")(function* (mode: Background
     run().catch((error) => {
       if (!shouldRetryEnsure(setup.version, error instanceof Error ? error.message : String(error))) throw error
 
-      return run(setup.cli.version)
+      return run(serviceVersionMatcher(setup.cli.version))
     }),
   )
 

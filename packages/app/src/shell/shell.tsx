@@ -1,12 +1,14 @@
-import { Show, startTransition, Suspense, type ParentProps } from "solid-js"
+import { createEffect, Show, startTransition, Suspense, type ParentProps } from "solid-js"
 import { createStore } from "solid-js/store"
 import { createMediaQuery } from "@solid-primitives/media"
+import { cleanReleaseSemver, compareReleaseSemver } from "@opencode/util/semver"
 import { ResizeHandle } from "@opencode/ui/resize-handle"
 import { useDialog } from "@opencode/ui/context/dialog"
 import { prefersReducedMotion } from "@opencode/ui/motion"
 import { Titlebar } from "@/shell/titlebar/titlebar"
 import { usePlatform } from "@/runtime/platform/platform"
-import { ToastRegion } from "@/shell/notifications/toast"
+import { showToast, ToastRegion } from "@/shell/notifications/toast"
+import { selectServerVersion } from "@/runtime/server/health-machine"
 import { UploadToastHost } from "@/composer/attachments/uploads"
 import { useSettingsSurface } from "@/settings/surface"
 import { useSettings } from "@/settings/model"
@@ -203,6 +205,39 @@ export default function Layout(props: ParentProps) {
   ])
   const bottomTitlebar = () => mobile() && preferences.general.mobileTitlebarPosition() === "bottom"
   const dragInset = () => windowDragEnabled(platform) && !mobile()
+  const notifiedNewerServers = new Set<string>()
+
+  createEffect(() => {
+    const clientVer = cleanReleaseSemver(platform.version)
+
+    if (!clientVer) return
+
+    for (const [key, health] of Object.entries(global.servers.health)) {
+      const serverVer = cleanReleaseSemver(selectServerVersion(health))
+
+      if (!serverVer || compareReleaseSemver(serverVer, clientVer) !== 1) continue
+      const noticeKey = `${key}:${serverVer}`
+
+      if (notifiedNewerServers.has(noticeKey)) continue
+      notifiedNewerServers.add(noticeKey)
+      showToast({
+        title: language.tr(
+          `服务端版本 (v${serverVer}) 高于本机 (v${clientVer})`,
+          `Server (v${serverVer}) is newer than client (v${clientVer})`,
+        ),
+        description: language.tr(
+          "已保留高版本服务端运行，建议前往「设置 → 通用」更新本机客户端。",
+          "Kept the newer server running. Update your client in Settings → General.",
+        ),
+        actions: [
+          {
+            label: language.tr("前往更新", "Update Client"),
+            onClick: () => settings.select("general"),
+          },
+        ],
+      })
+    }
+  })
 
   return (
     <div

@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: "Release tag (e.g. v1.0.0)"
+        description: "Release tag (e.g. v1.0.1)"
         required: true
-        default: "v1.0.0"
+        default: "v1.0.1"
 
 permissions:
   contents: write
@@ -170,6 +170,10 @@ jobs:
         with:
           name: pigu-windows-x64
           path: pigu-windows-x64.zip
+      - uses: actions/upload-artifact@v4
+        with:
+          name: microsoft-store-appx-x64
+          path: dist/desktop/pigu-windows-store-x64.appx
 
   publish-release:
     name: Publish Clean GitHub Release
@@ -179,6 +183,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
+          pattern: pigu-*
           path: release-raw
       - name: Recreate GitHub Release with fresh assets
         env:
