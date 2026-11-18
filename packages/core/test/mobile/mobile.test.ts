@@ -42,8 +42,11 @@ import {
 } from "../../src/mobile/migration"
 import { isUserAllowed, parseMobileInput } from "../../src/mobile/commands"
 import { extractMobileButlerActions } from "../../src/mobile/butler"
+import { createCipheriv } from "node:crypto"
 import { renderCardMarkdownFallback, renderFeishuCardObject } from "../../src/mobile/card"
 import { createFeishuConnector } from "../../src/mobile/platforms/feishu"
+import { createWeixinConnector, decryptWeixinCdnPayload } from "../../src/mobile/platforms/weixin"
+import type { InboundMobileMessage } from "../../src/mobile/platforms/types"
 import { testEffect } from "../lib/effect"
 import { globalProjectNode } from "../lib/project"
 import { initGit, initRepo } from "../fixture/git"
@@ -1401,6 +1404,38 @@ describe("end-to-end chained mini-task workflow (isolated sandbox)", () => {
       expect(inboundMediaRes.texts[0]).toContain("error-screenshot.png(image/png)")
       expect(inboundMediaRes.texts[0]).toContain("crash.log(text/plain)")
 
+      // 3b. Multiple WeChat images with identical default names + corrupted PNG fallback (never replies "执行出错")
+      const multiDupRes = yield* mobile.simulateInbound({
+        robotId: bot.id,
+        userId: "wx_butler_user",
+        chatId: "wx_butler_chat_1",
+        text: "对比这三张截图",
+        fileAttachments: [
+          { fileName: "weixin-image.png", mimeType: "image/png", data: onePxPng },
+          { fileName: "weixin-image.png", mimeType: "image/png", data: onePxPng },
+          { fileName: "weixin-image.png", mimeType: "image/png", data: onePxPng },
+        ],
+      })
+      expect(multiDupRes.texts.length).toBe(1)
+      expect(multiDupRes.texts[0]).not.toContain("执行出错")
+      expect(multiDupRes.texts[0]).toContain("weixin-image.png(image/png)")
+      expect(multiDupRes.texts[0]).toContain("weixin-image-2.png(image/png)")
+      expect(multiDupRes.texts[0]).toContain("weixin-image-3.png(image/png)")
+
+      const corruptedPng = Uint8Array.from(Buffer.from("89504e470d0a1a0a0000000d49484452ffffffff", "hex"))
+      const fallbackRes = yield* mobile.simulateInbound({
+        robotId: bot.id,
+        userId: "wx_butler_user",
+        chatId: "wx_butler_chat_1",
+        text: "查看这张长截图",
+        fileAttachments: [
+          { fileName: "weixin-image-1.png", mimeType: "image/png", data: onePxPng },
+          { fileName: "weixin-long-shot.png", mimeType: "image/png", data: corruptedPng },
+        ],
+      })
+      expect(fallbackRes.texts.length).toBe(1)
+      expect(fallbackRes.texts[0]).not.toContain("执行出错")
+
       // 4. AI generates and proactively delivers a file back to phone via <pigu-mobile-action type="send_file">
       const aiSendRes = yield* mobile.simulateInbound({
         robotId: bot.id,
@@ -2686,4 +2721,145 @@ describe("end-to-end chained mini-task workflow (isolated sandbox)", () => {
         expect(sendPick18.files.map((f) => f.fileName)).toEqual(["artifact-18.txt"])
       }),
   )
+
+  test("WeChat connector coalesces multi-image bursts + caption and falls back across candidate AES keys", async () => {
+    const onePxPng = Buffer.from(
+      "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c4890000000a49444154789c63000100000500010d0a2db40000000049454e44ae426082",
+      "hex",
+    )
+    const validKey = Buffer.from("0102030405060708090a0b0c0d0e0f10", "hex")
+    const wrongKey = Buffer.from("ffffffffffffffffffffffffffffffff", "hex")
+    const encryptPng = () => {
+      const cipher = createCipheriv("aes-128-ecb", validKey, null)
+      cipher.setAutoPadding(true)
+      return Buffer.concat([cipher.update(onePxPng), cipher.final()])
+    }
+    const encryptedPng = encryptPng()
+
+    // Direct helper check: wrong media.aes_key followed by valid image_item.aeskey recovers exact PNG
+    const decrypted = decryptWeixinCdnPayload(new Uint8Array(encryptedPng), [
+      wrongKey.toString("base64"),
+      validKey.toString("hex"),
+    ])
+    expect(Buffer.from(decrypted).equals(onePxPng)).toBe(true)
+
+    let pollCount = 0
+    const server = Bun.serve({
+      port: 0,
+      hostname: "127.0.0.1",
+      fetch: async (req) => {
+        const url = new URL(req.url)
+        if (url.pathname === "/c2c/download") {
+          return new Response(encryptedPng, { headers: { "Content-Type": "application/octet-stream" } })
+        }
+        if (url.pathname === "/ilink/bot/getupdates") {
+          pollCount += 1
+          if (pollCount === 1) {
+            return Response.json({
+              ret: 0,
+              get_updates_buf: "cur_1",
+              msgs: [
+                {
+                  message_id: 101,
+                  from_user_id: "wx_multi_user",
+                  message_type: 1,
+                  context_token: "ctx_1",
+                  item_list: [
+                    {
+                      type: 2,
+                      image_item: {
+                        aeskey: validKey.toString("hex"),
+                        media: { encrypt_query_param: "img_1", aes_key: wrongKey.toString("base64") },
+                      },
+                    },
+                  ],
+                },
+                {
+                  message_id: 102,
+                  from_user_id: "wx_multi_user",
+                  message_type: 1,
+                  context_token: "ctx_2",
+                  item_list: [
+                    {
+                      type: 2,
+                      image_item: {
+                        aeskey: validKey.toString("hex"),
+                        hd_media: { encrypt_query_param: "img_2_hd" },
+                      },
+                    },
+                  ],
+                },
+              ],
+            })
+          }
+          if (pollCount === 2) {
+            return Response.json({
+              ret: 0,
+              get_updates_buf: "cur_2",
+              msgs: [
+                {
+                  message_id: 103,
+                  from_user_id: "wx_multi_user",
+                  message_type: 1,
+                  context_token: "ctx_3",
+                  item_list: [
+                    {
+                      type: 2,
+                      image_item: {
+                        media: { encrypt_query_param: "img_3", aes_key: validKey.toString("base64") },
+                      },
+                    },
+                  ],
+                },
+                {
+                  message_id: 104,
+                  from_user_id: "wx_multi_user",
+                  message_type: 1,
+                  context_token: "ctx_4",
+                  item_list: [{ type: 1, text_item: { text: "帮我分析这三张报错图" } }],
+                },
+              ],
+            })
+          }
+          await new Promise((r) => setTimeout(r, 200))
+          return Response.json({ ret: 0, msgs: [] })
+        }
+        return Response.json({ ret: 0 })
+      },
+    })
+
+    const received: InboundMobileMessage[] = []
+    const base = `http://127.0.0.1:${server.port}`
+    const connector = createWeixinConnector({
+      robotId: "wx_bot_burst",
+      token: "tok_test",
+      baseUrl: base,
+      cdnBaseUrl: `${base}/c2c`,
+      burstDebounceMs: 80,
+    })
+
+    try {
+      await connector.start(
+        async (msg) => {
+          received.push(msg)
+        },
+        async () => undefined,
+      )
+      const deadline = Date.now() + 2_000
+      while (received.length === 0 && Date.now() < deadline) {
+        await new Promise((r) => setTimeout(r, 25))
+      }
+      expect(received).toHaveLength(1)
+      expect(received[0]?.text).toBe("帮我分析这三张报错图")
+      expect(received[0]?.fileAttachments?.map((f) => f.fileName)).toEqual([
+        "weixin-image-1.png",
+        "weixin-image-2.png",
+        "weixin-image-3.png",
+      ])
+      expect(received[0]?.fileAttachments?.every((f) => f.mimeType === "image/png")).toBe(true)
+    } finally {
+      await connector.stop()
+      await server.stop(true)
+    }
+  })
 })

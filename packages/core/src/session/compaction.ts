@@ -295,12 +295,17 @@ export const layer = Layer.effect(
       return { context: model === context.model ? context : { ...context, model }, cap }
     })
 
+    const isExternalLocalCliModel = (context: SessionContext.Loaded) => context.model.ref.providerID === "local"
+
     const compact = Effect.fn("SessionCompaction.compact")(function* (trigger: Trigger): Effect.fn.Return<Outcome> {
       const settings = state.get()
       const context = trigger.context
 
       // Only the user compacts when automatic compaction is off, overflow included.
-      if (trigger.reason !== "manual" && !settings.auto) return { status: "skipped" }
+      // External local CLIs (`local/*`) manage their own internal context window and automatic compaction;
+      // only explicit `/compact` (`reason: "manual"`) invokes their native compaction hook.
+      if (trigger.reason !== "manual" && (!settings.auto || isExternalLocalCliModel(context)))
+        return { status: "skipped" }
       if (
         trigger.reason === "auto" &&
         !due(context, calculateCeiling(context.model.limit, settings.buffer), trigger.estimate)
@@ -352,7 +357,7 @@ export const layer = Layer.effect(
       const settings = state.get()
       if (!settings.precompute || !settings.auto) return
       const context = yield* load
-      if (context.model.compaction?.type === "native") return
+      if (context.model.compaction?.type === "native" || isExternalLocalCliModel(context)) return
       const ceiling = calculateCeiling(context.model.limit, settings.buffer)
       if (!Number.isFinite(ceiling)) return
       const estimate = given ?? estimatePrompt(context)

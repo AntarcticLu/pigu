@@ -32,12 +32,16 @@ import {
 import { Skill } from "@opencode/core/skill"
 import { AbsolutePath } from "@opencode/core/schema"
 import {
+  applyClaudeOrAgyUsageRow,
+  applyCodexUsageRow,
   buildCliAttachmentFlags,
   buildPromptWithAttachments,
   extractAgyLatestCheckpointSummary,
   extractClaudeLatestCompactSummary,
   extractPromptTurns,
+  parseCodexLastStepUsageLines,
   resolveCodexReviewInvocation,
+  type StepUsageAccumulator,
   supportsNativeSlashCommand,
   unwrapWindowsCodexBinary,
 } from "@opencode/core/plugin/provider/native-cli"
@@ -739,6 +743,49 @@ describe("PiguProviderPlugin", () => {
       expect(decorated).toContain(extracted.attachments[0]!.filePath)
       expect(decorated).toContain(extracted.attachments[1]!.filePath)
 
+      // Consecutive steered user turns (e.g. mobile multi-image steer) merge all attachments & preserve priorTurns count
+      const steered = extractPromptTurns(
+        [
+          {
+            role: "user",
+            content: [{ type: "text", text: "第一轮问题" }],
+          },
+          {
+            role: "assistant",
+            content: [{ type: "text", text: "第一轮回答" }],
+          },
+          {
+            role: "user",
+            content: [
+              {
+                type: "file",
+                mediaType: "image/png",
+                filename: "wx-1.png",
+                data: pngBase64,
+              },
+            ],
+          },
+          {
+            role: "user",
+            content: [
+              { type: "text", text: "结合这两张图看下" },
+              {
+                type: "file",
+                mediaType: "image/png",
+                filename: "wx-2.png",
+                data: pngBase64,
+              },
+            ],
+          },
+        ],
+        attachmentsDir,
+      )
+      expect(steered.priorTurns).toHaveLength(2)
+      expect(steered.trailingUserCount).toBe(2)
+      expect(steered.userText).toBe("结合这两张图看下")
+      expect(steered.attachments).toHaveLength(2)
+      expect(steered.attachments.map((a) => a.filename)).toEqual(["wx-1.png", "wx-2.png"])
+
       expect(buildCliAttachmentFlags("codex", extracted.attachments)).toEqual([
         "-i",
         extracted.attachments[0]!.filePath,
@@ -1237,6 +1284,203 @@ describe("PiguProviderPlugin", () => {
     expect(resolveCodexReviewInvocation(repoDir, "focus on concurrency bugs")).toEqual({
       flags: ["-"],
       stdinText: "focus on concurrency bugs",
+    })
+  })
+
+  test("records final step context usage instead of cumulative multi-step billing totals for agy, claude, and codex", () => {
+    const emptyUsage = (): StepUsageAccumulator => ({
+      inputTokens: 0,
+      outputTokens: 0,
+      reasoningTokens: 0,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      hasStepUsage: false,
+    })
+
+    // 1. Antigravity: multi-step `step_update` followed by cumulative `result`
+    const agyUsage = emptyUsage()
+    applyClaudeOrAgyUsageRow(
+      {
+        event: "step_update",
+        step_update: {
+          step_index: 4,
+          state: "DONE",
+          step_type: "agent_response",
+          usage: { input_tokens: 10_968, output_tokens: 683, thinking_tokens: 120, cache_read_tokens: 0 },
+        },
+      },
+      agyUsage,
+    )
+    applyClaudeOrAgyUsageRow(
+      {
+        event: "step_update",
+        step_update: {
+          step_index: 88,
+          state: "DONE",
+          step_type: "agent_response",
+          usage: { input_tokens: 2_679, output_tokens: 2_975, thinking_tokens: 410, cache_read_tokens: 146_218 },
+        },
+      },
+      agyUsage,
+    )
+    applyClaudeOrAgyUsageRow(
+      {
+        event: "result",
+        result: {
+          status: "SUCCESS",
+          num_turns: 26,
+          usage: { input_tokens: 250_122, output_tokens: 8_356, thinking_tokens: 11_373, cache_read_tokens: 2_086_165 },
+        },
+      },
+      agyUsage,
+    )
+    expect(agyUsage).toMatchObject({
+      inputTokens: 2_679,
+      outputTokens: 2_975,
+      reasoningTokens: 410,
+      cacheReadTokens: 146_218,
+      cacheWriteTokens: 0,
+      hasStepUsage: true,
+    })
+
+    // Fallback when no step_update.usage was emitted
+    const agyFallback = emptyUsage()
+    applyClaudeOrAgyUsageRow(
+      {
+        event: "result",
+        result: { usage: { input_tokens: 12_000, output_tokens: 150, thinking_tokens: 20, cache_read_tokens: 4_000 } },
+      },
+      agyFallback,
+    )
+    expect(agyFallback).toMatchObject({
+      inputTokens: 12_000,
+      outputTokens: 150,
+      reasoningTokens: 20,
+      cacheReadTokens: 4_000,
+    })
+
+    // 2. Claude Code: top-level steps ignore subagent `parent_tool_use_id` and ignore cumulative `result.usage`
+    const claudeUsage = emptyUsage()
+    applyClaudeOrAgyUsageRow(
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          id: "msg_1",
+          usage: { input_tokens: 1_500, output_tokens: 320, cache_read_input_tokens: 20_000, cache_creation_input_tokens: 500 },
+        },
+      },
+      claudeUsage,
+    )
+    applyClaudeOrAgyUsageRow(
+      {
+        type: "assistant",
+        parent_tool_use_id: "toolu_subagent",
+        message: {
+          id: "msg_sub",
+          usage: { input_tokens: 300, output_tokens: 80, cache_read_input_tokens: 2_000, cache_creation_input_tokens: 0 },
+        },
+      },
+      claudeUsage,
+    )
+    applyClaudeOrAgyUsageRow(
+      {
+        type: "assistant",
+        parent_tool_use_id: null,
+        message: {
+          id: "msg_2",
+          usage: { input_tokens: 800, output_tokens: 450, cache_read_input_tokens: 21_500, cache_creation_input_tokens: 0 },
+        },
+      },
+      claudeUsage,
+    )
+    applyClaudeOrAgyUsageRow(
+      {
+        type: "result",
+        usage: { input_tokens: 2_600, output_tokens: 850, cache_read_input_tokens: 43_500, cache_creation_input_tokens: 500 },
+      },
+      claudeUsage,
+    )
+    expect(claudeUsage).toMatchObject({
+      inputTokens: 800,
+      outputTokens: 450,
+      cacheReadTokens: 21_500,
+      cacheWriteTokens: 0,
+      hasStepUsage: true,
+    })
+
+    // 3. Codex: `token_count` last_token_usage wins over cumulative `turn.completed` and `total_token_usage`
+    const codexUsage = emptyUsage()
+    applyCodexUsageRow(
+      {
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: {
+              input_tokens: 6_738_889,
+              cached_input_tokens: 4_052_096,
+              cache_write_input_tokens: 0,
+              output_tokens: 45_843,
+              reasoning_output_tokens: 22_777,
+            },
+            last_token_usage: {
+              input_tokens: 39_135,
+              cached_input_tokens: 38_400,
+              cache_write_input_tokens: 0,
+              output_tokens: 608,
+              reasoning_output_tokens: 516,
+            },
+          },
+        },
+      },
+      codexUsage,
+    )
+    applyCodexUsageRow(
+      {
+        type: "turn.completed",
+        usage: {
+          input_tokens: 6_738_889,
+          cached_input_tokens: 4_052_096,
+          output_tokens: 45_843,
+          reasoning_output_tokens: 22_777,
+        },
+      },
+      codexUsage,
+    )
+    expect(codexUsage).toMatchObject({
+      inputTokens: 735,
+      cacheReadTokens: 38_400,
+      outputTokens: 608,
+      reasoningTokens: 516,
+      hasStepUsage: true,
+    })
+
+    const rolloutContent = [
+      JSON.stringify({
+        type: "event_msg",
+        payload: {
+          type: "token_count",
+          info: {
+            total_token_usage: { input_tokens: 500_000, cached_input_tokens: 420_000, output_tokens: 8_000 },
+            last_token_usage: {
+              input_tokens: 42_000,
+              cached_input_tokens: 40_000,
+              cache_write_input_tokens: 100,
+              output_tokens: 512,
+              reasoning_output_tokens: 256,
+            },
+          },
+        },
+      }),
+      JSON.stringify({ type: "event_msg", payload: { type: "agent_message", message: "done" } }),
+    ].join("\n")
+    expect(parseCodexLastStepUsageLines(rolloutContent)).toEqual({
+      inputTokens: 2_000,
+      cacheReadTokens: 40_000,
+      cacheWriteTokens: 100,
+      outputTokens: 512,
+      reasoningTokens: 256,
     })
   })
 })

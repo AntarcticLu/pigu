@@ -30,7 +30,7 @@ function encryptAes128Ecb(plaintext: Uint8Array, key: Uint8Array): Buffer {
   return Buffer.concat([cipher.update(plaintext), cipher.final()])
 }
 
-function parseWeixinAesKey(aesKey: string | undefined): Buffer | undefined {
+export function parseWeixinAesKey(aesKey: string | undefined): Buffer | undefined {
   const trimmed = aesKey?.trim() ?? ""
   if (!trimmed) return undefined
   if (/^[0-9a-fA-F]{32}$/.test(trimmed)) return Buffer.from(trimmed, "hex")
@@ -41,28 +41,59 @@ function parseWeixinAesKey(aesKey: string | undefined): Buffer | undefined {
   return undefined
 }
 
-async function downloadWeixinCdnBytes(encryptQueryParam: string, aesKey?: string): Promise<Uint8Array | undefined> {
-  const url = `${WEIXIN_CDN_BASE_URL}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`
-  const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) }).catch(() => undefined)
-  if (!resp || !resp.ok) return undefined
-  const raw = Buffer.from(await resp.arrayBuffer())
-  if (raw.byteLength === 0) return undefined
-  const key = parseWeixinAesKey(aesKey)
-  if (!key) return new Uint8Array(raw)
+function tryDecryptAes128Ecb(raw: Buffer, key: Buffer): Uint8Array | undefined {
+  if (raw.byteLength === 0 || raw.byteLength % 16 !== 0) return undefined
   try {
     const decipher = createDecipheriv("aes-128-ecb", key, null)
     decipher.setAutoPadding(true)
     return new Uint8Array(Buffer.concat([decipher.update(raw), decipher.final()]))
   } catch {
-    return new Uint8Array(raw)
+    return undefined
   }
+}
+
+export function decryptWeixinCdnPayload(
+  raw: Uint8Array,
+  candidateKeys: readonly (string | undefined)[],
+): Uint8Array {
+  const rawBuf = Buffer.from(raw)
+  if (rawBuf.byteLength === 0) return new Uint8Array(0)
+  if (Mime.detect(rawBuf) !== "application/octet-stream") return new Uint8Array(rawBuf)
+
+  const uniqueKeys = [...new Set(candidateKeys.map((k) => k?.trim()).filter((k): k is string => Boolean(k)))]
+  const parsedKeys = uniqueKeys.flatMap((rawKey) => {
+    const key = parseWeixinAesKey(rawKey)
+    return key ? [key] : []
+  })
+  if (parsedKeys.length === 0) return new Uint8Array(rawBuf)
+
+  const candidates = parsedKeys.flatMap((key) => {
+    const decrypted = tryDecryptAes128Ecb(rawBuf, key)
+    return decrypted && decrypted.byteLength > 0 ? [decrypted] : []
+  })
+  const recognized = candidates.find((bytes) => Mime.detect(bytes) !== "application/octet-stream")
+  return recognized ?? candidates[0] ?? new Uint8Array(rawBuf)
+}
+
+async function downloadWeixinCdnBytes(
+  encryptQueryParam: string,
+  candidateKeys: readonly (string | undefined)[],
+  cdnBaseUrl = WEIXIN_CDN_BASE_URL,
+): Promise<Uint8Array | undefined> {
+  const url = `${cdnBaseUrl}/download?encrypted_query_param=${encodeURIComponent(encryptQueryParam)}`
+  const resp = await fetch(url, { signal: AbortSignal.timeout(30_000) }).catch(() => undefined)
+  if (!resp || !resp.ok) return undefined
+  const raw = new Uint8Array(await resp.arrayBuffer())
+  if (raw.byteLength === 0) return undefined
+  return decryptWeixinCdnPayload(raw, candidateKeys)
 }
 
 async function downloadWeixinVoiceFallback(
   encryptQueryParam: string,
   aesKey?: string,
+  cdnBaseUrl = WEIXIN_CDN_BASE_URL,
 ): Promise<MobileAudioAttachment | undefined> {
-  const bytes = await downloadWeixinCdnBytes(encryptQueryParam, aesKey)
+  const bytes = await downloadWeixinCdnBytes(encryptQueryParam, [aesKey], cdnBaseUrl)
   if (!bytes) return undefined
   const head = Buffer.from(bytes.subarray(0, 12)).toString("latin1")
   if (head.startsWith("#!SILK_V3") || head.startsWith("\x02#!SILK_V3")) return undefined
@@ -77,23 +108,23 @@ async function downloadWeixinVoiceFallback(
 
 async function downloadWeixinFileAttachment(
   encryptQueryParam: string,
-  aesKey: string | undefined,
+  candidateKeys: readonly (string | undefined)[],
   kind: "image" | "file" | "video",
   rawFileName?: string,
+  seqIndex = 1,
+  cdnBaseUrl = WEIXIN_CDN_BASE_URL,
 ): Promise<MobileFileAttachment | undefined> {
-  const bytes = await downloadWeixinCdnBytes(encryptQueryParam, aesKey)
+  const bytes = await downloadWeixinCdnBytes(encryptQueryParam, candidateKeys, cdnBaseUrl)
   if (!bytes) return undefined
   const detected = Mime.detect(bytes)
   const mimeType =
     detected !== "application/octet-stream"
       ? detected
-      : kind === "image"
-        ? "image/png"
-        : kind === "video"
-          ? "video/mp4"
-          : "application/octet-stream"
-  const ext = (mimeType.split("/")[1] || (kind === "image" ? "png" : kind === "video" ? "mp4" : "bin")).split("+")[0]
-  const fileName = rawFileName?.trim() || `weixin-${kind}.${ext || "bin"}`
+      : kind === "video"
+        ? "video/mp4"
+        : "application/octet-stream"
+  const ext = (mimeType.split("/")[1] || (kind === "video" ? "mp4" : "bin")).split("+")[0]
+  const fileName = rawFileName?.trim() || `weixin-${kind}-${seqIndex}.${ext === "octet-stream" ? "bin" : ext || "bin"}`
   return {
     data: bytes,
     mimeType,
@@ -105,8 +136,16 @@ export function createWeixinConnector(options: {
   readonly robotId: string
   readonly token: string
   readonly baseUrl?: string
+  readonly cdnBaseUrl?: string
+  readonly burstDebounceMs?: number
 }): MobilePlatformConnector {
   const baseUrl = (options.baseUrl?.trim() || WEIXIN_DEFAULT_BASE_URL).replace(/\/+$/, "")
+  const defaultCdnBaseUrl = /^http:\/\/(127\.0\.0\.1|localhost)(:\d+)?(\/|$)/i.test(baseUrl)
+    ? `${baseUrl}/c2c`
+    : WEIXIN_CDN_BASE_URL
+  const cdnBaseUrl = (options.cdnBaseUrl?.trim() || defaultCdnBaseUrl).replace(/\/+$/, "")
+  const burstDebounceMs = options.burstDebounceMs ?? 900
+  const maxBurstWindowMs = Math.max(burstDebounceMs, 3_000)
   let currentStatus: MobilePlatformStatus = { state: "stopped" }
   let stopped = true
   let cursor = ""
@@ -115,6 +154,38 @@ export function createWeixinConnector(options: {
   const seenMsgIds = new Set<string>()
   const contextTokenByUser = new Map<string, string>()
   const typingTicketByUser = new Map<string, { ticket: string; expiresAt: number }>()
+  type PendingUserBurst = {
+    startedAt: number
+    timer: ReturnType<typeof setTimeout>
+    messageId: string
+    replyContext: WeixinReplyContext
+    texts: string[]
+    audioAttachments: MobileAudioAttachment[]
+    fileAttachments: MobileFileAttachment[]
+  }
+  const pendingBursts = new Map<string, PendingUserBurst>()
+
+  function flushPendingBurst(fromUser: string): void {
+    const burst = pendingBursts.get(fromUser)
+    if (!burst) return
+    pendingBursts.delete(fromUser)
+    clearTimeout(burst.timer)
+    if (!messageHandler || stopped) return
+    const sessionKey = `weixin:${options.robotId}:${fromUser}`
+    void messageHandler({
+      robotId: options.robotId,
+      platform: "weixin",
+      sessionKey,
+      messageId: burst.messageId,
+      userId: fromUser,
+      userName: fromUser,
+      chatId: fromUser,
+      text: burst.texts.join("\n").trim(),
+      ...(burst.audioAttachments.length > 0 ? { audioAttachments: burst.audioAttachments } : {}),
+      ...(burst.fileAttachments.length > 0 ? { fileAttachments: burst.fileAttachments } : {}),
+      replyContext: burst.replyContext,
+    })
+  }
 
   async function postJson<T>(path: string, body: Record<string, unknown>, timeoutMs = 45_000): Promise<T> {
     const resp = await fetch(`${baseUrl}${path}`, {
@@ -309,6 +380,8 @@ export function createWeixinConnector(options: {
               image_item?: {
                 aeskey?: string
                 media?: { encrypt_query_param?: string; aes_key?: string }
+                hd_media?: { encrypt_query_param?: string; aes_key?: string }
+                thumb_media?: { encrypt_query_param?: string; aes_key?: string }
               }
               voice_item?: {
                 text?: string
@@ -316,6 +389,7 @@ export function createWeixinConnector(options: {
               }
               file_item?: {
                 file_name?: string
+                aeskey?: string
                 media?: { encrypt_query_param?: string; aes_key?: string }
               }
               video_item?: {
@@ -356,6 +430,8 @@ export function createWeixinConnector(options: {
             contextTokenByUser.set(fromUser, msg.context_token)
           }
 
+          const existingBurst = pendingBursts.get(fromUser)
+          let attachmentSeq = (existingBurst?.fileAttachments.length ?? 0) + 1
           const texts: string[] = []
           const audioAttachments: MobileAudioAttachment[] = []
           const fileAttachments: MobileFileAttachment[] = []
@@ -363,13 +439,30 @@ export function createWeixinConnector(options: {
             if (item.type === 1 && item.text_item?.text) {
               texts.push(item.text_item.text)
             }
-            if (item.type === 2 && item.image_item?.media?.encrypt_query_param) {
-              const downloaded = await downloadWeixinFileAttachment(
-                item.image_item.media.encrypt_query_param,
-                item.image_item.media.aes_key || item.image_item.aeskey,
-                "image",
-              )
-              if (downloaded) fileAttachments.push(downloaded)
+            if (item.type === 2 && item.image_item) {
+              const selectedMedia =
+                (item.image_item.hd_media?.encrypt_query_param ? item.image_item.hd_media : undefined) ??
+                (item.image_item.media?.encrypt_query_param ? item.image_item.media : undefined) ??
+                (item.image_item.thumb_media?.encrypt_query_param ? item.image_item.thumb_media : undefined)
+              if (selectedMedia?.encrypt_query_param) {
+                const downloaded = await downloadWeixinFileAttachment(
+                  selectedMedia.encrypt_query_param,
+                  [
+                    selectedMedia.aes_key,
+                    item.image_item.media?.aes_key,
+                    item.image_item.hd_media?.aes_key,
+                    item.image_item.aeskey,
+                  ],
+                  "image",
+                  undefined,
+                  attachmentSeq,
+                  cdnBaseUrl,
+                )
+                if (downloaded) {
+                  fileAttachments.push(downloaded)
+                  attachmentSeq += 1
+                }
+              }
             }
             if (item.type === 3 && item.voice_item?.text) {
               texts.push(item.voice_item.text)
@@ -378,6 +471,7 @@ export function createWeixinConnector(options: {
               const downloaded = await downloadWeixinVoiceFallback(
                 item.voice_item.media.encrypt_query_param,
                 item.voice_item.media.aes_key,
+                cdnBaseUrl,
               )
               if (downloaded) {
                 audioAttachments.push(downloaded)
@@ -386,19 +480,30 @@ export function createWeixinConnector(options: {
             if (item.type === 4 && item.file_item?.media?.encrypt_query_param) {
               const downloaded = await downloadWeixinFileAttachment(
                 item.file_item.media.encrypt_query_param,
-                item.file_item.media.aes_key,
+                [item.file_item.media.aes_key, item.file_item.aeskey],
                 "file",
                 item.file_item.file_name,
+                attachmentSeq,
+                cdnBaseUrl,
               )
-              if (downloaded) fileAttachments.push(downloaded)
+              if (downloaded) {
+                fileAttachments.push(downloaded)
+                attachmentSeq += 1
+              }
             }
             if (item.type === 5 && item.video_item?.media?.encrypt_query_param) {
               const downloaded = await downloadWeixinFileAttachment(
                 item.video_item.media.encrypt_query_param,
-                item.video_item.media.aes_key || item.video_item.aeskey,
+                [item.video_item.media.aes_key, item.video_item.aeskey],
                 "video",
+                undefined,
+                attachmentSeq,
+                cdnBaseUrl,
               )
-              if (downloaded) fileAttachments.push(downloaded)
+              if (downloaded) {
+                fileAttachments.push(downloaded)
+                attachmentSeq += 1
+              }
             }
           }
           const text = texts.join("\n").trim()
@@ -409,6 +514,44 @@ export function createWeixinConnector(options: {
             toUserId: fromUser,
             contextToken: msg.context_token,
           }
+          const hasMedia = audioAttachments.length > 0 || fileAttachments.length > 0
+          const isDotCommand = !hasMedia && /^[.。]\S/.test(text)
+          const pending = pendingBursts.get(fromUser)
+
+          if (isDotCommand && pending) {
+            flushPendingBurst(fromUser)
+          }
+
+          if (burstDebounceMs > 0 && !isDotCommand && (hasMedia || pending !== undefined)) {
+            const now = Date.now()
+            if (pending) {
+              clearTimeout(pending.timer)
+              if (text) pending.texts.push(text)
+              pending.audioAttachments.push(...audioAttachments)
+              pending.fileAttachments.push(...fileAttachments)
+              pending.replyContext = replyContext
+              const remainingMax = maxBurstWindowMs - (now - pending.startedAt)
+              if (remainingMax <= 0) {
+                flushPendingBurst(fromUser)
+                continue
+              }
+              pending.timer = setTimeout(() => flushPendingBurst(fromUser), Math.min(burstDebounceMs, remainingMax))
+              continue
+            }
+
+            const timer = setTimeout(() => flushPendingBurst(fromUser), burstDebounceMs)
+            pendingBursts.set(fromUser, {
+              startedAt: now,
+              timer,
+              messageId: msgId,
+              replyContext,
+              texts: text ? [text] : [],
+              audioAttachments: [...audioAttachments],
+              fileAttachments: [...fileAttachments],
+            })
+            continue
+          }
+
           void messageHandler({
             robotId: options.robotId,
             platform: "weixin",
@@ -443,6 +586,10 @@ export function createWeixinConnector(options: {
     async stop() {
       stopped = true
       currentStatus = { state: "stopped" }
+      for (const burst of pendingBursts.values()) {
+        clearTimeout(burst.timer)
+      }
+      pendingBursts.clear()
       pollAbort?.abort()
     },
     status() {

@@ -1521,3 +1521,51 @@ it.effect("a background summary waits for a response whose prompt is still cache
     expect(yield* summarizedAfterBreak("ses_precompute_hour", "1h")).not.toContain("Third question")
   }),
 )
+
+it.effect("external local CLI models skip automatic, overflow, and precomputed compaction while keeping manual compaction", () =>
+  Effect.gen(function* () {
+    requests = []
+    const compaction = yield* enablePrecompute
+    const session = yield* insertSession(Session.ID.make("ses_local_cli_no_auto_compact"))
+    const localModel = LanguageModel.make({
+      id: "agy/gemini-4-carbon",
+      provider: "local",
+      route: OpenAIChat.route,
+    })
+    const localResolved = SessionRunnerModel.resolved(localModel, {
+      capabilities: { tools: true, input: ["text", "image"], output: ["text"] },
+      cost: [],
+      limit: { context: 1_048_576, output: 65_536 },
+    })
+    const multiStepTurn = Schema.decodeUnknownSync(SessionMessage.Assistant)({
+      id: SessionMessage.ID.create(),
+      type: "assistant",
+      agent: Agent.defaultID,
+      model: { id: "agy/gemini-4-carbon", providerID: "local" },
+      content: [{ type: "text", text: "Investigated tokenchat download issue" }],
+      tokens: {
+        input: 250_122,
+        output: 8_356,
+        reasoning: 11_373,
+        cache: { read: 2_086_165, write: 0 },
+      },
+      time: { created: 0, completed: 1 },
+    })
+    const messages = [textUser("Investigate tokenchat"), multiStepTurn, textUser("Will fixing this impact users?")]
+    yield* storeMessages(session.id, messages)
+    const localContext = {
+      ...loaded(session, messages),
+      model: localResolved,
+    }
+
+    yield* compaction.precompute(Effect.succeed(localContext))
+    expect(yield* compaction.compact({ reason: "auto", context: localContext })).toEqual({ status: "skipped" })
+    expect(yield* compaction.compact({ reason: "overflow", context: localContext })).toEqual({ status: "skipped" })
+    expect(requests).toHaveLength(0)
+
+    expect(
+      yield* compaction.compact({ reason: "manual", context: localContext, inputID: SessionMessage.ID.create() }),
+    ).toEqual({ status: "completed" })
+    expect(requests.length).toBeGreaterThan(0)
+  }),
+)

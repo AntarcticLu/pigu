@@ -670,6 +670,29 @@ const layer = Layer.effect(
     const bindings = new Map<string, ChatSessionBinding>()
     const remoteServers = new Map<string, RemoteServerTarget>()
     const activeTurns = new Map<string, ActiveTurnState>()
+    const sessionAdmissionLocks = new Map<string, Promise<void>>()
+
+    async function withSessionAdmissionLock<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+      const prior = sessionAdmissionLocks.get(sessionId) ?? Promise.resolve()
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => {
+        release = resolve
+      })
+      const chained = prior.then(
+        () => gate,
+        () => gate,
+      )
+      sessionAdmissionLocks.set(sessionId, chained)
+      await prior.catch(() => undefined)
+      try {
+        return await fn()
+      } finally {
+        release()
+        if (sessionAdmissionLocks.get(sessionId) === chained) {
+          sessionAdmissionLocks.delete(sessionId)
+        }
+      }
+    }
     const lastReplyContexts = new Map<string, unknown>()
     const notifiedInteractiveIds = new Set<string>()
     const pendingFormDrafts = new Map<string, Record<string, Form.Answer[string]>>()
@@ -5374,6 +5397,8 @@ const layer = Layer.effect(
 
       if (rawFiles.length > 0) {
         const supportedInlineImageMimes = new Set(["image/png", "image/jpeg", "image/gif", "image/webp"])
+        const maxInlineRawBytes = 18 * 1024 * 1024
+        const seenSafeNames = new Set<string>()
         const savedNotes: string[] = []
         const mediaFallbacks: string[] = []
         let hasImages = false
@@ -5388,9 +5413,16 @@ const layer = Layer.effect(
         }
 
         for (const [idx, att] of rawFiles.entries()) {
-          const safeName = path.basename(att.fileName || `attachment-${idx + 1}`).replace(/[^\w.\-\u4e00-\u9fff]/g, "_")
+          const rawSafeName = path
+            .basename(att.fileName || `attachment-${idx + 1}`)
+            .replace(/[^\w.\-\u4e00-\u9fff]/g, "_")
+          const extPart = path.extname(rawSafeName)
+          const stemPart = extPart ? rawSafeName.slice(0, -extPart.length) : rawSafeName
+          const safeName = seenSafeNames.has(rawSafeName) ? `${stemPart}-${idx + 1}${extPart}` : rawSafeName
+          seenSafeNames.add(safeName)
           const normalizedMime = inferMimeFromFileName(safeName, att.data)
           const isInlineRasterImage = supportedInlineImageMimes.has(normalizedMime)
+          const withinInlineLimit = att.data.byteLength > 0 && att.data.byteLength <= maxInlineRawBytes
           if (normalizedMime.startsWith("image/")) hasImages = true
 
           if (binding.serverKey === "local") {
@@ -5411,7 +5443,7 @@ const layer = Layer.effect(
                   "Content-Type": "application/octet-stream",
                 },
                 body: att.data,
-                signal: AbortSignal.timeout(30_000),
+                signal: AbortSignal.timeout(60_000),
               })
                 .then((r) => r.ok)
                 .catch(() => false)
@@ -5422,10 +5454,12 @@ const layer = Layer.effect(
           }
 
           if (isInlineRasterImage && supportsNativeImage) {
-            inlinePromptFiles.push({
-              uri: `data:${normalizedMime};base64,${Buffer.from(att.data).toString("base64")}`,
-              name: safeName,
-            })
+            if (withinInlineLimit) {
+              inlinePromptFiles.push({
+                uri: `data:${normalizedMime};base64,${Buffer.from(att.data).toString("base64")}`,
+                name: safeName,
+              })
+            }
             continue
           }
           if (isInlineRasterImage && !supportsNativeImage) {
@@ -5440,10 +5474,12 @@ const layer = Layer.effect(
             continue
           }
           if (normalizedMime === "application/pdf" && supportsNativePdf) {
-            inlinePromptFiles.push({
-              uri: `data:application/pdf;base64,${Buffer.from(att.data).toString("base64")}`,
-              name: safeName,
-            })
+            if (withinInlineLimit) {
+              inlinePromptFiles.push({
+                uri: `data:application/pdf;base64,${Buffer.from(att.data).toString("base64")}`,
+                name: safeName,
+              })
+            }
             continue
           }
           if (normalizedMime === "application/pdf" && !supportsNativePdf && att.data.byteLength <= 10 * 1024 * 1024) {
@@ -5458,10 +5494,12 @@ const layer = Layer.effect(
             continue
           }
           if (normalizedMime.startsWith("video/") && supportsNativeVideo) {
-            inlinePromptFiles.push({
-              uri: `data:${normalizedMime};base64,${Buffer.from(att.data).toString("base64")}`,
-              name: safeName,
-            })
+            if (withinInlineLimit) {
+              inlinePromptFiles.push({
+                uri: `data:${normalizedMime};base64,${Buffer.from(att.data).toString("base64")}`,
+                name: safeName,
+              })
+            }
             continue
           }
           const isUtf8Text =
@@ -5524,41 +5562,143 @@ const layer = Layer.effect(
       const targetSessionId = binding.sessionId
       await upgradeLegacyMobilePermissions(binding)
 
-      const existingTurn = activeTurns.get(targetSessionId)
-      if (existingTurn && !existingTurn.interrupted && butlerDepth === 0) {
+      const submitPromptPayload = async (
+        filesToAttach: ReadonlyArray<{ uri: string; name: string }>,
+        delivery: "steer" | undefined,
+        metadata: Record<string, unknown>,
+      ): Promise<string | undefined> => {
         if (binding.serverKey !== "local") {
           const remote = remoteServers.get(binding.serverKey)!
-          await remoteFetchJson(
+          const timeoutMs = filesToAttach.length > 0 ? 120_000 : 30_000
+          const admitted = await remoteFetchJson<{ data?: { id?: string } }>(
             remote,
             `/api/session/${encodeURIComponent(targetSessionId)}/prompt`,
             {
               method: "POST",
               body: JSON.stringify({
                 text: effectivePromptText,
-                delivery: "steer",
-                metadata: { mobileSteer: true },
-                ...(inlinePromptFiles.length > 0 ? { files: inlinePromptFiles } : {}),
+                ...(delivery ? { delivery } : {}),
+                metadata,
+                ...(filesToAttach.length > 0 ? { files: filesToAttach } : {}),
               }),
             },
+            timeoutMs,
           )
+          return admitted?.data?.id
         }
+        const admitted = await runEffect(
+          sessions.prompt({
+            sessionID: Session.ID.make(targetSessionId),
+            text: effectivePromptText,
+            ...(delivery ? { delivery } : {}),
+            metadata,
+            ...(filesToAttach.length > 0 ? { files: [...filesToAttach] } : {}),
+          }),
+        )
+        return admitted.id
+      }
+
+      const admitWithAttachmentFallback = async (
+        delivery: "steer" | undefined,
+        metadata: Record<string, unknown>,
+      ): Promise<string | undefined> => {
+        if (inlinePromptFiles.length === 0 || !effectivePromptText) {
+          return submitPromptPayload(inlinePromptFiles, delivery, metadata)
+        }
+        try {
+          return await submitPromptPayload(inlinePromptFiles, delivery, metadata)
+        } catch (err) {
+          // If one or more inline images fail decoding or size normalization (e.g. stitched WeChat long-screenshots),
+          // fall back to disk-saved attachment paths already embedded in `effectivePromptText` instead of failing the turn.
+          if (rawFiles.length > 0) {
+            return submitPromptPayload([], delivery, metadata)
+          }
+          throw err
+        }
+      }
+
+      let admittedId: string | undefined
+      let turnInterrupted = false
+      let steeredIntoActiveTurn = false
+      const turnState: ActiveTurnState = {
+        interrupted: false,
+        sessionKey: msg.sessionKey,
+        connector,
+        replyContext: msg.replyContext,
+        binding,
+        steeredNotes: [],
+        lastActivityMs: Date.now(),
+      }
+
+      await withSessionAdmissionLock(targetSessionId, async () => {
+        const existingTurn = activeTurns.get(targetSessionId)
+        if (existingTurn && !existingTurn.interrupted && butlerDepth === 0) {
+          await admitWithAttachmentFallback("steer", { mobileSteer: true })
+          existingTurn.steeredNotes.push(compactSingleLine(effectivePromptText, 120))
+          existingTurn.lastActivityMs = Date.now()
+          ensureRuntimeStatus(targetSessionId).lastActivityMs = Date.now()
+          if (existingTurn.sessionKey === msg.sessionKey) {
+            existingTurn.replyContext = msg.replyContext
+          }
+          steeredIntoActiveTurn = true
+          return
+        }
+
         if (binding.serverKey === "local") {
-          await runEffect(
-            sessions.prompt({
-              sessionID: Session.ID.make(targetSessionId),
-              text: effectivePromptText,
-              delivery: "steer",
-              metadata: { mobileSteer: true },
-              ...(inlinePromptFiles.length > 0 ? { files: inlinePromptFiles } : {}),
-            }),
-          )
+          setMobileTurnContext(targetSessionId, butlerPrompt)
+          phoneOwnedBusyRuns.add(targetSessionId)
+          ensureRuntimeStatus(targetSessionId).terminalError = undefined
         }
-        existingTurn.steeredNotes.push(compactSingleLine(effectivePromptText, 120))
-        existingTurn.lastActivityMs = Date.now()
-        ensureRuntimeStatus(targetSessionId).lastActivityMs = Date.now()
-        if (existingTurn.sessionKey === msg.sessionKey) {
-          existingTurn.replyContext = msg.replyContext
+
+        activeTurns.set(targetSessionId, turnState)
+        try {
+          if (binding.serverKey !== "local") {
+            const remote = remoteServers.get(binding.serverKey)!
+            const hasRemoteButlerHook = await checkRemoteSupportsPiguButler(remote)
+            if (!hasRemoteButlerHook) {
+              const digestKey = `${binding.serverKey}:${targetSessionId}`
+              if (remoteFallbackButlerDigest.get(digestKey) !== butlerPrompt) {
+                const injected = await remoteFetchJson(
+                  remote,
+                  `/api/session/${encodeURIComponent(targetSessionId)}/synthetic`,
+                  {
+                    method: "POST",
+                    body: JSON.stringify({
+                      text: butlerPrompt,
+                      metadata: { source: "mobile-butler" },
+                      delivery: "steer",
+                      resume: false,
+                    }),
+                  },
+                  8_000,
+                )
+                  .then(() => true)
+                  .catch(() => false)
+                if (injected) {
+                  remoteFallbackButlerDigest.set(digestKey, butlerPrompt)
+                  if (remoteFallbackButlerDigest.size > 500) {
+                    const oldest = remoteFallbackButlerDigest.keys().next().value
+                    if (oldest) remoteFallbackButlerDigest.delete(oldest)
+                  }
+                }
+              }
+            }
+          }
+          admittedId = await admitWithAttachmentFallback(undefined, { mobileButlerPrompt: butlerPrompt })
+          turnState.anchorMsgId = admittedId
+        } catch (err) {
+          if (activeTurns.get(targetSessionId) === turnState) {
+            activeTurns.delete(targetSessionId)
+          }
+          if (binding.serverKey === "local") {
+            phoneOwnedBusyRuns.delete(targetSessionId)
+            clearMobileTurnContext(targetSessionId)
+          }
+          throw err
         }
+      })
+
+      if (steeredIntoActiveTurn) {
         await connector.sendCard(msg.replyContext, {
           header: { title: "💬 已收到补充指令，当前步骤完成后立即穿插执行", color: "green" },
           elements: [
@@ -5575,83 +5715,7 @@ const layer = Layer.effect(
         return
       }
 
-      if (binding.serverKey === "local") {
-        setMobileTurnContext(targetSessionId, butlerPrompt)
-        phoneOwnedBusyRuns.add(targetSessionId)
-        ensureRuntimeStatus(targetSessionId).terminalError = undefined
-      }
-
-      let admittedId: string | undefined
-      let turnInterrupted = false
-      const turnState: ActiveTurnState = {
-        interrupted: false,
-        sessionKey: msg.sessionKey,
-        connector,
-        replyContext: msg.replyContext,
-        binding,
-        steeredNotes: [],
-        lastActivityMs: Date.now(),
-      }
-      activeTurns.set(targetSessionId, turnState)
       try {
-        if (binding.serverKey !== "local") {
-          const remote = remoteServers.get(binding.serverKey)!
-          const hasRemoteButlerHook = await checkRemoteSupportsPiguButler(remote)
-          if (!hasRemoteButlerHook) {
-            const digestKey = `${binding.serverKey}:${targetSessionId}`
-            if (remoteFallbackButlerDigest.get(digestKey) !== butlerPrompt) {
-              const injected = await remoteFetchJson(
-                remote,
-                `/api/session/${encodeURIComponent(targetSessionId)}/synthetic`,
-                {
-                  method: "POST",
-                  body: JSON.stringify({
-                    text: butlerPrompt,
-                    metadata: { source: "mobile-butler" },
-                    delivery: "steer",
-                    resume: false,
-                  }),
-                },
-                8_000,
-              )
-                .then(() => true)
-                .catch(() => false)
-              if (injected) {
-                remoteFallbackButlerDigest.set(digestKey, butlerPrompt)
-                if (remoteFallbackButlerDigest.size > 500) {
-                  const oldest = remoteFallbackButlerDigest.keys().next().value
-                  if (oldest) remoteFallbackButlerDigest.delete(oldest)
-                }
-              }
-            }
-          }
-          const admitted = await remoteFetchJson<{ data?: { id?: string } }>(
-            remote,
-            `/api/session/${encodeURIComponent(targetSessionId)}/prompt`,
-            {
-              method: "POST",
-              body: JSON.stringify({
-                text: effectivePromptText,
-                metadata: { mobileButlerPrompt: butlerPrompt },
-                ...(inlinePromptFiles.length > 0 ? { files: inlinePromptFiles } : {}),
-              }),
-            },
-          )
-          admittedId = admitted?.data?.id
-        }
-        if (binding.serverKey === "local") {
-          const admitted = await runEffect(
-            sessions.prompt({
-              sessionID: Session.ID.make(targetSessionId),
-              text: effectivePromptText,
-              metadata: { mobileButlerPrompt: butlerPrompt },
-              ...(inlinePromptFiles.length > 0 ? { files: inlinePromptFiles } : {}),
-            }),
-          )
-          admittedId = admitted.id
-        }
-
-        turnState.anchorMsgId = admittedId
 
         let drainCompleted = false
         let hasPendingInteractive = false

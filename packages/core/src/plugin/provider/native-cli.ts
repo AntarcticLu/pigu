@@ -877,10 +877,21 @@ export function extractPromptTurns(prompt: LanguageModelV3Prompt, attachmentsDir
   const lastUserIndex = rawTurns.findLastIndex((turn) => turn.role === "user")
 
   if (lastUserIndex < 0) {
-    return { priorTurns: [], userText: "", attachments: [] as readonly MaterializedAttachment[] }
+    return {
+      priorTurns: [],
+      userText: "",
+      attachments: [] as readonly MaterializedAttachment[],
+      trailingUserCount: 0,
+    }
   }
 
-  const priorTurns = rawTurns.slice(0, lastUserIndex).map((turn) => {
+  const lastAssistantBeforeUser = rawTurns
+    .slice(0, lastUserIndex)
+    .findLastIndex((turn) => turn.role === "assistant")
+  const firstTrailingUserIndex = lastAssistantBeforeUser + 1
+  const trailingUsers = rawTurns.slice(firstTrailingUserIndex, lastUserIndex + 1)
+
+  const priorTurns = rawTurns.slice(0, firstTrailingUserIndex).map((turn) => {
     const attachmentNote =
       turn.attachments.length > 0
         ? `[附带本地文件: ${turn.attachments.map((item) => item.filePath).join(", ")}]`
@@ -891,15 +902,18 @@ export function extractPromptTurns(prompt: LanguageModelV3Prompt, attachmentsDir
     return { role: turn.role, text: combined }
   })
 
-  const latestUser = rawTurns[lastUserIndex]
+  const mergedTexts = trailingUsers.map((turn) => turn.text).filter(Boolean)
+  const mergedHasFiles = trailingUsers.some((turn) => turn.hasFiles)
+  const mergedAttachments = trailingUsers.flatMap((turn) => turn.attachments)
   const userText =
-    latestUser?.text ||
-    (latestUser?.hasFiles ? "请查看附带的图片或文件并按内容处理。" : "")
+    mergedTexts.join("\n\n") ||
+    (mergedHasFiles ? "请查看附带的图片或文件并按内容处理。" : "")
 
   return {
     priorTurns,
     userText,
-    attachments: latestUser?.attachments ?? [],
+    attachments: mergedAttachments,
+    trailingUserCount: trailingUsers.length,
   }
 }
 
@@ -989,13 +1003,204 @@ function makeEmptyUsage(
   }
 }
 
+export type StepUsageAccumulator = {
+  inputTokens: number
+  outputTokens: number
+  reasoningTokens: number
+  cacheReadTokens: number
+  cacheWriteTokens: number
+  hasStepUsage?: boolean
+}
+
+export function applyClaudeOrAgyUsageRow(row: Record<string, unknown>, target: StepUsageAccumulator): void {
+  if (row.event === "step_update" && isRecord(row.step_update) && isRecord(row.step_update.usage)) {
+    const usage = row.step_update.usage
+    const inTok = typeof usage.input_tokens === "number" ? usage.input_tokens : 0
+    const outTok = typeof usage.output_tokens === "number" ? usage.output_tokens : 0
+    const thinkTok = typeof usage.thinking_tokens === "number" ? usage.thinking_tokens : 0
+    const cacheReadTok = typeof usage.cache_read_tokens === "number" ? usage.cache_read_tokens : 0
+    if (inTok + outTok + thinkTok + cacheReadTok > 0) {
+      target.inputTokens = inTok
+      target.outputTokens = outTok
+      target.reasoningTokens = thinkTok
+      target.cacheReadTokens = cacheReadTok
+      target.cacheWriteTokens = 0
+      target.hasStepUsage = true
+    }
+    return
+  }
+
+  if (row.event === "result" && !target.hasStepUsage && isRecord(row.result) && isRecord(row.result.usage)) {
+    const usage = row.result.usage
+    if (typeof usage.input_tokens === "number") target.inputTokens = usage.input_tokens
+    if (typeof usage.output_tokens === "number") target.outputTokens = usage.output_tokens
+    if (typeof usage.thinking_tokens === "number") target.reasoningTokens = usage.thinking_tokens
+    if (typeof usage.cache_read_tokens === "number") target.cacheReadTokens = usage.cache_read_tokens
+    return
+  }
+
+  if (row.type === "stream_event" && row.parent_tool_use_id === null && isRecord(row.event)) {
+    const event = row.event
+    if (event.type === "message_start" && isRecord(event.message) && isRecord(event.message.usage)) {
+      const usage = event.message.usage
+      const inTok = typeof usage.input_tokens === "number" ? usage.input_tokens : 0
+      const outTok = typeof usage.output_tokens === "number" ? usage.output_tokens : 0
+      const cacheReadTok = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0
+      const cacheWriteTok =
+        typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : 0
+      if (inTok + outTok + cacheReadTok + cacheWriteTok > 0) {
+        target.inputTokens = inTok
+        target.outputTokens = outTok
+        target.reasoningTokens = 0
+        target.cacheReadTokens = cacheReadTok
+        target.cacheWriteTokens = cacheWriteTok
+        target.hasStepUsage = true
+      }
+      return
+    }
+
+    if (event.type === "message_delta" && isRecord(event.usage)) {
+      const usage = event.usage
+      if (typeof usage.input_tokens === "number") target.inputTokens = usage.input_tokens
+      if (typeof usage.output_tokens === "number") target.outputTokens = usage.output_tokens
+      if (typeof usage.cache_read_input_tokens === "number") target.cacheReadTokens = usage.cache_read_input_tokens
+      if (typeof usage.cache_creation_input_tokens === "number") {
+        target.cacheWriteTokens = usage.cache_creation_input_tokens
+      }
+      if (target.inputTokens + target.outputTokens + target.cacheReadTokens + target.cacheWriteTokens > 0) {
+        target.hasStepUsage = true
+      }
+    }
+    return
+  }
+
+  if (row.type === "assistant" && !row.parent_tool_use_id && isRecord(row.message) && isRecord(row.message.usage)) {
+    const usage = row.message.usage
+    const inTok = typeof usage.input_tokens === "number" ? usage.input_tokens : 0
+    const outTok = typeof usage.output_tokens === "number" ? usage.output_tokens : 0
+    const cacheReadTok = typeof usage.cache_read_input_tokens === "number" ? usage.cache_read_input_tokens : 0
+    const cacheWriteTok = typeof usage.cache_creation_input_tokens === "number" ? usage.cache_creation_input_tokens : 0
+    if (inTok + outTok + cacheReadTok + cacheWriteTok > 0) {
+      target.inputTokens = inTok
+      target.outputTokens = outTok
+      target.reasoningTokens = 0
+      target.cacheReadTokens = cacheReadTok
+      target.cacheWriteTokens = cacheWriteTok
+      target.hasStepUsage = true
+    }
+    return
+  }
+
+  if (row.type === "result" && !target.hasStepUsage && isRecord(row.usage)) {
+    if (typeof row.usage.input_tokens === "number") target.inputTokens = row.usage.input_tokens
+    if (typeof row.usage.output_tokens === "number") target.outputTokens = row.usage.output_tokens
+    if (typeof row.usage.cache_read_input_tokens === "number") {
+      target.cacheReadTokens = row.usage.cache_read_input_tokens
+    }
+    if (typeof row.usage.cache_creation_input_tokens === "number") {
+      target.cacheWriteTokens = row.usage.cache_creation_input_tokens
+    }
+  }
+}
+
+export function applyCodexUsageRow(row: Record<string, unknown>, target: StepUsageAccumulator): void {
+  if (
+    row.type === "event_msg" &&
+    isRecord(row.payload) &&
+    row.payload.type === "token_count" &&
+    isRecord(row.payload.info) &&
+    isRecord(row.payload.info.last_token_usage)
+  ) {
+    const last = row.payload.info.last_token_usage
+    const rawIn = typeof last.input_tokens === "number" ? last.input_tokens : 0
+    const cachedIn = typeof last.cached_input_tokens === "number" ? last.cached_input_tokens : 0
+    const cacheWriteIn = typeof last.cache_write_input_tokens === "number" ? last.cache_write_input_tokens : 0
+    const outTok = typeof last.output_tokens === "number" ? last.output_tokens : 0
+    const reasonTok = typeof last.reasoning_output_tokens === "number" ? last.reasoning_output_tokens : 0
+    if (rawIn + cacheWriteIn + outTok + reasonTok > 0) {
+      target.inputTokens = Math.max(0, rawIn - cachedIn)
+      target.cacheReadTokens = Math.max(0, cachedIn)
+      target.cacheWriteTokens = Math.max(0, cacheWriteIn)
+      target.outputTokens = Math.max(0, outTok)
+      target.reasoningTokens = Math.max(0, reasonTok)
+      target.hasStepUsage = true
+    }
+    return
+  }
+
+  if (row.type === "turn.completed" && !target.hasStepUsage && isRecord(row.usage)) {
+    const rawIn = typeof row.usage.input_tokens === "number" ? row.usage.input_tokens : 0
+    const cachedIn = typeof row.usage.cached_input_tokens === "number" ? row.usage.cached_input_tokens : 0
+    const outTok = typeof row.usage.output_tokens === "number" ? row.usage.output_tokens : 0
+    const reasonTok = typeof row.usage.reasoning_output_tokens === "number" ? row.usage.reasoning_output_tokens : 0
+    target.inputTokens = Math.max(0, rawIn - cachedIn)
+    target.cacheReadTokens = Math.max(0, cachedIn)
+    target.outputTokens = Math.max(0, outTok)
+    target.reasoningTokens = Math.max(0, reasonTok)
+  }
+}
+
+export function parseCodexLastStepUsageLines(content: string): Omit<StepUsageAccumulator, "hasStepUsage"> | undefined {
+  return content
+    .split(/\r?\n/)
+    .reverse()
+    .flatMap((line): Omit<StepUsageAccumulator, "hasStepUsage">[] => {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.includes('"token_count"')) return []
+      const decoded = decodeJsonUnknown(trimmed)
+      if (Option.isNone(decoded) || !isRecord(decoded.value)) return []
+      const row = decoded.value
+      const payload = row.type === "event_msg" && isRecord(row.payload) ? row.payload : row
+      if (payload.type !== "token_count" || !isRecord(payload.info) || !isRecord(payload.info.last_token_usage)) {
+        return []
+      }
+      const last = payload.info.last_token_usage
+      const rawIn = typeof last.input_tokens === "number" ? last.input_tokens : 0
+      const cachedIn = typeof last.cached_input_tokens === "number" ? last.cached_input_tokens : 0
+      const cacheWriteIn = typeof last.cache_write_input_tokens === "number" ? last.cache_write_input_tokens : 0
+      const outTok = typeof last.output_tokens === "number" ? last.output_tokens : 0
+      const reasonTok = typeof last.reasoning_output_tokens === "number" ? last.reasoning_output_tokens : 0
+      if (rawIn + cacheWriteIn + outTok + reasonTok <= 0) return []
+      return [
+        {
+          inputTokens: Math.max(0, rawIn - cachedIn),
+          cacheReadTokens: Math.max(0, cachedIn),
+          cacheWriteTokens: Math.max(0, cacheWriteIn),
+          outputTokens: Math.max(0, outTok),
+          reasoningTokens: Math.max(0, reasonTok),
+        },
+      ]
+    })[0]
+}
+
+function readCodexLastStepUsageFromFile(filePath: string): Omit<StepUsageAccumulator, "hasStepUsage"> | undefined {
+  const stat = fs.statSync(filePath, { throwIfNoEntry: false })
+  if (!stat || !stat.isFile() || stat.size <= 0) return undefined
+  const maxBytes = 262_144
+  const start = Math.max(0, stat.size - maxBytes)
+  const len = stat.size - start
+  const buf = Buffer.allocUnsafe(len)
+  const fd = fs.openSync(filePath, "r")
+  const bytesRead = fs.readSync(fd, buf, 0, len, start)
+  fs.closeSync(fd)
+  if (bytesRead <= 0) return undefined
+  const chunk = buf.subarray(0, bytesRead).toString("utf8")
+  const aligned = start > 0 && chunk.includes("\n") ? chunk.slice(chunk.indexOf("\n") + 1) : chunk
+  return parseCodexLastStepUsageLines(aligned)
+}
+
 function createStreamEmitter(controller: ReadableStreamDefaultController<LanguageModelV3StreamPart>, modelId: string) {
   const responseId = `resp_${crypto.randomUUID()}`
   let reasoningSegment = 0
   let textSegment = 0
   let currentReasoningId = `${responseId}:reasoning:0`
   let currentTextId = `${responseId}:text:0`
-  const state = {
+  const state: StepUsageAccumulator & {
+    started: boolean
+    reasoningOpen: boolean
+    textOpen: boolean
+    hasText: boolean
+  } = {
     started: false,
     reasoningOpen: false,
     textOpen: false,
@@ -1005,6 +1210,7 @@ function createStreamEmitter(controller: ReadableStreamDefaultController<Languag
     reasoningTokens: 0,
     cacheReadTokens: 0,
     cacheWriteTokens: 0,
+    hasStepUsage: false,
   }
 
   const ensureMetadata = () => {
@@ -1213,6 +1419,7 @@ async function runStreamJsonProcess(input: {
         return
       }
       const row = decoded.value
+      applyClaudeOrAgyUsageRow(row, input.emitter.state)
 
       if (typeof row.session_id === "string" && row.session_id) {
         state.detectedSessionId = row.session_id
@@ -1258,15 +1465,6 @@ async function runStreamJsonProcess(input: {
 
         if (typeof res.conversation_id === "string" && res.conversation_id) {
           state.detectedSessionId = res.conversation_id
-        }
-
-        if (isRecord(res.usage)) {
-          if (typeof res.usage.input_tokens === "number") input.emitter.state.inputTokens = res.usage.input_tokens
-          if (typeof res.usage.output_tokens === "number") input.emitter.state.outputTokens = res.usage.output_tokens
-          if (typeof res.usage.thinking_tokens === "number")
-            input.emitter.state.reasoningTokens = res.usage.thinking_tokens
-          if (typeof res.usage.cache_read_tokens === "number")
-            input.emitter.state.cacheReadTokens = res.usage.cache_read_tokens
         }
 
         if (!input.emitter.state.hasText && typeof res.response === "string" && res.response.trim()) {
@@ -1347,17 +1545,6 @@ async function runStreamJsonProcess(input: {
       }
 
       if (row.type === "result") {
-        if (isRecord(row.usage)) {
-          if (typeof row.usage.input_tokens === "number") input.emitter.state.inputTokens = row.usage.input_tokens
-          if (typeof row.usage.output_tokens === "number") input.emitter.state.outputTokens = row.usage.output_tokens
-          if (typeof row.usage.cache_read_input_tokens === "number") {
-            input.emitter.state.cacheReadTokens = row.usage.cache_read_input_tokens
-          }
-          if (typeof row.usage.cache_creation_input_tokens === "number") {
-            input.emitter.state.cacheWriteTokens = row.usage.cache_creation_input_tokens
-          }
-        }
-
         if (!input.emitter.state.hasText && typeof row.result === "string" && row.result.trim()) {
           input.emitter.pushText(
             row.is_error === true ? `${input.engineLabel} 执行出错：${row.result}` : row.result,
@@ -1627,6 +1814,7 @@ async function runCodexProcess(input: {
 
       if (row.type === "event_msg" && isRecord(row.payload)) {
         const payload = row.payload
+        applyCodexUsageRow(row, input.emitter.state)
 
         if (payload.type === "agent_reasoning" && typeof payload.message === "string" && payload.message.trim()) {
           input.emitter.pushReasoning(`${payload.message.trim()}\n`)
@@ -1656,15 +1844,8 @@ async function runCodexProcess(input: {
         return
       }
 
-      if (row.type === "turn.completed" && isRecord(row.usage)) {
-        const rawIn = typeof row.usage.input_tokens === "number" ? row.usage.input_tokens : 0
-        const cachedIn = typeof row.usage.cached_input_tokens === "number" ? row.usage.cached_input_tokens : 0
-        const outTok = typeof row.usage.output_tokens === "number" ? row.usage.output_tokens : 0
-        const reasonTok = typeof row.usage.reasoning_output_tokens === "number" ? row.usage.reasoning_output_tokens : 0
-        input.emitter.state.inputTokens = Math.max(0, rawIn - cachedIn)
-        input.emitter.state.cacheReadTokens = Math.max(0, cachedIn)
-        input.emitter.state.outputTokens = Math.max(0, outTok)
-        input.emitter.state.reasoningTokens = Math.max(0, reasonTok)
+      if (row.type === "turn.completed") {
+        applyCodexUsageRow(row, input.emitter.state)
       }
     }
 
@@ -1821,11 +2002,22 @@ async function runOpencodeProcess(input: {
         input.emitter.pushText(partText)
         return
       }
-      if ((partType === "step-finish" || row.type === "step_finish") && part?.reason === "stop") {
-        if (state.stopTimer) clearTimeout(state.stopTimer)
-        state.stopTimer = setTimeout(() => {
-          killLocalChildProcess(child)
-        }, 1200)
+      if (partType === "step-finish" || row.type === "step_finish") {
+        const tokens = isRecord(part?.tokens) ? part.tokens : undefined
+        if (tokens) {
+          if (typeof tokens.input === "number") input.emitter.state.inputTokens = tokens.input
+          if (typeof tokens.output === "number") input.emitter.state.outputTokens = tokens.output
+          if (typeof tokens.reasoning === "number") input.emitter.state.reasoningTokens = tokens.reasoning
+          const cache = isRecord(tokens.cache) ? tokens.cache : undefined
+          if (typeof cache?.read === "number") input.emitter.state.cacheReadTokens = cache.read
+          if (typeof cache?.write === "number") input.emitter.state.cacheWriteTokens = cache.write
+        }
+        if (part?.reason === "stop") {
+          if (state.stopTimer) clearTimeout(state.stopTimer)
+          state.stopTimer = setTimeout(() => {
+            killLocalChildProcess(child)
+          }, 1200)
+        }
         return
       }
       if (row.type === "error" && isRecord(row.error) && typeof row.error.message === "string") {
@@ -2488,9 +2680,9 @@ async function runDshProcess(input: {
       }
       if (row.type === "status" && row.phase === "step_end" && isRecord(row.usage)) {
         if (typeof row.usage.inputTokens === "number") input.emitter.state.inputTokens = row.usage.inputTokens
-        if (typeof row.usage.outputTokens === "number") input.emitter.state.outputTokens += row.usage.outputTokens
+        if (typeof row.usage.outputTokens === "number") input.emitter.state.outputTokens = row.usage.outputTokens
         if (typeof row.usage.reasoningTokens === "number")
-          input.emitter.state.reasoningTokens += row.usage.reasoningTokens
+          input.emitter.state.reasoningTokens = row.usage.reasoningTokens
         if (typeof row.usage.cacheReadTokens === "number")
           input.emitter.state.cacheReadTokens = row.usage.cacheReadTokens
         if (typeof row.usage.cacheWriteTokens === "number")
@@ -2927,7 +3119,10 @@ class LocalLanguageModel implements LanguageModelV3 {
             kind === "primary"
               ? path.join(home, ".cache", "pigu", "attachments", sanitizeFileComponent(sessionID || "transient"))
               : undefined
-          const { priorTurns, userText, attachments } = extractPromptTurns(options.prompt, attachmentsDir)
+          const { priorTurns, userText, attachments, trailingUserCount } = extractPromptTurns(
+            options.prompt,
+            attachmentsDir,
+          )
 
           if (kind === "title") {
             const firstLine =
@@ -3116,6 +3311,17 @@ class LocalLanguageModel implements LanguageModelV3 {
           const nextFilePath =
             findEngineSessionFile(home, currentEngine, nextSessionId) ??
             (canResume ? currentRecord.filePath : undefined)
+          if (currentEngine === "codex" && nextFilePath && !emitter.state.hasStepUsage) {
+            const lastStepUsage = readCodexLastStepUsageFromFile(nextFilePath)
+            if (lastStepUsage) {
+              emitter.state.inputTokens = lastStepUsage.inputTokens
+              emitter.state.outputTokens = lastStepUsage.outputTokens
+              emitter.state.reasoningTokens = lastStepUsage.reasoningTokens
+              emitter.state.cacheReadTokens = lastStepUsage.cacheReadTokens
+              emitter.state.cacheWriteTokens = lastStepUsage.cacheWriteTokens
+              emitter.state.hasStepUsage = true
+            }
+          }
           const nextSyncedSize =
             nextFilePath && fs.existsSync(nextFilePath)
               ? (fs.statSync(nextFilePath, { throwIfNoEntry: false })?.size ?? undefined)
@@ -3163,7 +3369,7 @@ class LocalLanguageModel implements LanguageModelV3 {
 
             await this.setSessionState(sessionID, {
               lastEngine: currentEngine,
-              lastPromptCount: priorTurns.length + 2,
+              lastPromptCount: priorTurns.length + Math.max(1, trailingUserCount) + 1,
               ...(currentCheckpointHead ? { lastCheckpointHead: currentCheckpointHead } : {}),
               claudeSessionId: currentEngine === "claude" ? nextSessionId : saved.claudeSessionId,
               claudeFilePath: currentEngine === "claude" ? nextFilePath : saved.claudeFilePath,
@@ -4450,7 +4656,7 @@ async function runCodexNativeCompact(input: {
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "pigu", version: "1.0.2" } },
+      params: { clientInfo: { name: "pigu", version: "1.0.3" } },
     })
   })
 }
