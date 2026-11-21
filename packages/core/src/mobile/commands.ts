@@ -3,7 +3,7 @@ export type ParsedMobileCommand =
   | { readonly kind: "project"; readonly sub: "list" | "switch" | "new"; readonly arg: string }
   | {
       readonly kind: "chat"
-      readonly sub: "list" | "new" | "switch" | "history" | "undo" | "name" | "delete"
+      readonly sub: "list" | "new" | "switch" | "history" | "undo" | "name" | "delete" | "compact"
       readonly arg: string
     }
   | { readonly kind: "model"; readonly sub: "list" | "switch" | "effort"; readonly arg: string }
@@ -87,6 +87,9 @@ export function parseMobileInput(rawInput: string): ParsedMobileCommand {
   if (head === "undo") {
     return { kind: "chat", sub: "undo", arg: "" }
   }
+  if (head === "compact") {
+    return { kind: "chat", sub: "compact", arg: "" }
+  }
 
   if (head === "chat" || head === "c" || head === "session") {
     if (!rest) {
@@ -112,6 +115,9 @@ export function parseMobileInput(rawInput: string): ParsedMobileCommand {
     }
     if (subCmd === "undo" || subCmd === "revert") {
       return { kind: "chat", sub: "undo", arg: "" }
+    }
+    if (subCmd === "compact") {
+      return { kind: "chat", sub: "compact", arg: "" }
     }
     if (subCmd === "name" || subCmd === "rename" || subCmd === "title") {
       return { kind: "chat", sub: "name", arg: subRest }

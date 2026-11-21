@@ -63,6 +63,8 @@ export interface ProtocolStream<Frame, Event, State> {
   readonly step: (state: State, event: Event) => Effect.Effect<readonly [State, ReadonlyArray<LLMEvent>], AIError>
   /** Optional request-completion signal for transports that do not end naturally. */
   readonly terminal?: (event: Event) => boolean
+  /** True once a protocol-level finish reason has arrived and only optional trailing metadata or `[DONE]` may follow. */
+  readonly settled?: (state: State) => boolean
   /** Optional effectful flush emitted when the framed stream ends. */
   readonly onHalt?: (state: State) => Effect.Effect<ReadonlyArray<LLMEvent>, AIError>
 }

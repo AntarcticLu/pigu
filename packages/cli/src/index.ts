@@ -39,6 +39,11 @@ if (process.env.OPENCODE_SSH_ASKPASS_PORT) {
   process.exit(await Effect.runPromise(askpass.pipe(Effect.provide(NodeServices.layer))))
 }
 
+if (process.argv[2] === "mcp-bridge") {
+  const { runMcpStdioBridge } = await import("./mcp-bridge")
+  process.exit(await runMcpStdioBridge(process.argv.slice(3)))
+}
+
 const Handlers = Runtime.handlers(Commands, {
   upgrade: () => import("./commands/handlers/upgrade"),
   uninstall: () => import("./commands/handlers/uninstall"),

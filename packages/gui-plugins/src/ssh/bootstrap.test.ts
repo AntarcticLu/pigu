@@ -1,5 +1,15 @@
 import { spawnSync } from "node:child_process"
-import { chmodSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs"
+import {
+  chmodSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import path from "node:path"
 import { expect, test } from "bun:test"
@@ -11,6 +21,8 @@ import {
   parseRemoteArch,
   parseRemotePlatform,
   remoteConfigSyncScript,
+  remoteGitHubInstallScript,
+  resolveLocalArchives,
 } from "./bootstrap"
 import { RemoteCli } from "./remote-cli"
 
@@ -194,5 +206,65 @@ exit 0
     expect(spawnSync("test", ["-f", restartMarker]).status).toBe(0)
   } finally {
     rmSync(tempHome, { recursive: true, force: true })
+  }
+})
+
+test("remoteGitHubInstallScript atomically replaces running pigu-bin inode and rejects wrapper loops", () => {
+  if (process.platform === "win32") return
+  const tempHome = mkdtempSync(path.join(tmpdir(), "pigu-ssh-gh-"))
+  const mockBin = mkdtempSync(path.join(tmpdir(), "pigu-ssh-mockbin-"))
+  try {
+    mkdirSync(path.join(tempHome, ".pigu", "libexec"), { recursive: true })
+    mkdirSync(path.join(tempHome, ".pigu", "bin"), { recursive: true })
+    mkdirSync(path.join(tempHome, ".opencode", "bin"), { recursive: true })
+
+    const piguBinPath = path.join(tempHome, ".pigu", "libexec", "pigu-bin")
+    writeFileSync(piguBinPath, Buffer.from([0x7f, 0x45, 0x4c, 0x46, 0x01, 0x01, 0x01, 0x00]), { mode: 0o755 })
+    const oldInode = statSync(piguBinPath).ino
+
+    // Pre-existing wrapper shim at ~/.opencode/bin/opencode from a prior install
+    const oldShim = '#!/usr/bin/env bash\nexec "$HOME/.pigu/libexec/pigu-bin" "$@"\n'
+    writeFileSync(path.join(tempHome, ".opencode", "bin", "opencode"), oldShim, { mode: 0o755 })
+
+    // 1. If installer leaves a `#!` wrapper instead of a binary, script must fail rather than create a fork loop
+    writeFileSync(path.join(mockBin, "curl"), "#!/bin/sh\necho 'exit 0'\n", { mode: 0o755 })
+    const env = { ...process.env, HOME: tempHome, PATH: `${mockBin}:/usr/bin:/bin` }
+    const loopGuardRun = spawnSync("sh", ["-c", remoteGitHubInstallScript("1.0.3")], { env, encoding: "utf8" })
+    expect(loopGuardRun.status).not.toBe(0)
+    expect(statSync(piguBinPath).ino).toBe(oldInode)
+
+    // 2. When installer writes a fresh compiled binary, pigu-bin is replaced via atomic rename (new inode, no ETXTBSY)
+    const installerPayload = [
+      "mkdir -p \"$HOME/.opencode/bin\"",
+      "rm -f \"$HOME/.opencode/bin/opencode\"",
+      "printf '\\177ELFNEWBINARY' > \"$HOME/.opencode/bin/opencode\"",
+      "chmod 755 \"$HOME/.opencode/bin/opencode\"",
+    ].join("\n")
+    writeFileSync(
+      path.join(mockBin, "curl"),
+      `#!/bin/sh\ncat <<'EOF'\n${installerPayload}\nEOF\n`,
+      { mode: 0o755 },
+    )
+    const upgradeRun = spawnSync("sh", ["-c", remoteGitHubInstallScript("1.0.3")], { env, encoding: "utf8" })
+    expect(upgradeRun.stderr).toBe("")
+    expect(upgradeRun.status).toBe(0)
+    expect(statSync(piguBinPath).ino).not.toBe(oldInode)
+    expect(readFileSync(piguBinPath).subarray(4).toString("utf8")).toBe("NEWBINARY")
+    expect(readFileSync(path.join(tempHome, ".opencode", "bin", "opencode"), "utf8")).toContain(
+      'exec "$HOME/.pigu/libexec/pigu-bin" "$@"',
+    )
+
+    // 3. Stale unversioned `pigu-linux-x64.tar.gz` in ~/.pigu/cache must never be resolved on dev builds (prevents silent remote downgrade)
+    const cacheDir = path.join(tempHome, ".pigu", "cache")
+    mkdirSync(cacheDir, { recursive: true })
+    writeFileSync(path.join(cacheDir, "pigu-linux-x64.tar.gz"), "stale-v1.0.0-archive")
+    expect(resolveLocalArchives(cacheDir, { development: true }).has("linux-x64")).toBe(false)
+    expect(resolveLocalArchives(cacheDir, {}).has("linux-x64")).toBe(false)
+
+    writeFileSync(path.join(cacheDir, "pigu-v1.0.4-linux-x64.tar.gz"), "release-1.0.4-archive")
+    expect(resolveLocalArchives(cacheDir, { releaseVersion: "1.0.4" }).get("linux-x64")?.kind).toBe("release")
+  } finally {
+    rmSync(tempHome, { recursive: true, force: true })
+    rmSync(mockBin, { recursive: true, force: true })
   }
 })

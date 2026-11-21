@@ -157,6 +157,7 @@ interface UnifiedProjectItem {
   readonly name: string
   readonly directory: string
   readonly updatedAt?: number
+  readonly sessionCount?: number
 }
 
 interface UnifiedSessionItem {
@@ -508,12 +509,31 @@ function remoteHeaders(remote: RemoteServerTarget, hasBody: boolean): Record<str
   return headers
 }
 
+function ensureLoopbackNoProxy(): void {
+  const hasProxy = Boolean(
+    process.env.HTTP_PROXY || process.env.HTTPS_PROXY || process.env.http_proxy || process.env.https_proxy,
+  )
+  if (!hasProxy) return
+  const raw = process.env.NO_PROXY || process.env.no_proxy || ""
+  const parts = raw
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+  for (const host of ["127.0.0.1", "localhost", "::1"]) {
+    if (!parts.includes(host)) parts.push(host)
+  }
+  const joined = parts.join(",")
+  process.env.NO_PROXY = joined
+  process.env.no_proxy = joined
+}
+
 async function remoteFetchJson<T>(
   remote: RemoteServerTarget,
   urlPath: string,
   init?: RequestInit,
   timeoutMs = 30_000,
 ): Promise<T> {
+  ensureLoopbackNoProxy()
   const base = remote.url.replace(/\/+$/, "")
   const resp = await fetch(`${base}${urlPath}`, {
     ...init,
@@ -555,6 +575,84 @@ function expandPathForServer(rawPath: string, serverKey: string, remoteProjectDi
   if (trimmed === "~") return remoteHome
   if (trimmed.startsWith("~/")) return path.posix.join(remoteHome, trimmed.slice(2))
   return trimmed
+}
+
+declare const OPENCODE_VERSION: string | undefined
+
+const MOBILE_TEMP_FOLDER_PATTERNS = [
+  /^temp$/i,
+  /^temp[_-]/i,
+  /[_-]temp$/i,
+  /^tmp$/i,
+  /^tmp[_-]/i,
+  /^test_temp$/i,
+  /^t$/i,
+]
+
+export function normalizeMobileProjectDir(dir: string): string {
+  const slashed = dir.trim().replaceAll("\\", "/")
+  if (!slashed) return ""
+  if (slashed === "/") return "/"
+  const driveRoot = /^([a-zA-Z]):\/+$/.exec(slashed)
+  if (driveRoot) return `${driveRoot[1]!.toLowerCase()}:/`
+  const trimmed = slashed.replace(/\/+$/, "")
+  return /^[a-zA-Z]:\//.test(trimmed) ? `${trimmed[0]!.toLowerCase()}${trimmed.slice(1)}` : trimmed
+}
+
+export function isMobileNoiseProjectDirectory(
+  dir: string,
+  sessionCount: number,
+  options?: {
+    readonly isTestRuntime?: boolean
+    readonly isBound?: boolean
+    readonly hasSessionTelemetry?: boolean
+  },
+): boolean {
+  if (options?.isBound) return false
+  const norm = normalizeMobileProjectDir(dir)
+  if (!norm) return true
+  const lower = norm.toLowerCase()
+  if (
+    lower === "/" ||
+    lower === "/users" ||
+    lower === "/home" ||
+    lower === "/volumes" ||
+    /^[a-z]:\/?$/i.test(lower) ||
+    /^[a-z]:\/users$/i.test(lower)
+  ) {
+    return true
+  }
+  if (lower.includes("/.pigu/projects/") || lower.endsWith("/.pigu/projects")) {
+    return sessionCount <= 0
+  }
+  const baseName = path.posix.basename(norm)
+  if (
+    baseName.startsWith(".") ||
+    lower.includes("/.gemini/") ||
+    lower.includes("/.config/") ||
+    lower.includes("/.claude/") ||
+    lower.includes("/.codex/") ||
+    lower.includes("/.opencode/")
+  ) {
+    return true
+  }
+  if (options?.isTestRuntime) return false
+  if (isEphemeralTempDirectory(norm) || MOBILE_TEMP_FOLDER_PATTERNS.some((pattern) => pattern.test(baseName))) {
+    return true
+  }
+  if (options?.hasSessionTelemetry && sessionCount <= 0) {
+    return true
+  }
+  return false
+}
+
+export function formatCompactionSourceBadge(cliEngine?: string): string {
+  const key = (cliEngine ?? "").trim().toLowerCase()
+  if (key === "agy" || key === "antigravity") return "Antigravity 原生 · 已压缩"
+  if (key === "claude" || key === "claude-code") return "Claude 原生 · 已压缩"
+  if (key === "codex") return "Codex 原生 · 已压缩"
+  if (key === "deepseek-harness" || key === "dsh") return "DSH 原生 · 已压缩"
+  return "上下文已压缩"
 }
 
 function isEphemeralTempDirectory(dir: string): boolean {
@@ -704,6 +802,7 @@ const layer = Layer.effect(
     const remoteBusyTracker = new Map<string, { wasBusy: boolean }>()
     const remoteSupportsPiguButler = new Map<string, boolean>()
     const remoteFallbackButlerDigest = new Map<string, string>()
+    const remoteVersions = new Map<string, string>()
     let preventSleepEnabled = true
     let sleepGuardChild: ReturnType<typeof spawn> | undefined
 
@@ -866,6 +965,7 @@ const layer = Layer.effect(
         },
         robots: Array.from(robots.values()),
         bindings: Object.fromEntries(bindings.entries()),
+        remotes: Array.from(remoteServers.values()),
       }
       await Bun.write(storePath, JSON.stringify(data, null, 2))
     }
@@ -878,9 +978,23 @@ const layer = Layer.effect(
           settings?: { preventSleep?: boolean }
           robots?: MobileRobotConfig[]
           bindings?: Record<string, ChatSessionBinding>
+          remotes?: RemoteServerTarget[]
         }
         if (typeof parsed.settings?.preventSleep === "boolean") {
           preventSleepEnabled = parsed.settings.preventSleep
+        }
+        if (!IS_TEST_RUNTIME && Array.isArray(parsed.remotes)) {
+          await Promise.all(
+            parsed.remotes.map(async (r) => {
+              if (!r?.key || !r?.url || remoteServers.has(r.key)) return
+              const alive = await remoteFetchJson(r, "/api/project", undefined, 1_500)
+                .then(() => true)
+                .catch(() => false)
+              if (alive && !remoteServers.has(r.key)) {
+                remoteServers.set(r.key, r)
+              }
+            }),
+          )
         }
         const seenKeys = new Map<string, string>()
         let dirty = false
@@ -943,96 +1057,203 @@ const layer = Layer.effect(
     }
 
     async function listAllProjects(): Promise<UnifiedProjectItem[]> {
+      const boundDirKeys = new Set<string>()
+      const boundProjIds = new Set<string>()
+      for (const b of bindings.values()) {
+        if (b.projectDirectory) {
+          boundDirKeys.add(`${b.serverKey}:${normalizeMobileProjectDir(b.projectDirectory)}`)
+        }
+        if (b.projectId && b.projectId !== "global") {
+          boundProjIds.add(`${b.serverKey}:${b.projectId}`)
+        }
+      }
+      const isBound = (serverKey: string, id: string, dir: string): boolean =>
+        boundDirKeys.has(`${serverKey}:${normalizeMobileProjectDir(dir)}`) ||
+        (id !== "global" && boundProjIds.has(`${serverKey}:${id}`))
+
+      const upsertProject = (map: Map<string, UnifiedProjectItem>, next: UnifiedProjectItem): void => {
+        const dirKey = normalizeMobileProjectDir(next.directory)
+        if (!dirKey) return
+        const mapKey = `${next.serverKey}:${dirKey}`
+        const existing = map.get(mapKey)
+        if (!existing) {
+          map.set(mapKey, next)
+          return
+        }
+        const preferExisting = existing.id !== "global" || next.id === "global"
+        map.set(mapKey, {
+          serverKey: next.serverKey,
+          serverLabel: existing.serverLabel || next.serverLabel,
+          isRemote: next.isRemote,
+          id: preferExisting ? existing.id : next.id,
+          name: (preferExisting ? existing.name : next.name) || existing.name || next.name,
+          directory: preferExisting ? existing.directory : next.directory,
+          updatedAt: Math.max(existing.updatedAt ?? 0, next.updatedAt ?? 0),
+          sessionCount: Math.max(existing.sessionCount ?? 0, next.sessionCount ?? 0),
+        })
+      }
+
       const defaultProj = await ensureDefaultProject().catch(() => undefined)
-      const localList = await runEffect(projects.list())
-      const items: UnifiedProjectItem[] = []
+      const [localList, localRootSessions, globalSessions] = await Promise.all([
+        runEffect(projects.list()),
+        runEffect(
+          sessions.list({
+            parentID: null,
+            archived: false,
+            limit: 10_000,
+          }),
+        ).catch(() => ({ data: [] })),
+        runEffect(
+          sessions.list({
+            project: Project.ID.make("global"),
+            parentID: null,
+            archived: false,
+            limit: 500,
+          }),
+        ).catch(() => ({ data: [] })),
+      ])
+
+      const localIdToDir = new Map<string, string>()
+      for (const p of localList) {
+        if (p.id !== "global" && p.canonical) {
+          localIdToDir.set(p.id, p.canonical)
+        }
+      }
+
+      const seenLocalSessions = new Set<string>()
+      const localStats = new Map<string, { count: number; maxUpdated: number; rawDir: string }>()
+      for (const s of [...localRootSessions.data, ...globalSessions.data]) {
+        if (seenLocalSessions.has(s.id) || s.parentID) continue
+        seenLocalSessions.add(s.id)
+        const mappedDir = s.projectID !== "global" ? localIdToDir.get(s.projectID) : undefined
+        const rawDir = mappedDir ?? s.location.directory
+        if (!rawDir) continue
+        if (s.id.startsWith("ses_ext_") && !IS_TEST_RUNTIME && isEphemeralTempDirectory(rawDir)) continue
+        const dirKey = normalizeMobileProjectDir(rawDir)
+        if (!dirKey) continue
+        const updatedMs = DateTime.toEpochMillis(s.time.updated)
+        const prev = localStats.get(dirKey)
+        localStats.set(dirKey, {
+          count: (prev?.count ?? 0) + 1,
+          maxUpdated: Math.max(prev?.maxUpdated ?? 0, updatedMs),
+          rawDir: prev?.rawDir ?? rawDir,
+        })
+      }
+
+      const localMap = new Map<string, UnifiedProjectItem>()
       for (const p of localList) {
         if (!(await localDirExists(p.canonical))) continue
-        items.push({
+        const dirKey = normalizeMobileProjectDir(p.canonical)
+        const st = localStats.get(dirKey)
+        const sessionCount = st?.count ?? 0
+        if (
+          isMobileNoiseProjectDirectory(p.canonical, sessionCount, {
+            isTestRuntime: IS_TEST_RUNTIME,
+            isBound: isBound("local", p.id, p.canonical),
+            hasSessionTelemetry: true,
+          })
+        ) {
+          continue
+        }
+        upsertProject(localMap, {
           serverKey: "local",
           serverLabel: "本机",
           isRemote: false,
           id: p.id,
           name: p.name?.trim() || path.basename(p.canonical) || p.canonical,
           directory: p.canonical,
-          updatedAt: p.time.active || p.time.updated || p.time.created,
+          updatedAt: Math.max(p.time.active || p.time.updated || p.time.created || 0, st?.maxUpdated ?? 0),
+          sessionCount,
         })
       }
-      if (
-        defaultProj &&
-        !items.some(
-          (p) =>
-            p.serverKey === "local" &&
-            ((defaultProj.id !== "global" && p.id === defaultProj.id) || p.directory === defaultProj.directory),
-        )
-      ) {
-        items.push(defaultProj)
-      }
 
-      const globalSessions = await runEffect(
-        sessions.list({
-          project: Project.ID.make("global"),
-          parentID: null,
-          archived: false,
-          limit: 500,
-        }),
-      ).catch(() => ({ data: [] }))
-      for (const s of globalSessions.data) {
-        if (s.parentID) continue
-        const dir = s.location.directory
-        if (s.id.startsWith("ses_ext_") && dir && isEphemeralTempDirectory(dir)) continue
+      for (const [dirKey, st] of localStats.entries()) {
+        if (localMap.has(`local:${dirKey}`)) continue
+        if (!(await localDirExists(st.rawDir))) continue
         if (
-          dir &&
-          !items.some((p) => p.serverKey === "local" && p.directory === dir) &&
-          (await localDirExists(dir))
-        ) {
-          items.push({
-            serverKey: "local",
-            serverLabel: "本机",
-            isRemote: false,
-            id: "global",
-            name: path.basename(dir) || dir,
-            directory: dir,
-            updatedAt: DateTime.toEpochMillis(s.time.updated),
+          isMobileNoiseProjectDirectory(st.rawDir, st.count, {
+            isTestRuntime: IS_TEST_RUNTIME,
+            isBound: isBound("local", "global", st.rawDir),
+            hasSessionTelemetry: true,
           })
+        ) {
+          continue
         }
+        upsertProject(localMap, {
+          serverKey: "local",
+          serverLabel: "本机",
+          isRemote: false,
+          id: "global",
+          name: path.basename(st.rawDir) || st.rawDir,
+          directory: st.rawDir,
+          updatedAt: st.maxUpdated,
+          sessionCount: st.count,
+        })
       }
 
       for (const b of bindings.values()) {
-        if (
-          b.serverKey === "local" &&
-          b.projectDirectory &&
-          !items.some(
-            (p) =>
-              p.serverKey === "local" &&
-              ((b.projectId !== "global" && p.id === b.projectId) || p.directory === b.projectDirectory),
-          ) &&
-          (await localDirExists(b.projectDirectory))
-        ) {
-          items.push({
-            serverKey: "local",
-            serverLabel: "本机",
-            isRemote: false,
-            id: b.projectId,
-            name: b.projectName || path.basename(b.projectDirectory) || b.projectDirectory,
-            directory: b.projectDirectory,
-            updatedAt: 0,
+        if (b.serverKey !== "local" || !b.projectDirectory) continue
+        if (!(await localDirExists(b.projectDirectory))) continue
+        const st = localStats.get(normalizeMobileProjectDir(b.projectDirectory))
+        upsertProject(localMap, {
+          serverKey: "local",
+          serverLabel: "本机",
+          isRemote: false,
+          id: b.projectId,
+          name: b.projectName || path.basename(b.projectDirectory) || b.projectDirectory,
+          directory: b.projectDirectory,
+          updatedAt: st?.maxUpdated ?? 0,
+          sessionCount: st?.count ?? 0,
+        })
+      }
+
+      if (defaultProj) {
+        const defDirKey = normalizeMobileProjectDir(defaultProj.directory)
+        const defStats = localStats.get(defDirKey)
+        const shouldKeepDefault =
+          IS_TEST_RUNTIME ||
+          localMap.size === 0 ||
+          (defStats?.count ?? 0) > 0 ||
+          isBound("local", defaultProj.id, defaultProj.directory)
+        if (shouldKeepDefault) {
+          upsertProject(localMap, {
+            ...defaultProj,
+            updatedAt: Math.max(defaultProj.updatedAt ?? 0, defStats?.maxUpdated ?? 0),
+            sessionCount: defStats?.count ?? 0,
           })
         }
       }
 
+      const items: UnifiedProjectItem[] = [...localMap.values()]
+
       for (const remote of remoteServers.values()) {
-        // Query global sessions first so remote SessionExternal.sync() runs before /api/project on fresh servers.
-        const remoteGlobal = await remoteFetchJson<{
-          data?: Array<{
-            id: string
-            parentID?: string
-            location?: { directory?: string }
-            time?: { updated?: number; created?: number }
-          }>
-        }>(remote, "/api/session?project=global&parentID=null&archived=false&limit=500", undefined, 8_000).catch(
-          () => undefined,
-        )
+        type RemoteSessionLite = {
+          id: string
+          projectID?: string
+          parentID?: string
+          location?: { directory?: string }
+          time?: { updated?: number; created?: number }
+        }
+        // Query sessions first so remote SessionExternal.sync() runs before /api/project on fresh servers.
+        const [remoteGlobal, remoteAll, remoteInfo] = await Promise.all([
+          remoteFetchJson<{ data?: RemoteSessionLite[] }>(
+            remote,
+            "/api/session?project=global&parentID=null&archived=false&limit=500",
+            undefined,
+            8_000,
+          ).catch(() => undefined),
+          remoteFetchJson<{ data?: RemoteSessionLite[] }>(
+            remote,
+            "/api/session?parentID=null&archived=false&limit=5000",
+            undefined,
+            8_000,
+          ).catch(() => undefined),
+          remoteFetchJson<{ version?: string }>(remote, "/api/info", undefined, 3_000).catch(() => undefined),
+        ])
+
+        if (remoteInfo?.version && remoteInfo.version !== "unknown") {
+          remoteVersions.set(remote.key, remoteInfo.version.replace(/^v/i, ""))
+        }
 
         type RemoteProjectEntry = {
           id: string
@@ -1051,60 +1272,117 @@ const layer = Layer.effect(
           ? remoteProjectsResp
           : (remoteProjectsResp?.data ?? [])
 
+        const remoteIdToDir = new Map<string, string>()
         for (const rp of remoteProjects) {
-          const dir = rp.canonical ?? rp.directory ?? ""
+          const dir = (rp.canonical ?? rp.directory ?? "").trim()
+          if (rp.id && rp.id !== "global" && dir) {
+            remoteIdToDir.set(rp.id, dir)
+          }
+        }
+
+        const seenRemoteSessions = new Set<string>()
+        const mergedRemoteSessions: RemoteSessionLite[] = []
+        for (const rs of [...(remoteAll?.data ?? []), ...(remoteGlobal?.data ?? [])]) {
+          if (seenRemoteSessions.has(rs.id) || rs.parentID) continue
+          seenRemoteSessions.add(rs.id)
+          mergedRemoteSessions.push(rs)
+        }
+        const hasRemoteTelemetry = mergedRemoteSessions.some((rs) =>
+          Boolean(rs.projectID || rs.location?.directory?.trim()),
+        )
+
+        const remoteStats = new Map<string, { count: number; maxUpdated: number; rawDir: string }>()
+        for (const rs of mergedRemoteSessions) {
+          const mappedDir = rs.projectID && rs.projectID !== "global" ? remoteIdToDir.get(rs.projectID) : undefined
+          const rawDir = (mappedDir ?? rs.location?.directory ?? "").trim()
+          if (!rawDir) continue
+          if (rs.id.startsWith("ses_ext_") && !IS_TEST_RUNTIME && isEphemeralTempDirectory(rawDir)) continue
+          const dirKey = normalizeMobileProjectDir(rawDir)
+          if (!dirKey) continue
+          const updatedMs = rs.time?.updated ?? rs.time?.created ?? 0
+          const prev = remoteStats.get(dirKey)
+          remoteStats.set(dirKey, {
+            count: (prev?.count ?? 0) + 1,
+            maxUpdated: Math.max(prev?.maxUpdated ?? 0, updatedMs),
+            rawDir: prev?.rawDir ?? rawDir,
+          })
+        }
+
+        const remoteMap = new Map<string, UnifiedProjectItem>()
+        for (const rp of remoteProjects) {
+          const dir = (rp.canonical ?? rp.directory ?? "").trim()
           if (!dir) continue
-          items.push({
+          const dirKey = normalizeMobileProjectDir(dir)
+          const st = remoteStats.get(dirKey)
+          const sessionCount = st?.count ?? 0
+          if (
+            isMobileNoiseProjectDirectory(dir, sessionCount, {
+              isTestRuntime: IS_TEST_RUNTIME,
+              isBound: isBound(remote.key, rp.id, dir),
+              hasSessionTelemetry: hasRemoteTelemetry,
+            })
+          ) {
+            continue
+          }
+          upsertProject(remoteMap, {
             serverKey: remote.key,
             serverLabel: `SSH:${remote.name}`,
             isRemote: true,
             id: rp.id,
             name: rp.name?.trim() || path.posix.basename(dir) || dir,
             directory: dir,
-            updatedAt: rp.time?.active ?? rp.time?.updated ?? rp.time?.created ?? 0,
+            updatedAt: Math.max(rp.time?.active ?? rp.time?.updated ?? rp.time?.created ?? 0, st?.maxUpdated ?? 0),
+            sessionCount,
           })
         }
 
-        for (const rs of remoteGlobal?.data ?? []) {
-          if (rs.parentID) continue
-          const dir = rs.location?.directory?.trim() ?? ""
-          if (!dir) continue
-          if (rs.id.startsWith("ses_ext_") && isEphemeralTempDirectory(dir)) continue
-          if (items.some((p) => p.serverKey === remote.key && p.directory === dir)) continue
-          items.push({
+        for (const [dirKey, st] of remoteStats.entries()) {
+          if (remoteMap.has(`${remote.key}:${dirKey}`)) continue
+          if (
+            isMobileNoiseProjectDirectory(st.rawDir, st.count, {
+              isTestRuntime: IS_TEST_RUNTIME,
+              isBound: isBound(remote.key, "global", st.rawDir),
+              hasSessionTelemetry: true,
+            })
+          ) {
+            continue
+          }
+          upsertProject(remoteMap, {
             serverKey: remote.key,
             serverLabel: `SSH:${remote.name}`,
             isRemote: true,
             id: "global",
-            name: path.posix.basename(dir) || dir,
-            directory: dir,
-            updatedAt: rs.time?.updated ?? rs.time?.created ?? 0,
+            name: path.posix.basename(st.rawDir) || st.rawDir,
+            directory: st.rawDir,
+            updatedAt: st.maxUpdated,
+            sessionCount: st.count,
           })
         }
-      }
 
-      for (const b of bindings.values()) {
-        if (
-          b.serverKey !== "local" &&
-          remoteServers.has(b.serverKey) &&
-          b.projectDirectory &&
-          !items.some(
-            (p) => p.serverKey === b.serverKey && (p.id === b.projectId || p.directory === b.projectDirectory),
-          )
-        ) {
-          const remote = remoteServers.get(b.serverKey)!
-          items.push({
+        for (const b of bindings.values()) {
+          if (b.serverKey !== remote.key || !b.projectDirectory) continue
+          const st = remoteStats.get(normalizeMobileProjectDir(b.projectDirectory))
+          upsertProject(remoteMap, {
             serverKey: b.serverKey,
             serverLabel: `SSH:${remote.name}`,
             isRemote: true,
             id: b.projectId,
             name: b.projectName || path.posix.basename(b.projectDirectory) || b.projectDirectory,
             directory: b.projectDirectory,
-            updatedAt: Date.now(),
+            updatedAt: st?.maxUpdated || Date.now(),
+            sessionCount: st?.count ?? 0,
           })
         }
+
+        items.push(...remoteMap.values())
       }
-      return items.sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))
+
+      return items.sort((a, b) => {
+        const aHas = (a.sessionCount ?? 0) > 0 ? 1 : 0
+        const bHas = (b.sessionCount ?? 0) > 0 ? 1 : 0
+        if (aHas !== bHas) return bHas - aHas
+        return (b.updatedAt ?? 0) - (a.updatedAt ?? 0)
+      })
     }
 
     async function resolveDefaultModelRef(
@@ -1231,6 +1509,7 @@ const layer = Layer.effect(
       const fallbackModel = await resolveDefaultModelRef(proj.serverKey, proj.directory)
       const fallbackModelLabel = fallbackModel ? `${fallbackModel.providerID}/${fallbackModel.id} (默认)` : "默认模型"
 
+      const targetDirKey = normalizeMobileProjectDir(proj.directory)
       if (proj.isRemote) {
         const remote = remoteServers.get(proj.serverKey)
         if (!remote) return []
@@ -1247,18 +1526,22 @@ const layer = Layer.effect(
             remote,
             `/api/session?project=${encodeURIComponent(proj.id)}&parentID=null&archived=false&limit=500`,
           ),
-          proj.id !== "global"
-            ? remoteFetchJson<{ data?: RemoteSessionEntry[] }>(
-                remote,
-                `/api/session?directory=${encodeURIComponent(proj.directory)}&parentID=null&archived=false&limit=500`,
-              ).catch(() => ({ data: [] as RemoteSessionEntry[] }))
-            : Promise.resolve({ data: [] as RemoteSessionEntry[] }),
+          remoteFetchJson<{ data?: RemoteSessionEntry[] }>(
+            remote,
+            `/api/session?directory=${encodeURIComponent(proj.directory)}&parentID=null&archived=false&limit=500`,
+          ).catch(() => ({ data: [] as RemoteSessionEntry[] })),
         ])
         const seen = new Set<string>()
         const merged: UnifiedSessionItem[] = []
-        for (const s of [...(byProj.data ?? []), ...(byDir.data ?? [])]) {
+        for (const s of [...(byDir.data ?? []), ...(byProj.data ?? [])]) {
           if (seen.has(s.id) || s.parentID) continue
-          if (proj.id === "global" && s.location?.directory && s.location.directory !== proj.directory) continue
+          if (
+            proj.id === "global" &&
+            s.location?.directory &&
+            normalizeMobileProjectDir(s.location.directory) !== targetDirKey
+          ) {
+            continue
+          }
           seen.add(s.id)
           merged.push({
             id: s.id,
@@ -1279,22 +1562,20 @@ const layer = Layer.effect(
             limit: 500,
           }),
         ),
-        proj.id !== "global"
-          ? runEffect(
-              sessions.list({
-                directory: AbsolutePath.make(proj.directory),
-                parentID: null,
-                archived: false,
-                limit: 500,
-              }),
-            ).catch(() => ({ data: [] }))
-          : Promise.resolve({ data: [] }),
+        runEffect(
+          sessions.list({
+            directory: AbsolutePath.make(proj.directory),
+            parentID: null,
+            archived: false,
+            limit: 500,
+          }),
+        ).catch(() => ({ data: [] })),
       ])
       const seen = new Set<string>()
       const merged: UnifiedSessionItem[] = []
-      for (const s of [...byProj.data, ...byDir.data]) {
+      for (const s of [...byDir.data, ...byProj.data]) {
         if (seen.has(s.id) || s.parentID) continue
-        if (proj.id === "global" && s.location.directory !== proj.directory) continue
+        if (proj.id === "global" && normalizeMobileProjectDir(s.location.directory) !== targetDirKey) continue
         seen.add(s.id)
         merged.push({
           id: s.id,
@@ -1510,7 +1791,7 @@ const layer = Layer.effect(
           "",
           "**快捷指令（`.` 前缀，支持编号选择）**",
           "`.project` (`.p`) — 查看设备与项目 / `.p <设备编号>` 分页看全部 / `.p <设备>.<项目>` 切换 / `.p new [服务器:]<路径>`",
-          "`.chat` (`.c`) — 会话列表 / `.c p<页码>` 翻页 / `.c <编号>` 切换 / `.new` 新建 / `.history` 历史 / `.undo` 撤回 / `.c del` 删除",
+          "`.chat` (`.c`) — 会话列表 / `.c p<页码>` 翻页 / `.c <编号>` 切换 / `.new` 新建 / `.compact` 压缩 / `.history` 历史 / `.undo` 撤回 / `.c del` 删除",
           "`.model` (`.m`) — 查看当前设备厂家 / `.m <厂家编号>` 分页看模型 / `.m <厂家>.<模型>` 切换 / `.m effort <级别>`",
           "`.sh <命令>` (`.shell`) — 在项目目录执行终端命令",
           "`.log` (`.progress`) — 查看当前/上一轮任务的 AI 中间输出与执行步骤",
@@ -1659,11 +1940,18 @@ const layer = Layer.effect(
         projects: allProjects.filter((p) => p.serverKey === dev.serverKey),
       }))
 
+      const localVersion =
+        !IS_TEST_RUNTIME && typeof OPENCODE_VERSION === "string" && OPENCODE_VERSION
+          ? OPENCODE_VERSION.replace(/^v/i, "")
+          : undefined
+      const resolveDeviceVersion = (serverKey: string): string | undefined =>
+        serverKey === "local" ? localVersion : remoteVersions.get(serverKey)
+
       const isCurrentProj = (proj: UnifiedProjectItem): boolean =>
         Boolean(
           current?.serverKey === proj.serverKey &&
             ((current.projectId !== "global" && current.projectId === proj.id) ||
-              current.projectDirectory === proj.directory),
+              normalizeMobileProjectDir(current.projectDirectory) === normalizeMobileProjectDir(proj.directory)),
         )
 
       const switchMatchedProject = async (matched: UnifiedProjectItem): Promise<MobileCard> => {
@@ -1757,17 +2045,22 @@ const layer = Layer.effect(
         const safePage = Math.min(totalPages, requestedPage)
         const pageSlice = indexed.slice((safePage - 1) * PAGE_SIZE, safePage * PAGE_SIZE)
 
+        const devVer = resolveDeviceVersion(dev.serverKey)
+        const devVerTag = devVer ? ` \`v${devVer}\`` : ""
         const listElements: MobileCard["elements"][number][] = [
           {
             kind: "markdown",
-            content: `设备：**${dev.serverLabel}** · 第 ${safePage}/${totalPages} 页（共 ${indexed.length} 个项目）`,
+            content: `设备：**${dev.serverLabel}**${devVerTag} · 第 ${safePage}/${totalPages} 页（共 ${indexed.length} 个项目）`,
           },
-          ...pageSlice.map((item) => ({
-            kind: "list_item" as const,
-            text: `${item.isCurrent ? "* " : "- "}**${dev.dIdx}.${item.pIdx} ${item.proj.name}**${
-              item.isCurrent ? " (当前)" : ""
-            } · \`${item.proj.directory}\``,
-          })),
+          ...pageSlice.map((item) => {
+            const countSuffix = item.proj.sessionCount ? ` (${item.proj.sessionCount} 会话)` : ""
+            return {
+              kind: "list_item" as const,
+              text: `${item.isCurrent ? "* " : "- "}**${dev.dIdx}.${item.pIdx} ${item.proj.name}**${
+                item.isCurrent ? " (当前)" : ""
+              }${countSuffix} · \`${item.proj.directory}\``,
+            }
+          }),
         ]
 
         const pickButtons: CardButton[] = pageSlice.map((item) => {
@@ -1895,6 +2188,17 @@ const layer = Layer.effect(
           if (matchedDev) {
             return renderDeviceProjectsCard(matchedDev, tailRest)
           }
+          if (/^\d+$/.test(headToken)) {
+            return {
+              header: { title: "设备编号超出范围", color: "red" },
+              elements: [
+                {
+                  kind: "markdown",
+                  content: `当前共有 **${deviceGroups.length}** 台已连接设备，不存在设备 \`#${headToken}\`（请确认 SSH 服务器是否已连接）。发送 \`.p\` 查看设备列表；若需切换本机项目请发 \`.p 1.${headToken}\`。`,
+                },
+              ],
+            }
+          }
         }
 
         // 3. Direct switch by serverKey:path, exact project name/path, or fallback global index
@@ -1953,11 +2257,13 @@ const layer = Layer.effect(
       const quickButtons: CardButton[] = []
 
       for (const dev of deviceGroups) {
+        const devVer = resolveDeviceVersion(dev.serverKey)
+        const devVerTag = devVer ? ` \`v${devVer}\`` : ""
         if (dev.projects.length === 0) {
           if (dev.serverKey !== "local") {
             elements.push({
               kind: "markdown",
-              content: `**#${dev.dIdx} ${dev.serverLabel}** · 暂无已打开项目（可发 \`.p new ${dev.shortLabel}:~/目录\` 打开）`,
+              content: `**#${dev.dIdx} ${dev.serverLabel}**${devVerTag} · 暂无已打开项目（可发 \`.p new ${dev.shortLabel}:~/目录\` 打开）`,
             })
           }
           continue
@@ -1981,14 +2287,17 @@ const layer = Layer.effect(
 
         elements.push({
           kind: "markdown",
-          content: `**#${dev.dIdx} ${dev.serverLabel}** · 共 ${dev.projects.length} 个项目${
+          content: `**#${dev.dIdx} ${dev.serverLabel}**${devVerTag} · 共 ${dev.projects.length} 个项目${
             dev.projects.length > PREVIEW_CAP ? `（发 \`.p ${dev.dIdx}\` 分页看全部）` : ""
           }`,
         })
 
         for (const item of visibleItems) {
           const mark = item.isCurrent ? "* " : "- "
-          const tag = item.isCurrent ? `${item.proj.serverLabel} · 当前` : item.proj.serverLabel
+          const countSuffix = item.proj.sessionCount ? ` · ${item.proj.sessionCount} 会话` : ""
+          const tag = item.isCurrent
+            ? `${item.proj.serverLabel}${countSuffix} · 当前`
+            : `${item.proj.serverLabel}${countSuffix}`
           elements.push({
             kind: "list_item",
             text: `${mark}**${dev.dIdx}.${item.pIdx} ${item.proj.name}** (${tag}) · \`${item.proj.directory}\``,
@@ -2032,7 +2341,7 @@ const layer = Layer.effect(
 
     async function handleChatCommand(
       sessionKey: string,
-      sub: "list" | "new" | "switch" | "history" | "undo" | "name" | "delete",
+      sub: "list" | "new" | "switch" | "history" | "undo" | "name" | "delete" | "compact",
       arg: string,
     ): Promise<MobileCard> {
       const binding = await ensureBinding(sessionKey)
@@ -2181,6 +2490,54 @@ const layer = Layer.effect(
             {
               kind: "markdown",
               content: turns || "当前会话暂无记录。",
+            },
+          ],
+        }
+      }
+
+      if (sub === "compact") {
+        if (currentProj.isRemote) {
+          const remote = remoteServers.get(currentProj.serverKey)
+          if (!remote) {
+            return {
+              header: { title: "SSH 远程服务器未连接", color: "red" },
+              elements: [{ kind: "markdown", content: "当前绑定的 SSH 服务器未连接，无法压缩会话。" }],
+            }
+          }
+          await remoteFetchJson(remote, `/api/session/${encodeURIComponent(binding.sessionId)}/compact`, {
+            method: "POST",
+            body: JSON.stringify({}),
+          })
+        }
+        if (!currentProj.isRemote) {
+          await runEffect(sessions.compact({ sessionID: Session.ID.make(binding.sessionId) }))
+        }
+        const drain = await waitSessionDrain(binding)
+        const afterMsgs = await loadTurnMessages(binding)
+        const lastCompaction = [...afterMsgs].reverse().find((m) => m.type === "compaction") as
+          | (RawTurnMsg & {
+              readonly summary?: string
+              readonly native?: { readonly cliEngine?: string }
+            })
+          | undefined
+        const errMsg = lastCompaction?.error?.message ?? drain.errorMessage
+        if (errMsg) {
+          return {
+            header: { title: "上下文压缩失败", color: "red" },
+            elements: [{ kind: "markdown", content: errMsg }],
+          }
+        }
+        const badge = formatCompactionSourceBadge(lastCompaction?.native?.cliEngine)
+        const snippet = lastCompaction?.summary?.trim() ? compactSingleLine(lastCompaction.summary, 280) : ""
+        return {
+          header: { title: `🗜️ 已压缩会话上下文 (${badge})`, color: "green" },
+          elements: [
+            {
+              kind: "markdown",
+              content: [
+                `项目：**${currentProj.name}** (${currentProj.serverLabel})`,
+                ...(snippet ? [`摘要：${snippet}`] : ["已整理历史记忆并释放上下文窗口。"]),
+              ].join("\n"),
             },
           ],
         }
@@ -2828,6 +3185,8 @@ const layer = Layer.effect(
       interface RawMessage {
         readonly type: string
         readonly text?: string
+        readonly summary?: string
+        readonly native?: { readonly cliEngine?: string }
         readonly command?: string
         readonly exit?: number
         readonly output?: string | { readonly output?: string }
@@ -2851,6 +3210,11 @@ const layer = Layer.effect(
 
       const entries: string[] = []
       for (const m of rawMessages) {
+        if (m.type === "compaction") {
+          const badge = formatCompactionSourceBadge(m.native?.cliEngine)
+          const sum = m.summary?.trim() ? `：${m.summary.trim().slice(0, 300)}` : ""
+          entries.push(`**🗜️ ${badge}**${sum}`)
+        }
         if (m.type === "user" && m.text) {
           entries.push(`**你**：${m.text.slice(0, 300)}`)
         }
@@ -3616,6 +3980,19 @@ const layer = Layer.effect(
       }
       if (lower === "question") {
         return "向你发起需求问答确认"
+      }
+      if (lower.includes("sandbox_preview")) {
+        const title = pickStr("title").slice(0, 24)
+        return title ? `生成交互式预览面板「${title}」` : "生成交互式预览面板"
+      }
+      if (lower.includes("memory_save") || lower.includes("memory_write")) {
+        return "保存长期记忆"
+      }
+      if (lower.includes("memory_read") || lower.includes("memory_list")) {
+        return "读取长期记忆"
+      }
+      if (lower.includes("memory_delete")) {
+        return "清理长期记忆"
       }
       return `调用工具 \`${name}\``
     }
@@ -6103,6 +6480,11 @@ const layer = Layer.effect(
         if (parsed.kind === "prompt") {
           const consumedInteractive = await tryHandlePendingInteractiveReply(connector, msg, parsed.text)
           if (consumedInteractive) return
+          if (parsed.text.trim().toLowerCase() === "/compact") {
+            const card = await handleChatCommand(msg.sessionKey, "compact", "")
+            await connector.sendCard(msg.replyContext, card)
+            return
+          }
           await handlePromptTurn(connector, msg, parsed.text)
         }
       } catch (err) {
@@ -6470,7 +6852,7 @@ const layer = Layer.effect(
         }),
 
       syncRemotes: (remotes) =>
-        Effect.sync(() => {
+        Effect.promise(async () => {
           const nextKeys = new Set<string>()
           remoteServers.clear()
           for (const r of remotes) {
@@ -6482,6 +6864,7 @@ const layer = Layer.effect(
           for (const cachedKey of Array.from(remoteSupportsPiguButler.keys())) {
             if (!nextKeys.has(cachedKey)) remoteSupportsPiguButler.delete(cachedKey)
           }
+          await saveDiskState().catch(() => undefined)
         }),
 
       transcribeAudio: (input) =>

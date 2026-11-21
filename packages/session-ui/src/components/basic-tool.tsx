@@ -221,14 +221,21 @@ export function BasicTool(props: BasicToolProps) {
 // oxlint-disable-next-line anti-slop/no-unsafe-dictionary-type -- see SAFETY above
 type GenericToolInput = Record<string, unknown>
 
-const labelKeys = ["description", "query", "url", "path", "pattern", "name"]
+const labelKeys = ["title", "description", "query", "url", "path", "pattern", "name"]
+const bodyKeys = new Set(["code", "content", "patchText", "oldString", "newString", "prompt", "text"])
 
 const labelValue = Schema.decodeUnknownOption(Schema.NonEmptyString)
 
 const argValue = Schema.decodeUnknownOption(Schema.Union([Schema.String, Schema.Number, Schema.Boolean]))
 
+function formatInlineText(raw: string, max = 96) {
+  const flat = raw.replace(/\s+/g, " ").trim()
+  return flat.length > max ? `${flat.slice(0, max)}…` : flat
+}
+
 function label(input: GenericToolInput | undefined) {
-  return labelKeys.flatMap((key) => Option.toArray(labelValue(input?.[key])))[0]
+  const found = labelKeys.flatMap((key) => Option.toArray(labelValue(input?.[key])))[0]
+  return found ? formatInlineText(found, 120) : undefined
 }
 
 function args(input: GenericToolInput | undefined) {
@@ -236,7 +243,15 @@ function args(input: GenericToolInput | undefined) {
 
   return Object.entries(input)
     .filter(([key]) => !labelKeys.includes(key))
-    .flatMap(([key, value]) => Option.toArray(argValue(value)).map((arg) => `${key}=${arg}`))
+    .flatMap(([key, value]) =>
+      Option.toArray(argValue(value)).map((arg) => {
+        if (typeof arg === "string" && (bodyKeys.has(key) || arg.length > 80 || arg.includes("\n"))) {
+          const lines = arg.split("\n").length
+          return lines > 1 ? `${key}=${lines} lines` : `${key}=${formatInlineText(arg, 64)}`
+        }
+        return `${key}=${arg}`
+      }),
+    )
     .slice(0, 3)
 }
 

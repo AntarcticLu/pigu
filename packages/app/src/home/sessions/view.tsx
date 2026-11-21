@@ -15,6 +15,7 @@ import { prefersReducedMotion } from "@opencode/ui/motion"
 import { useLanguage } from "@/runtime/i18n/language"
 import { ServerConnection } from "@/runtime/server/registry"
 import { SessionTabAvatarView } from "@/shell/layout/session-tab-avatar"
+import { usePinState } from "@/shell/titlebar/pin-store"
 import { sessionLabel } from "@/session/title"
 import { shouldOpenSessionInBackground } from "./open"
 import { createAltHold } from "./alt-hold"
@@ -534,6 +535,8 @@ function HomeSessionRow(
   const location = createMemo(() => props.location(props.record))
   const showProjectName = () => props.showProjectName && props.record.projectName
   const sessionID = () => props.record.session.id
+  const pins = usePinState()
+  const isPinned = () => pins.isPinned(props.server, sessionID())
   const menu = () => (props.rowUI.menu?.id === sessionID() ? props.rowUI.menu : undefined)
   const editor = () => (props.rowUI.editor?.id === sessionID() ? props.rowUI.editor : undefined)
   let longPressTimer: ReturnType<typeof setTimeout> | undefined
@@ -808,6 +811,12 @@ function HomeSessionRow(
               requestAnimationFrame(() => rowButton()?.focus())
             }}
           >
+            <Menu.Item onSelect={() => pins.togglePinned(props.server, sessionID())}>
+              {isPinned()
+                ? props.language.tr("取消置顶会话", "Unpin session")
+                : props.language.tr("固定置顶会话", "Pin session")}
+            </Menu.Item>
+            <Menu.Separator />
             <Menu.Item onSelect={openEditor}>{props.language.t("common.rename")}</Menu.Item>
             <Menu.Item onSelect={() => void props.onExportSession(props.server, props.record.session)}>
               {props.language.t("common.export")}…

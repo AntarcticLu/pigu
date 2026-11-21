@@ -1,6 +1,6 @@
 import { createRoot, createSignal, onCleanup, untrack, type Accessor } from "solid-js"
 import { createKeyed, type IpcClient } from "@opencode/plugin/gui"
-import type { Ssh, SshConfig, SshHttp, SshItem } from "./contract"
+import type { Ssh, SshConfig, SshHttp, SshItem, SshUpdateInfo } from "./contract"
 import {
   createSshWindowState,
   selectSshAnswered,
@@ -186,5 +186,33 @@ export function createSshController(input: {
     cancel: (id: string) => dispatch({ type: "cancel.requested", id, saved: !!current(id)?.saved }),
     /** Waits for a healthy tunnel; main reconnects a dropped one by itself. */
     resolve: (id: string, signal: AbortSignal) => resolve(id, AbortSignal.any([signal, lifetime.signal])),
+    checkUpdate: (id: string, currentVersion?: string): Promise<SshUpdateInfo> => {
+      const api = untrack(input.api)
+      if (!api) return Promise.resolve({ status: "offline", currentVersion })
+      return api.checkUpdate({ id, currentVersion }).catch((): SshUpdateInfo => ({ status: "offline", currentVersion }))
+    },
+    upgrade: (config: SshConfig, version: string, onConnected?: (ready: boolean) => void) => {
+      const api = untrack(input.api)
+      if (!api) {
+        onConnected?.(false)
+        return
+      }
+      void api
+        .setTargetVersion({ id: config.id, version })
+        .then(() => {
+          dispatch({
+            type: "connect.requested",
+            config,
+            ipcActive: !!untrack(input.api),
+            item: current(config.id),
+            replace: true,
+            onConnected: (ready) => {
+              void untrack(input.api)?.setTargetVersion({ id: config.id, version: null }).catch(() => {})
+              onConnected?.(ready)
+            },
+          })
+        })
+        .catch(() => onConnected?.(false))
+    },
   }
 }

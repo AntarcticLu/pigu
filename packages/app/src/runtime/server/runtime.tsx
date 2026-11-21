@@ -118,13 +118,20 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
       }
     })
 
-    createEffect(() => {
+    const pushMobileRemotes = () => {
       const localConn = server.list.find((conn) => server.local(conn))
 
       if (!localConn) return
-      const localCtx = selectServerCtx(controllers(), ServerConnection.key(localConn))
+      const localKey = ServerConnection.key(localConn)
+      const localCtx = selectServerCtx(controllers(), localKey)
 
       if (!localCtx) return
+      // Read both WebSocket connection status and HTTP health so restarting or upgrading the local daemon
+      // automatically re-pushes active SSH tunnel endpoints to Mobile.
+      const connStatus = localCtx.sdk.connection.status()
+      const health = serverHealth.status[localKey]
+      if (connStatus !== "connected" && health?.type !== "healthy") return
+
       const remotes = server.list
         .filter((conn) => !server.local(conn))
         .flatMap((conn) => {
@@ -142,24 +149,29 @@ export const { use: useGlobal, provider: GlobalProvider } = createSimpleContext(
           return [item]
         })
       void localCtx.sdk.api.experimental.mobile.syncRemotes({ remotes }).catch(() => undefined)
+    }
+
+    createEffect(() => {
+      pushMobileRemotes()
     })
 
     createEffect(() => {
-      if (!platform.setPreventSleep) return
       const localConn = server.list.find((conn) => server.local(conn))
 
       if (!localConn) return
       const localCtx = selectServerCtx(controllers(), ServerConnection.key(localConn))
 
       if (!localCtx) return
-      const syncSleep = () => {
+      const syncPeriodic = () => {
+        pushMobileRemotes()
+        if (!platform.setPreventSleep) return
         void localCtx.sdk.api.experimental.mobile
           .settings()
           .then((settings) => platform.setPreventSleep?.(settings.active))
           .catch(() => undefined)
       }
-      syncSleep()
-      const timer = setInterval(syncSleep, 15_000)
+      syncPeriodic()
+      const timer = setInterval(syncPeriodic, 15_000)
       onCleanup(() => clearInterval(timer))
     })
 

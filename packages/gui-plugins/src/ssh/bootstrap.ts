@@ -78,8 +78,6 @@ function resolveLocalArchiveForPlatform(
       kind: "release",
       filePath: path.join(cacheDir, `pigu-v${options.releaseVersion}-${platform}.tar.gz`),
     })
-  } else {
-    candidates.push({ kind: "release", filePath: path.join(cacheDir, `pigu-${platform}.tar.gz`) })
   }
 
   const found = candidates
@@ -100,7 +98,7 @@ function resolveLocalArchiveForPlatform(
   return found[0]
 }
 
-function resolveLocalArchives(
+export function resolveLocalArchives(
   cacheDir = path.join(homedir(), ".pigu", "cache"),
   options?: { releaseVersion?: string; development?: boolean },
 ) {
@@ -545,7 +543,7 @@ ${syncShimsSnippet}
 ${sha256 ? `printf '%s\\n' ${quote(sha256)} > "$HOME/.pigu/.installed-sha256"\n` : ""}`
 }
 
-function remoteGitHubInstallScript(releaseVersion?: string) {
+export function remoteGitHubInstallScript(releaseVersion?: string) {
   const versionArg = releaseVersion ? ` -s -- --version ${quote(releaseVersion)}` : ""
 
   return `set -eu
@@ -554,14 +552,18 @@ if [ -f /etc/network_turbo ] && [ -z "\${http_proxy:-}" ]; then
 fi
 curl -fsSL --connect-timeout 15 --max-time 180 https://raw.githubusercontent.com/AntarcticLu/pigu/dev/install | bash${versionArg}
 mkdir -p "$HOME/.pigu/libexec" "$HOME/.pigu/bin"
-if [ -x "$HOME/.opencode/bin/opencode" ]; then
-  cp -f "$HOME/.opencode/bin/opencode" "$HOME/.pigu/libexec/pigu-bin"
-  chmod 755 "$HOME/.pigu/libexec/pigu-bin"
-  rm -f "$HOME/.pigu/bin/pigu"
-  printf '${releaseWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
-  chmod 755 "$HOME/.pigu/bin/pigu"
-  ${syncShimsSnippet}
+if [ ! -x "$HOME/.opencode/bin/opencode" ] || [ "$(head -c 2 "$HOME/.opencode/bin/opencode" 2>/dev/null || true)" = "#!" ]; then
+  exit 1
 fi
+stage_bin="$HOME/.pigu/libexec/.pigu-bin.tmp.$$"
+rm -f "$stage_bin"
+cp -fL "$HOME/.opencode/bin/opencode" "$stage_bin"
+chmod 755 "$stage_bin"
+mv -f "$stage_bin" "$HOME/.pigu/libexec/pigu-bin"
+rm -f "$HOME/.pigu/bin/pigu"
+printf '${releaseWrapperBody}\\n' > "$HOME/.pigu/bin/pigu"
+chmod 755 "$HOME/.pigu/bin/pigu"
+${syncShimsSnippet}
 `
 }
 
@@ -623,6 +625,66 @@ async function detectLocalHttpProxy(): Promise<string | undefined> {
 
   return undefined
 }
+
+function extractReleaseSemverFromTagUrl(url: string): string | undefined {
+  const match = /\/releases\/tag\/([^/?#\s]+)/i.exec(url)
+  return match?.[1] ? cleanReleaseSemver(decodeURIComponent(match[1])) : undefined
+}
+
+export async function probeLatestGitHubReleaseLocal(): Promise<string | undefined> {
+  const latestUrl = "https://github.com/AntarcticLu/pigu/releases/latest"
+  const proxyUrl = await detectLocalHttpProxy()
+  const attempts = proxyUrl ? [proxyUrl, undefined] : [undefined]
+
+  for (const activeProxy of attempts) {
+    if (setGlobalProxy) {
+      setGlobalProxy(
+        activeProxy
+          ? { HTTP_PROXY: activeProxy, HTTPS_PROXY: activeProxy, NO_PROXY: "127.0.0.1,localhost,::1" }
+          : {},
+      )
+    }
+
+    const found = await fetch(latestUrl, {
+      method: "HEAD",
+      redirect: "follow",
+      signal: AbortSignal.timeout(8_000),
+      headers: { "User-Agent": "Pigu-SSH-UpdateCheck" },
+    })
+      .then((res) => (res.ok ? extractReleaseSemverFromTagUrl(res.url) : undefined))
+      .catch(() => undefined)
+
+    if (found) return found
+  }
+
+  return undefined
+}
+
+export const probeRemoteLatestRelease = Effect.fn("Ssh.probeRemoteLatestRelease")(function* (
+  target: ReturnType<typeof parseTarget>,
+) {
+  const script = `if [ -f /etc/network_turbo ] && [ -z "\${http_proxy:-}" ]; then
+  . /etc/network_turbo >/dev/null 2>&1 || true
+fi
+curl -fsSLI --connect-timeout 5 --max-time 7 -o /dev/null -w '%{url_effective}\\n' https://github.com/AntarcticLu/pigu/releases/latest
+`
+  return yield* runSsh({
+    args: [
+      "-o",
+      "BatchMode=yes",
+      "-o",
+      "ConnectTimeout=5",
+      ...sshArgs(target),
+      target.host,
+      "sh -s",
+    ],
+    stdin: script,
+    timeout: 9_000,
+  }).pipe(
+    Effect.map((out) => extractReleaseSemverFromTagUrl(out)),
+    Effect.orElseSucceed(() => undefined),
+  )
+})
 
 async function downloadReleaseArchiveBytes(url: string): Promise<Uint8Array> {
   const proxyUrl = await detectLocalHttpProxy()
@@ -687,7 +749,11 @@ export const bootstrap = Effect.fn("Ssh.bootstrap")(function* (input: {
   // so a cached local release archive never downgrades a newer remote server.
   const expectedHashes: ExpectedPlatformHashes | undefined = targetReleaseVersion
     ? undefined
-    : Object.fromEntries([...localArchives.entries()].map(([platform, archive]) => [platform, archive.sha256]))
+    : Object.fromEntries(
+        [...localArchives.entries()]
+          .filter(([, archive]) => archive.kind === "bundle")
+          .map(([platform, archive]) => [platform, archive.sha256]),
+      )
 
   const firstOutput = yield* run(
     input.replace

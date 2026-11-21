@@ -36,18 +36,17 @@ const TRIVIAL_SESSION_TITLES = new Set([
 export function isIntrinsicArchivedProject(worktree: string, sessionCount: number) {
   const name = getFilename(worktree) || worktree
   const normalized = pathKey(worktree)
+  const lower = normalized.toLowerCase()
 
   if (sessionCount === 0) return true
 
   return (
-    normalized.includes("/.pigu/projects/") ||
-    normalized === "/volumes/antl/pigu" ||
-    normalized === "/users/al" ||
-    normalized === "/volumes/antl" ||
-    /^\/users\/[^/]+$/i.test(normalized) ||
-    /^\/home\/[^/]+$/i.test(normalized) ||
-    /^[a-z]:\/users\/[^/]+$/i.test(normalized) ||
-    /^[a-z]:\/$/i.test(normalized) ||
+    lower === "/" ||
+    lower === "/users" ||
+    lower === "/home" ||
+    lower === "/volumes" ||
+    /^[a-z]:\/?$/i.test(lower) ||
+    /^[a-z]:\/users$/i.test(lower) ||
     TEMP_FOLDER_PATTERNS.some((pattern) => pattern.test(name))
   )
 }

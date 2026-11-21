@@ -37,4 +37,9 @@ export default {
   "form.namePlaceholder": "Localhost",
   "form.add": "Add server",
   "menu.delete": "Delete",
+  "update.checking": "Checking…",
+  "update.upgrading": "Upgrading…",
+  "update.available": "Upgrade to v{{version}}",
+  "update.latest": "Up to date",
+  "update.offlineRetry": "Offline, retry",
 }

@@ -1,4 +1,4 @@
-import { createMemo, createSignal, onCleanup, Show, type Accessor, type JSX } from "solid-js"
+import { createEffect, createMemo, createSignal, onCleanup, Show, type Accessor, type JSX } from "solid-js"
 import { Predicate } from "effect"
 import { abort } from "@opencode/util/abort"
 import { createAnimatedPresence } from "@/runtime/animated-presence"
@@ -362,6 +362,29 @@ function MessageTimelineView(
   // Undelivered input waits below the work the model has seen, so live status moves into the row above it.
   const activityRow = createMemo(() => projection.rows().some((row) => Predicate.isTagged(row, "Activity")))
 
+  const [workingSeconds, setWorkingSeconds] = createSignal(0)
+
+  createEffect(() => {
+    if (!showWorking()) {
+      setWorkingSeconds(0)
+      return
+    }
+    const started = Date.now()
+    setWorkingSeconds(0)
+    const timer = setInterval(() => {
+      setWorkingSeconds(Math.max(0, Math.floor((Date.now() - started) / 1000)))
+    }, 1000)
+    onCleanup(() => clearInterval(timer))
+  })
+
+  const workingElapsed = createMemo(() => {
+    const seconds = workingSeconds()
+    if (seconds < 3) return ""
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    return `${minutes}m ${String(seconds % 60).padStart(2, "0")}s`
+  })
+
   // The lane keeps its height while empty, so Working and the hint come and go without moving the rows around it.
   // The bottom lane also keeps its height while live status moves into the Activity row, so the tail the activity pill
   // floats in never closes and a pinned timeline does not shift when input waits.
@@ -374,8 +397,18 @@ function MessageTimelineView(
     >
       <div class={`flex h-9 items-center gap-2 pt-3 text-[13px] font-[530] leading-text-compact ${turnPadding()}`}>
         <Show when={live() && showWorking()}>
-          <div data-component="session-working" role="status">
+          <div data-component="session-working" role="status" class="flex items-center gap-1.5">
             <TextShimmer text={language.t("session.timeline.working")} active />
+            <Show when={workingElapsed()}>
+              {(elapsed) => (
+                <span
+                  data-slot="session-working-elapsed"
+                  class="text-[12px] font-normal text-v2-text-text-muted tabular-nums"
+                >
+                  {elapsed()}
+                </span>
+              )}
+            </Show>
           </div>
         </Show>
         <Show when={live() && backgroundHintPresence.present()}>

@@ -10,7 +10,13 @@ const REMOVED_SESSION_LIMIT = 512
 
 // The events on which the server advances a session's `time.updated` to the event's time.
 const SESSION_ACTIVITY = [
+  "session.created",
   "session.inbox.enqueued",
+  "session.inbox.delivered",
+  "session.execution.started",
+  "session.execution.succeeded",
+  "session.execution.failed",
+  "session.execution.interrupted",
   "session.step.started",
   "session.step.ended",
   "session.step.failed",

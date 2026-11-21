@@ -1,13 +1,16 @@
 import { Button } from "@opencode/ui/button"
 import { useDialog } from "@opencode/ui/context/dialog"
-import { createMemo, For, Show, type Component } from "solid-js"
+import { Loader } from "@opencode/ui/loader"
+import { cleanReleaseSemver } from "@opencode/util/semver"
+import { createMemo, createSignal, For, onCleanup, onMount, Show, type Component } from "solid-js"
 import { ServerRowMenu } from "@/servers/registry/row-menu"
 import { ServerHealthIndicator } from "@/servers/registry/row"
 import { PluginServerRow } from "@/servers/registry/plugin-row"
 import { AddServerMenu } from "@/servers/registry/add-menu"
 import { useLanguage } from "@/runtime/i18n/language"
+import { usePlatform, type SelfUpdateState } from "@/runtime/platform/platform"
 import { ServerConnection, useServers } from "@/runtime/server/registry"
-import { isServerFailed, isServerUnauthorized } from "@/runtime/server/health-machine"
+import { isServerFailed, isServerUnauthorized, selectServerVersion } from "@/runtime/server/health-machine"
 import { useServerCollectionController } from "@/servers/registry/controller"
 import { DialogServer } from "@/servers/connect/dialog"
 import { SettingsList } from "@/settings/list"
@@ -122,9 +125,18 @@ export function ServerConnectionRow(props: {
 }) {
   const dialog = useDialog()
   const language = useLanguage()
+  const platform = usePlatform()
   const servers = useServers()
   const controller = useServerCollectionController()
   const health = createMemo(() => controller.collection.health()[props.entry.key])
+  const serverVersion = createMemo(() => {
+    const reported = cleanReleaseSemver(selectServerVersion(health()))
+    if (reported) return reported
+    if (props.entry.connection && servers.local(props.entry.connection)) {
+      return cleanReleaseSemver(platform.version) ?? (platform.version ? platform.version.replace(/^v/i, "") : undefined)
+    }
+    return undefined
+  })
 
   const edit = (server: ServerConnection.Http) =>
     void dialog.push(() => <DialogServer mode="edit" server={server} onSave={props.onServerChange} />)
@@ -181,6 +193,16 @@ export function ServerConnectionRow(props: {
                         {language.tr("本地", "Local")}
                       </span>
                     </Show>
+                    <Show when={serverVersion()}>
+                      {(ver) => (
+                        <span
+                          data-slot="server-version-badge"
+                          class="shrink-0 rounded-[3px] bg-v2-overlay-simple-overlay-hover/60 px-1.5 py-0.5 font-mono text-[10px] leading-none text-v2-text-text-muted tabular-nums"
+                        >
+                          v{ver()}
+                        </span>
+                      )}
+                    </Show>
                   </span>
                   <Show when={!servers.local(server())}>
                     <bdi class="settings-servers-meta" dir="ltr">
@@ -189,7 +211,16 @@ export function ServerConnectionRow(props: {
                   </Show>
                 </div>
               </div>
-              <Show when={!servers.local(server())}>
+              <Show
+                when={!servers.local(server())}
+                fallback={
+                  <Show when={platform.checkSelfUpdate}>
+                    <div class="settings-servers-actions">
+                      <LocalServerUpdateActions fallbackVersion={serverVersion()} />
+                    </div>
+                  </Show>
+                }
+              >
                 <div class="settings-servers-actions">
                   <Show when={signedOut(server())}>
                     {(http) => (
@@ -208,6 +239,94 @@ export function ServerConnectionRow(props: {
     >
       {(key) => <PluginServerRow server={key} controller={controller} />}
     </Show>
+  )
+}
+
+function LocalServerUpdateActions(props: { fallbackVersion?: string }) {
+  const language = useLanguage()
+  const platform = usePlatform()
+  const currentVer = () => props.fallbackVersion ?? (platform.version ?? "1.0.4").replace(/^v/i, "")
+  const [state, setState] = createSignal<SelfUpdateState>({
+    status: "idle",
+    currentVersion: currentVer(),
+  })
+
+  const runCheck = () => {
+    if (!platform.checkSelfUpdate) return
+    setState((prev) => ({ ...prev, status: "checking" }))
+    void platform
+      .checkSelfUpdate()
+      .then((next) => setState(next))
+      .catch(() => setState({ status: "offline", currentVersion: currentVer() }))
+  }
+
+  const runInstall = () => {
+    if (!platform.installSelfUpdate) return
+    void platform
+      .installSelfUpdate()
+      .then((next) => setState(next))
+      .catch(() => setState({ status: "offline", currentVersion: currentVer() }))
+  }
+
+  onMount(() => {
+    if (!platform.getSelfUpdateState) return
+    const unsub = platform.onSelfUpdateChanged?.((next) => setState(next))
+    if (unsub) onCleanup(unsub)
+    void platform
+      .getSelfUpdateState()
+      .then((initial) => {
+        setState(initial)
+        if (initial.status === "idle") runCheck()
+      })
+      .catch(() => runCheck())
+  })
+
+  return (
+    <>
+      <Show when={state().status === "idle" || state().status === "checking"}>
+        <Button size="small" variant="outline" disabled aria-busy={true}>
+          <Loader class="size-3.5" />
+          {language.tr("检测中…", "Checking…")}
+        </Button>
+      </Show>
+      <Show when={state().status === "downloading"}>
+        <Button size="small" variant="contrast" disabled aria-busy={true}>
+          <Loader class="size-3.5" />
+          {state().percent !== undefined
+            ? language.tr(`下载中 ${state().percent}%`, `Downloading ${state().percent}%`)
+            : language.tr("下载中…", "Downloading…")}
+        </Button>
+      </Show>
+      <Show when={state().status === "installing"}>
+        <Button size="small" variant="contrast" disabled aria-busy={true}>
+          <Loader class="size-3.5" />
+          {language.tr("升级中…", "Upgrading…")}
+        </Button>
+      </Show>
+      <Show when={state().status === "available"}>
+        <Button data-action="local-device-install-update" size="small" variant="contrast" onClick={runInstall}>
+          {language.tr(
+            `升级至 v${state().latestVersion ?? ""}`,
+            `Upgrade to v${state().latestVersion ?? ""}`,
+          )}
+        </Button>
+      </Show>
+      <Show when={state().status === "up-to-date"}>
+        <Button size="small" variant="ghost-muted" disabled>
+          {language.tr("已是最新", "Up to date")}
+        </Button>
+      </Show>
+      <Show when={state().status === "offline" || state().status === "error"}>
+        <Button data-action="local-device-retry-update" size="small" variant="outline" onClick={runCheck}>
+          {language.tr("网络不通，重试", "Offline, retry")}
+        </Button>
+      </Show>
+      <Show when={state().status === "microsoft-store"}>
+        <Button size="small" variant="outline" onClick={runInstall}>
+          {language.tr("打开商店", "Open Store")}
+        </Button>
+      </Show>
+    </>
   )
 }
 

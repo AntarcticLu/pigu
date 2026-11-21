@@ -1,0 +1,21 @@
+export default {
+  "tab.title": "Sandbox",
+  "tab.empty": "Sandbox",
+  "action.preview": "Preview in Sandbox",
+  "view.preview": "Preview",
+  "view.source": "Source",
+  "view.viewSource": "View source",
+  "view.viewPreview": "View preview",
+  "view.reload": "Reload preview",
+  "view.copy": "Copy code",
+  "view.download": "Download HTML",
+  "view.delete": "Remove preview",
+  "empty.title": "Interactive Sandbox",
+  "empty.description":
+    "Ask AI to create an interactive HTML, React (TSX/JSX), or SVG widget, or click the Preview button on any code block in chat.",
+  "error.title": "Runtime Error",
+  "error.quote": "Quote to Composer",
+  "error.fix": "Ask AI to Fix",
+  "error.dismiss": "Dismiss",
+  "quote.label": "Sandbox error",
+}

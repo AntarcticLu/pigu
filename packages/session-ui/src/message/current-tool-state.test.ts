@@ -18,7 +18,7 @@ describe("current tool state", () => {
     expect(currentToolMetadata(tool)).toEqual({})
   })
 
-  test("uses an empty input until streaming JSON is complete", () => {
+  test("uses an empty input until streaming JSON has a field value", () => {
     const tool = {
       type: "tool",
       id: "tool_partial",
@@ -28,6 +28,23 @@ describe("current tool state", () => {
     } satisfies SessionMessageAssistantTool
 
     expect(currentToolInput(tool)).toEqual({})
+  })
+
+  test("extracts in-progress string fields from partial streaming JSON", () => {
+    const tool = {
+      type: "tool",
+      id: "tool_patch_stream",
+      name: "patch",
+      state: {
+        status: "streaming",
+        input: '{"patchText":"*** Begin Patch\\n*** Add File: index.html\\n+<!DOCTYPE html>\\',
+      },
+      time,
+    } satisfies SessionMessageAssistantTool
+
+    expect(currentToolInput(tool)).toEqual({
+      patchText: "*** Begin Patch\n*** Add File: index.html\n+<!DOCTYPE html>",
+    })
   })
 
   test("preserves running input and metadata", () => {

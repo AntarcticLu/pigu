@@ -1043,12 +1043,25 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
   }
 
   const label = createMemo(() => [i18n.t(outcome()), usage()].filter(Boolean).join(" · "))
+  const nativeCliEngine = createMemo(() => {
+    const fromNative =
+      props.message.status === "completed" && typeof props.message.native?.cliEngine === "string"
+        ? props.message.native.cliEngine
+        : undefined
+    if (fromNative) return fromNative
+    return typeof props.message.metadata?.nativeCliEngine === "string"
+      ? props.message.metadata.nativeCliEngine
+      : undefined
+  })
+  const nativeCliSourceLabel = createMemo(() => formatNativeCliCompactionSource(nativeCliEngine(), i18n.locale()))
+  const isQuietNativeCliCompaction = () => props.message.status === "completed" && Boolean(nativeCliEngine())
   const isExternalCompaction = () => props.message.id.startsWith("msg_ext_") && props.message.status === "completed"
 
   return (
     <Show
       when={
         !isExternalCompaction() &&
+        !isQuietNativeCliCompaction() &&
         (!data.backgroundCompaction || props.message.reason === "manual" || props.message.status === "failed")
       }
       fallback={
@@ -1058,6 +1071,7 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
           running={props.message.status === "running"}
           summary={summary()}
           usage={usage()}
+          sourceLabel={nativeCliSourceLabel()}
         />
       }
     >
@@ -1100,11 +1114,37 @@ export function SessionCompactionMessage(props: { message: SessionMessageCompact
   )
 }
 
+function formatNativeCliCompactionSource(engine: string | undefined, locale: string): string | undefined {
+  if (!engine) return undefined
+  const isZh = locale.toLowerCase().startsWith("zh")
+  const names: Record<string, string> = {
+    agy: "Antigravity",
+    claude: "Claude",
+    codex: "Codex",
+    "deepseek-harness": "DSH",
+    dsh: "DSH",
+    opencode: "OpenCode",
+    pi: "Pi",
+    cursor: "Cursor",
+    grok: "Grok",
+    workbuddy: "WorkBuddy",
+  }
+  const display = names[engine] ?? engine
+  return isZh ? `${display} 原生` : display
+}
+
 /**
- * An automatic compaction, drawn as one divider that reads Compacting, then Compacted. Its height never changes, and
- * clicking it opens the summary.
+ * An automatic or native-CLI compaction, drawn as one divider that reads Compacting, then Compacted. Its height never
+ * changes, and clicking it opens the summary.
  */
-function QuietCompaction(props: { id: string; created: number; running: boolean; summary: string; usage: string }) {
+function QuietCompaction(props: {
+  id: string
+  created: number
+  running: boolean
+  summary: string
+  usage: string
+  sourceLabel?: string
+}) {
   const i18n = useI18n()
   const [open, setOpen] = createSignal(false)
   // A new one waits out the grace (400 ms, matched in session-compaction.css) before showing Compacting; one that
@@ -1119,9 +1159,15 @@ function QuietCompaction(props: { id: string; created: number; running: boolean;
 
   const expandable = () => !props.running && !!props.summary.trim()
 
-  const label = createMemo(() =>
-    splitEnding(i18n.t("ui.messagePart.compaction.running"), i18n.t("ui.messagePart.compaction.done")),
-  )
+  const label = createMemo(() => {
+    const runningText = props.sourceLabel
+      ? `${props.sourceLabel} · ${i18n.t("ui.messagePart.compaction.running")}`
+      : i18n.t("ui.messagePart.compaction.running")
+    const doneText = props.sourceLabel
+      ? `${props.sourceLabel} · ${i18n.t("ui.messagePart.compaction.done")}`
+      : i18n.t("ui.messagePart.compaction.done")
+    return splitEnding(runningText, doneText)
+  })
 
   createEffect(() => {
     if (!props.running && enter() === "grace" && performance.now() - mounted < 400) setEnter("now")

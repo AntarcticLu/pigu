@@ -1395,6 +1395,7 @@ export const protocol = Protocol.make({
     }),
     step: (state: ParserState, event) => (event === DONE ? Effect.succeed([state, []] as const) : step(state, event)),
     terminal: (event) => event === DONE,
+    settled: (state) => state.finishReason !== undefined,
     onHalt: finishEvents,
   },
 })

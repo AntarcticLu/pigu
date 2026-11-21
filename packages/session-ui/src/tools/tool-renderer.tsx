@@ -42,7 +42,7 @@ import { Dialog, DialogBody, DialogHeader, DialogTitle } from "@opencode/ui/dial
 import { IconButton } from "@opencode/ui/icon-button"
 import { TextShimmer } from "@opencode/ui/text-shimmer"
 import { AnimatedNumber } from "@opencode/ui/animated-number"
-import { changedFileDiff, patchFileGroups } from "../components/apply-patch-file"
+import { changedFileDiff, patchFileGroups, previewPatchText } from "../components/apply-patch-file"
 import { animate } from "@kitlangton/solid-motion"
 import { SessionProgressIndicatorV2 } from "../v2/components/session-progress-indicator-v2"
 import type {
@@ -132,6 +132,7 @@ const toolInput = Schema.decodeUnknownSync(
     oldString: optional(Schema.String),
     newString: optional(Schema.String),
     content: optional(Schema.String),
+    patchText: optional(Schema.String),
     id: optional(Schema.String),
     name: optional(Schema.String),
     questions: optional(Schema.Array(Schema.Unknown)),
@@ -672,8 +673,8 @@ export function CurrentContextToolGroup(props: {
                             id={part().id}
                             content={part()}
                             streaming={part().streaming ?? false}
-                            // The group already reads as Thinking, so opening it shows the thoughts themselves.
-                            defaultOpen={thinking() || props.reasoningDefaultOpen}
+                            // Keep actively streaming thoughts open even after earlier tools ran in this group.
+                            defaultOpen={Boolean(part().streaming) || thinking() || props.reasoningDefaultOpen}
                             open={props.reasoningOpen?.(part().id)}
                             onOpenChange={(open) => props.onReasoningOpenChange?.(part().id, open)}
                             onContentRendered={props.onSizeChange}
@@ -953,9 +954,38 @@ export function CurrentFileToolGroup(props: {
         )
       const input = toolInput(currentToolInput(tool))
 
+      if (tool.name === "patch" && input.patchText) {
+        return previewPatchText(input.patchText).diffs.map((value, index) => ({
+          key: `${tool.id}:${index}`,
+          toolID: tool.id,
+          value,
+        }))
+      }
+
       if (input.path === undefined) return []
 
       if (tool.name === "edit" && input.oldString !== undefined && input.newString !== undefined) {
+        const streamingLarge =
+          tool.state.status === "streaming" && input.oldString.length + input.newString.length > 4_000
+
+        if (streamingLarge) {
+          const oldLines = input.oldString.split("\n")
+          const newLines = input.newString.split("\n")
+          return [
+            {
+              key: `${tool.id}:0`,
+              toolID: tool.id,
+              value: {
+                file: input.path,
+                patch: `--- a/${input.path}\n+++ b/${input.path}\n@@ -1,${oldLines.length} +1,${newLines.length} @@\n${oldLines.map((line) => `-${line}`).join("\n")}\n${newLines.map((line) => `+${line}`).join("\n")}\n`,
+                additions: newLines.length,
+                deletions: oldLines.length,
+                status: "modified" as const,
+              },
+            },
+          ]
+        }
+
         const changes = diffLines(input.oldString, input.newString)
 
         const additions = changes
@@ -985,14 +1015,21 @@ export function CurrentFileToolGroup(props: {
 
       if (tool.name !== "write" || !input.content) return []
 
+      const writeLines = input.content.replaceAll("\r\n", "\n").split("\n")
+      const trimmedLines =
+        writeLines.length > 1 && writeLines.at(-1) === "" ? writeLines.slice(0, -1) : writeLines
+
       return [
         {
           key: `${tool.id}:0`,
           toolID: tool.id,
           value: {
             file: input.path,
-            patch: createTwoFilesPatch(input.path, input.path, "", input.content),
-            additions: input.content.split("\n").length - Number(input.content.endsWith("\n")),
+            patch:
+              tool.state.status === "streaming"
+                ? `--- a/${input.path}\n+++ b/${input.path}\n@@ -0,0 +1,${trimmedLines.length} @@\n${trimmedLines.map((line) => `+${line}`).join("\n")}\n`
+                : createTwoFilesPatch(input.path, input.path, "", input.content),
+            additions: Math.max(1, trimmedLines.length),
             deletions: 0,
             status: "modified" as const,
           },
@@ -1025,6 +1062,23 @@ export function CurrentFileToolGroup(props: {
     files: files().map((entry) => entry.value),
   }))
 
+  const pendingFiles = createMemo(() => {
+    if (files().length > 0) return undefined
+    const paths = props.tools.flatMap((tool) => {
+      const meta = toolMetadata(currentToolMetadata(tool)).files ?? []
+      if (meta.length > 0) return []
+      const input = toolInput(currentToolInput(tool))
+      if (tool.name === "patch") {
+        return input.patchText ? previewPatchText(input.patchText).pendingFiles : []
+      }
+      if ((tool.name === "edit" || tool.name === "write") && input.path) {
+        return [input.path]
+      }
+      return []
+    })
+    return paths.length > 0 ? [...new Set(paths)] : undefined
+  })
+
   const pending = createMemo(() =>
     props.tools.some((tool) => tool.state.status === "streaming" || tool.state.status === "running"),
   )
@@ -1046,8 +1100,9 @@ export function CurrentFileToolGroup(props: {
       <Dynamic
         component={render}
         tool={tool()}
-        input={{}}
+        input={props.tools.length === 1 ? currentToolInput(props.tools[0]!) : {}}
         metadata={metadata()}
+        pendingFiles={pendingFiles()}
         status={pending() ? "running" : "completed"}
         fileOpen={props.fileOpen}
         onFileOpenChange={props.onFileOpenChange}
@@ -1165,7 +1220,7 @@ export const ToolRegistry = {
   render: getTool,
 }
 
-function FileTool(props: ToolProps & { title: string; count: number; children?: JSX.Element }) {
+function FileTool(props: ToolProps & { title: string; count: number; subtitle?: string; children?: JSX.Element }) {
   const i18n = useI18n()
 
   return (
@@ -1180,7 +1235,8 @@ function FileTool(props: ToolProps & { title: string; count: number; children?: 
       rail={false}
       trigger={{
         title: props.title,
-        subtitle: props.count > 0 ? `${props.count} ${i18n.plural("ui.common.file", props.count)}` : "",
+        subtitle:
+          props.subtitle ?? (props.count > 0 ? `${props.count} ${i18n.plural("ui.common.file", props.count)}` : ""),
       }}
     >
       {props.children}
@@ -2446,14 +2502,24 @@ ToolRegistry.register({
 ToolRegistry.register({
   name: "write",
   render(props) {
+    const i18n = useI18n()
     const fileComponent = useFileComponent()
     const path = createMemo(() => toolInput(props.input).path ?? "")
     const content = createMemo(() => toolInput(props.input).content ?? "")
+    const pending = () => props.status === "streaming" || props.status === "running"
+    const additions = createMemo(() => {
+      const value = content()
+      if (!value) return 0
+      return Math.max(1, value.split("\n").length - Number(value.endsWith("\n")))
+    })
     const diagnostics = createMemo(() => getDiagnostics(toolMetadata(props.metadata).diagnostics, path()))
 
     return (
       <div data-component="write-tool">
-        <Show when={content() && path()}>
+        <Show
+          when={path()}
+          fallback={<FileTool {...props} title={i18n.t("ui.messagePart.title.write")} count={0} />}
+        >
           <ToolFileAccordion
             path={path()}
             defaultOpen={props.defaultOpen}
@@ -2461,20 +2527,27 @@ ToolRegistry.register({
             onOpenChange={props.onOpenChange}
             forceOpen={props.forceOpen}
             defer={props.deferContent !== false}
+            actions={
+              <Show when={pending() && additions() > 0}>
+                <DiffChanges appearance="standard" changes={{ additions: additions(), deletions: 0 }} />
+              </Show>
+            }
           >
-            <div data-component="write-content">
-              <Dynamic
-                component={fileComponent}
-                mode="text"
-                file={{
-                  name: path(),
-                  contents: content(),
-                  cacheKey: checksum(content()),
-                }}
-                overflow="scroll"
-                onRendered={props.onContentRendered}
-              />
-            </div>
+            <Show when={content()}>
+              <div data-component="write-content">
+                <Dynamic
+                  component={fileComponent}
+                  mode="text"
+                  file={{
+                    name: path(),
+                    contents: content(),
+                    cacheKey: checksum(content()),
+                  }}
+                  overflow="scroll"
+                  onRendered={props.onContentRendered}
+                />
+              </div>
+            </Show>
           </ToolFileAccordion>
         </Show>
         <DiagnosticsDisplay diagnostics={diagnostics()} />
@@ -2489,16 +2562,34 @@ ToolRegistry.register({
     const i18n = useI18n()
     const fileComponent = useFileComponent()
 
-    const files = createMemo(
-      () =>
-        props.pendingFiles?.map((path) => ({
+    const pending = () => props.status === "streaming" || props.status === "running"
+
+    const files = createMemo(() => {
+      if (props.pendingFiles) {
+        return props.pendingFiles.map((path) => ({
           path,
           type: "update" as const,
           additions: 0,
           deletions: 0,
           views: [],
-        })) ?? patchFileGroups(props.metadata.files),
-    )
+        }))
+      }
+      const fromMeta = patchFileGroups(props.metadata.files)
+      if (fromMeta.length > 0) return fromMeta
+      const patchText = toolInput(props.input).patchText
+      if (!patchText) return []
+      const preview = previewPatchText(patchText)
+      return [
+        ...patchFileGroups(preview.diffs),
+        ...preview.pendingFiles.map((path) => ({
+          path,
+          type: "update" as const,
+          additions: 0,
+          deletions: 0,
+          views: [],
+        })),
+      ]
+    })
 
     const title = createMemo(() => {
       if (props.tool === "edit") return i18n.t("ui.messagePart.title.edit")
@@ -2508,9 +2599,17 @@ ToolRegistry.register({
       return i18n.t("ui.tool.patch")
     })
 
+    const streamingSubtitle = createMemo(() => {
+      if (!pending()) return undefined
+      return i18n.locale().toLowerCase().startsWith("zh") ? "正在生成补丁…" : "Generating patch…"
+    })
+
     return (
       <div data-component="apply-patch-tool">
-        <Show when={files().length > 0} fallback={<FileTool {...props} title={title()} count={0} />}>
+        <Show
+          when={files().length > 0}
+          fallback={<FileTool {...props} title={title()} count={0} subtitle={streamingSubtitle()} />}
+        >
           <FileAccordionGroup>
             <Index each={files()}>
               {(file) => {
@@ -2543,6 +2642,12 @@ ToolRegistry.register({
                               <span data-slot="apply-patch-change" data-type="added">
                                 {i18n.t("ui.patch.action.created")}
                               </span>
+                              <Show when={pending() && file().additions > 0}>
+                                <DiffChanges
+                                  appearance="standard"
+                                  changes={{ additions: file().additions, deletions: 0 }}
+                                />
+                              </Show>
                             </Match>
                             <Match when={file().type === "delete"}>
                               <span data-slot="apply-patch-change" data-type="removed">

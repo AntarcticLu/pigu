@@ -32,4 +32,9 @@ export default {
   "form.namePlaceholder": "Localhost",
   "form.add": "添加服务器",
   "menu.delete": "删除",
+  "update.checking": "检测中…",
+  "update.upgrading": "升级中…",
+  "update.available": "升级至 v{{version}}",
+  "update.latest": "已是最新",
+  "update.offlineRetry": "网络不通，重试",
 }

@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test"
 import { createTwoFilesPatch } from "diff"
-import { patchFile, patchFileGroups, patchFiles } from "./apply-patch-file"
+import { patchFile, patchFileGroups, patchFiles, previewPatchText } from "./apply-patch-file"
 import { text } from "./session-diff"
 
 describe("apply patch files", () => {
@@ -166,5 +166,35 @@ describe("apply patch files", () => {
     expect(groups[0]!.views).toHaveLength(1)
     expect(text(groups[0]!.views[0]!, "deletions")).toBe(before)
     expect(text(groups[0]!.views[0]!, "additions")).toBe(after)
+  })
+
+  test("previews streaming patchText before tool completion", () => {
+    const headerOnly = previewPatchText("*** Begin Patch\n*** Add File: demo/index.html\n")
+    expect(headerOnly).toEqual({
+      diffs: [],
+      pendingFiles: ["demo/index.html"],
+    })
+
+    const streamingAdd = previewPatchText(
+      "*** Begin Patch\n*** Add File: demo/index.html\n+<!DOCTYPE html>\n+<html>\n+<body>Demo</body>\n*** Add File: demo/sty",
+    )
+
+    expect(streamingAdd.pendingFiles).toEqual([])
+    expect(streamingAdd.diffs).toHaveLength(1)
+    expect(streamingAdd.diffs[0]).toMatchObject({
+      file: "demo/index.html",
+      status: "added",
+      additions: 3,
+      deletions: 0,
+    })
+
+    const groups = patchFileGroups(streamingAdd.diffs)
+    expect(groups).toHaveLength(1)
+    expect(groups[0]).toMatchObject({
+      path: "demo/index.html",
+      type: "add",
+      additions: 3,
+      deletions: 0,
+    })
   })
 })

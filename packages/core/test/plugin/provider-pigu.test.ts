@@ -1,4 +1,5 @@
 import fsSync from "node:fs"
+import os from "node:os"
 import path from "node:path"
 import { describe, expect, test } from "bun:test"
 import { Effect, Fiber } from "effect"
@@ -39,6 +40,7 @@ import {
   extractAgyLatestCheckpointSummary,
   extractClaudeLatestCompactSummary,
   extractPromptTurns,
+  isAgyCliSession,
   parseCodexLastStepUsageLines,
   resolveCodexReviewInvocation,
   type StepUsageAccumulator,
@@ -1482,5 +1484,21 @@ describe("PiguProviderPlugin", () => {
       outputTokens: 512,
       reasoningTokens: 256,
     })
+
+    const agyHome = fsSync.mkdtempSync(path.join(os.tmpdir(), "pigu-agy-cli-"))
+    try {
+      const convDir = path.join(agyHome, ".gemini", "antigravity-cli", "conversations")
+      fsSync.mkdirSync(convDir, { recursive: true })
+      expect(isAgyCliSession(agyHome, "220ab5f8-5fbe-43b4-a9f4-f899f575097e")).toBe(false)
+
+      // Linux agy 1.5.12+ stores conversation state as `.db` instead of `.pb`
+      fsSync.writeFileSync(path.join(convDir, "220ab5f8-5fbe-43b4-a9f4-f899f575097e.db"), "sqlite")
+      expect(isAgyCliSession(agyHome, "220ab5f8-5fbe-43b4-a9f4-f899f575097e")).toBe(true)
+
+      fsSync.writeFileSync(path.join(convDir, "legacy-session.pb"), "proto")
+      expect(isAgyCliSession(agyHome, "legacy-session")).toBe(true)
+    } finally {
+      fsSync.rmSync(agyHome, { recursive: true, force: true })
+    }
   })
 })

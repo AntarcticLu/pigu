@@ -2862,4 +2862,288 @@ describe("end-to-end chained mini-task workflow (isolated sandbox)", () => {
       await server.stop(true)
     }
   })
+
+  test("aligns mobile project filtering with desktop rules while keeping active $HOME and bound directories", () => {
+    expect(Mobile.normalizeMobileProjectDir("/Volumes/AntL/pigu/pigu///")).toBe("/Volumes/AntL/pigu/pigu")
+    expect(Mobile.normalizeMobileProjectDir("C:\\Users\\al\\proj\\")).toBe("c:/Users/al/proj")
+
+    // Active real user home directories stay visible
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/home/lsy", 61, {
+        isTestRuntime: false,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(false)
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/Users/al", 2, {
+        isTestRuntime: false,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(false)
+
+    // Bare container roots, dot-config folders, temp folders, and 0-session fallback dirs are excluded
+    for (const dir of ["/", "/Users", "/home", "/Volumes", "C:\\", "C:\\Users"]) {
+      expect(Mobile.isMobileNoiseProjectDirectory(dir, 5, { isTestRuntime: false, hasSessionTelemetry: true })).toBe(
+        true,
+      )
+    }
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/Users/al/.config/opencode", 3, {
+        isTestRuntime: false,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(true)
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/Users/al/.gemini/antigravity/brain/scratch", 1, {
+        isTestRuntime: false,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(true)
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/home/lsy/.pigu/projects/历史会话", 0, {
+        isTestRuntime: false,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(true)
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/Users/al/.pigu/projects/gen_video", 41, {
+        isTestRuntime: false,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(false)
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/Volumes/AntL/test_temp", 2, {
+        isTestRuntime: false,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(true)
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/Volumes/AntL/my_voice", 0, {
+        isTestRuntime: false,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(true)
+    expect(
+      Mobile.isMobileNoiseProjectDirectory("/Volumes/AntL/my_voice", 0, {
+        isTestRuntime: false,
+        isBound: true,
+        hasSessionTelemetry: true,
+      }),
+    ).toBe(false)
+
+    expect(Mobile.formatCompactionSourceBadge("agy")).toBe("Antigravity 原生 · 已压缩")
+    expect(Mobile.formatCompactionSourceBadge("claude")).toBe("Claude 原生 · 已压缩")
+    expect(Mobile.formatCompactionSourceBadge("codex")).toBe("Codex 原生 · 已压缩")
+    expect(Mobile.formatCompactionSourceBadge("deepseek-harness")).toBe("DSH 原生 · 已压缩")
+  })
+
+  it.live(
+    "deduplicates projects, floats active $HOME (lsy) to #1, shows server version & session counts, and compacts via .compact / /compact",
+    () =>
+      Effect.gen(function* () {
+        const mobile = yield* Mobile.Service
+        let compactCalls = 0
+        const lsyMessages: Array<{
+          id: string
+          type: string
+          text?: string
+          summary?: string
+          native?: { cliEngine?: string }
+          content?: Array<{ type: string; text?: string }>
+        }> = [
+          {
+            id: "msg_comp_1",
+            type: "compaction",
+            summary: "已完成服务端 SSH 热更新与 $HOME 会话归属修复。",
+            native: { cliEngine: "agy" },
+          },
+          { id: "msg_u_1", type: "user", text: "继续验证手机端项目顺序" },
+          {
+            id: "msg_a_1",
+            type: "assistant",
+            content: [{ type: "text", text: "手机端已与桌面端保持完全一致。" }],
+          },
+        ]
+
+        const remoteServer = Bun.serve({
+          port: 0,
+          hostname: "127.0.0.1",
+          fetch(req) {
+            const u = new URL(req.url)
+            if (u.pathname === "/api/info") {
+              return Response.json({ version: "1.0.4", pid: 1234, urls: [], paths: { tmp: "/tmp" } })
+            }
+            if (u.pathname === "/api/project") {
+              return Response.json([
+                // Duplicate rows for the same directory + empty 历史会话 + dot-config junk
+                {
+                  id: "proj_moe_1",
+                  name: "moe-vm2api",
+                  canonical: "/home/lsy/code/moe-vm2api",
+                  time: { updated: 1_760_000_010_000 },
+                },
+                {
+                  id: "proj_moe_dup",
+                  name: "moe-vm2api",
+                  canonical: "/home/lsy/code/moe-vm2api/",
+                  time: { updated: 1_760_000_005_000 },
+                },
+                {
+                  id: "proj_legacy_empty",
+                  name: "历史会话",
+                  canonical: "/home/lsy/.pigu/projects/历史会话",
+                  time: { updated: 1_760_999_999_000 },
+                },
+                {
+                  id: "proj_dot_cfg",
+                  name: "opencode",
+                  canonical: "/home/lsy/.config/opencode",
+                  time: { updated: 1_760_999_999_000 },
+                },
+              ])
+            }
+            if (u.pathname === "/api/session" && req.method === "GET") {
+              const projParam = u.searchParams.get("project")
+              const dirParam = u.searchParams.get("directory")
+              const allRemote = [
+                {
+                  id: "ses_ext_agy_lsy_1",
+                  projectID: "global",
+                  title: "Pigu Chat Bug Feedback",
+                  location: { directory: "/home/lsy" },
+                  model: { providerID: "local/agy", id: "gemini-3-pro" },
+                  time: { updated: 1_760_500_000_000 },
+                },
+                {
+                  id: "ses_ext_agy_lsy_2",
+                  projectID: "global",
+                  title: "LSY 历史排查",
+                  location: { directory: "/home/lsy" },
+                  model: { providerID: "local/agy", id: "gemini-3-pro" },
+                  time: { updated: 1_760_400_000_000 },
+                },
+                {
+                  id: "ses_moe_1",
+                  projectID: "proj_moe_1",
+                  title: "MOE 接口优化",
+                  location: { directory: "/home/lsy/code/moe-vm2api" },
+                  model: { providerID: "local/claude", id: "claude-sonnet-4-5" },
+                  time: { updated: 1_760_100_000_000 },
+                },
+              ]
+              const filtered = allRemote.filter((s) => {
+                if (dirParam) return s.location.directory === dirParam
+                if (projParam) return s.projectID === projParam
+                return true
+              })
+              return Response.json({ data: filtered })
+            }
+            if (u.pathname === "/api/session/ses_ext_agy_lsy_1" && req.method === "GET") {
+              return Response.json({
+                data: {
+                  id: "ses_ext_agy_lsy_1",
+                  title: "Pigu Chat Bug Feedback",
+                  model: { providerID: "local/agy", id: "gemini-3-pro" },
+                },
+              })
+            }
+            if (u.pathname === "/api/session/ses_ext_agy_lsy_1/context" && req.method === "GET") {
+              return Response.json({ data: lsyMessages })
+            }
+            if (u.pathname === "/api/session/ses_ext_agy_lsy_1/compact" && req.method === "POST") {
+              compactCalls += 1
+              lsyMessages.push({
+                id: `msg_comp_live_${compactCalls}`,
+                type: "compaction",
+                summary: `第 ${compactCalls} 次远程原生压缩完成：保留核心上下文。`,
+                native: { cliEngine: "agy" },
+              })
+              return Response.json({ data: { id: `inb_comp_${compactCalls}`, type: "compaction" } })
+            }
+            if (u.pathname === "/api/experimental/session/ses_ext_agy_lsy_1/wait" && req.method === "POST") {
+              return new Response(null, { status: 204 })
+            }
+            if (u.pathname === "/api/session/active") {
+              return Response.json({ data: {} })
+            }
+            if (u.pathname === "/api/model/default") {
+              return Response.json({ data: { providerID: "local/agy", id: "gemini-3-pro" } })
+            }
+            return new Response("Not Found", { status: 404 })
+          },
+        })
+        yield* Effect.addFinalizer(() => Effect.sync(() => remoteServer.stop(true)))
+
+        const bot = yield* mobile.create({
+          name: "手机端LSY对齐验证机器人",
+          platform: "weixin",
+          enabled: false,
+          ownerID: "wx_lsy_owner",
+          weixin: { token: "wx_tok_lsy", accountId: "wx_lsy_bot@im.bot" },
+        })
+
+        yield* mobile.syncRemotes([
+          { key: "ssh:lsy", name: "lsy", url: `http://127.0.0.1:${remoteServer.port}` },
+        ])
+
+        // 1. `.p` shows SSH:lsy version `v1.0.4`, floats `2.1 lsy` (2 sessions) above `2.2 moe-vm2api` (deduped to 1!), and hides empty 历史会话 & .config
+        const pRes = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "wx_lsy_owner",
+          chatId: "wx_lsy_chat",
+          text: ".p",
+        })
+        const pMd = renderCardMarkdownFallback(pRes.cards[0]!)
+        expect(pMd).toContain("#2 SSH:lsy")
+        expect(pMd).toContain("`v1.0.4`")
+        expect(pMd).toContain("共 2 个项目")
+        expect(pMd).toContain("2.1 lsy")
+        expect(pMd).toContain("2 会话")
+        expect(pMd).toContain("2.2 moe-vm2api")
+        expect(pMd).not.toContain("历史会话")
+        expect(pMd).not.toContain(".config")
+
+        // 2. Switch to `2.1` (`lsy`) -> binds directly to `Pigu Chat Bug Feedback`
+        const swLsy = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "wx_lsy_owner",
+          chatId: "wx_lsy_chat",
+          text: ".p 2.1",
+        })
+        const swMd = renderCardMarkdownFallback(swLsy.cards[0]!)
+        expect(swMd).toContain("Pigu Chat Bug Feedback")
+
+        // 3. `.history` renders `Antigravity 原生 · 已压缩` badge and summary
+        const histRes = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "wx_lsy_owner",
+          chatId: "wx_lsy_chat",
+          text: ".history",
+        })
+        const histMd = renderCardMarkdownFallback(histRes.cards[0]!)
+        expect(histMd).toContain("Antigravity 原生 · 已压缩")
+        expect(histMd).toContain("已完成服务端 SSH 热更新")
+
+        // 4. Both `.compact` and `/compact` trigger real session compaction and return the source-badged card
+        const compDot = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "wx_lsy_owner",
+          chatId: "wx_lsy_chat",
+          text: ".compact",
+        })
+        expect(compactCalls).toBe(1)
+        expect(compDot.cards[0]?.header?.title).toContain("Antigravity 原生 · 已压缩")
+        expect(renderCardMarkdownFallback(compDot.cards[0]!)).toContain("第 1 次远程原生压缩完成")
+
+        const compSlash = yield* mobile.simulateInbound({
+          robotId: bot.id,
+          userId: "wx_lsy_owner",
+          chatId: "wx_lsy_chat",
+          text: "/compact",
+        })
+        expect(compactCalls).toBe(2)
+        expect(compSlash.cards[0]?.header?.title).toContain("Antigravity 原生 · 已压缩")
+        expect(renderCardMarkdownFallback(compSlash.cards[0]!)).toContain("第 2 次远程原生压缩完成")
+      }),
+  )
 })

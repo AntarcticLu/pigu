@@ -110,20 +110,19 @@ function makeMessageID(sessionID: SessionSchema.ID, seq: number) {
   return SessionMessage.ID.make(`msg_ext_${Hash.fast(`${sessionID}:${seq}`)}_${seqTag}`)
 }
 
-function isHomeOrRoot(dir: string, home: string): boolean {
+function isFilesystemContainerRoot(dir: string): boolean {
   const norm = dir.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase()
-  const normHome = home.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase()
   if (!norm || norm === "/" || /^[a-z]:$/i.test(norm)) return true
-  if (norm === normHome) return true
   if (norm === "/users" || norm === "/home" || norm === "/volumes" || /^[a-z]:\/users$/i.test(norm)) return true
   return false
 }
 
 function isGenericFallbackRoot(dir: string, home: string): boolean {
-  if (isHomeOrRoot(dir, home)) return true
+  if (isFilesystemContainerRoot(dir)) return true
   const norm = dir.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase()
   const normHome = home.replaceAll("\\", "/").replace(/\/+$/, "").toLowerCase()
   return (
+    norm === normHome ||
     norm === `${normHome}/desktop` ||
     norm === `${normHome}/documents` ||
     norm === `${normHome}/downloads`
@@ -139,7 +138,7 @@ const resolveExistingDir = Effect.fnUntraced(function* (
   if (!normalized) return undefined
 
   const initial = path.resolve(normalized)
-  if (!isHomeOrRoot(initial, home) && (yield* fs.isDir(initial))) {
+  if (!isFilesystemContainerRoot(initial) && (yield* fs.isDir(initial))) {
     return initial
   }
 
@@ -163,7 +162,7 @@ const resolveExistingDir = Effect.fnUntraced(function* (
 
 function ensureFallbackProjectDir(home: string, candidate: string): string {
   const normalized = normalizeCandidatePath(candidate)
-  const rawBase = normalized && !isHomeOrRoot(normalized, home) ? path.basename(normalized) : ""
+  const rawBase = normalized && !isFilesystemContainerRoot(normalized) ? path.basename(normalized) : ""
   const cleanBase = rawBase.replace(/^[._-]+/, "").replace(/[<>:"/\\|?*\x00-\x1f]+/g, "-").trim()
   const folderName = cleanBase && !/^(temp|tmp|t)$/i.test(cleanBase) ? cleanBase : "历史会话"
   const dir = path.join(home, ".pigu", "projects", folderName)
@@ -225,7 +224,7 @@ function extractPathsFromText(sample: string, home: string): string | undefined 
     const candidate = match?.[1]?.trim()
     if (candidate) {
       const normalized = normalizeCandidatePath(candidate)
-      if (normalized && !isGenericFallbackRoot(normalized, home)) return normalized
+      if (normalized && !isFilesystemContainerRoot(normalized)) return normalized
     }
   }
 
@@ -1806,6 +1805,12 @@ function entryToMessageRow(input: {
         status: "completed",
         reason: input.entry.reason,
         summary: input.entry.summary,
+        native: {
+          cliEngine: input.source,
+        },
+        metadata: {
+          nativeCliEngine: input.source,
+        },
         ...(input.entry.tokens
           ? {
               tokens: {
@@ -2490,7 +2495,11 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
       }
     }
 
-    const effectiveUpdated = Math.floor(mtime > 0 && row.time_updated > mtime + 60_000 ? mtime : row.time_updated)
+    const syncedMtime = typeof meta.syncedMtimeMs === "number" && meta.syncedMtimeMs > 0 ? meta.syncedMtimeMs : 0
+    const knownMtime = mtime > 0 ? mtime : syncedMtime
+    const effectiveUpdated = Math.floor(
+      knownMtime > 0 && row.time_updated > knownMtime + 60_000 ? knownMtime : row.time_updated,
+    )
     if (effectiveUpdated !== row.time_updated) {
       yield* input.db
         .update(SessionTable)
@@ -2513,14 +2522,43 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
       if (matchedSource) {
         yield* input.db
           .update(SessionTable)
-          .set({ model: localModelForSource(matchedSource) })
+          .set({ model: localModelForSource(matchedSource), time_updated: effectiveUpdated })
           .where(eq(SessionTable.id, row.id))
           .run()
           .pipe(Effect.ignoreCause)
       }
     }
 
-    if (isHomeOrRoot(row.directory, home) || !(yield* input.fs.isDir(row.directory))) {
+    const originalCwd = asString(meta.originalCwd)
+    const isFallbackRow = normalizeDirKey(row.directory).includes("/.pigu/projects/")
+    if (isFallbackRow && originalCwd) {
+      const restoredDir = yield* resolveExistingDir(input.fs, originalCwd, home)
+      if (restoredDir && !deletedProjectDirs.has(normalizeDirKey(restoredDir))) {
+        const restoredProject = yield* resolveProjectForDir(restoredDir, effectiveUpdated)
+        if (!deletedProjectDirs.has(normalizeDirKey(restoredProject.canonical))) {
+          const restoredSubpath = RelativePath.make(
+            path.relative(restoredProject.directory, restoredDir).replaceAll("\\", "/"),
+          )
+          const cleanedMeta = Object.fromEntries(Object.entries(meta).filter(([key]) => key !== "originalCwd"))
+          yield* input.db
+            .update(SessionTable)
+            .set({
+              project_id: restoredProject.id,
+              directory: AbsolutePath.make(restoredDir),
+              path: restoredSubpath,
+              metadata: cleanedMeta,
+              time_updated: effectiveUpdated,
+            })
+            .where(eq(SessionTable.id, row.id))
+            .run()
+            .pipe(Effect.ignoreCause)
+          recordProjectActivity(restoredProject.id, effectiveUpdated)
+          continue
+        }
+      }
+    }
+
+    if (isFilesystemContainerRoot(row.directory) || !(yield* input.fs.isDir(row.directory))) {
       const fallbackDir = ensureFallbackProjectDir(home, row.directory)
       const project = yield* resolveProjectForDir(fallbackDir, effectiveUpdated)
       const subpath = RelativePath.make(path.relative(project.directory, fallbackDir).replaceAll("\\", "/"))
@@ -2530,6 +2568,7 @@ const runSyncInternal = Effect.fn("SessionExternal.runSyncInternal")(function* (
           project_id: project.id,
           directory: AbsolutePath.make(fallbackDir),
           path: subpath,
+          time_updated: effectiveUpdated,
         })
         .where(eq(SessionTable.id, row.id))
         .run()

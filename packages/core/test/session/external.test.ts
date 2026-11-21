@@ -18,7 +18,7 @@ import { SessionExternalParse } from "@opencode/core/session/external-parse"
 import { SessionMessage } from "@opencode/core/session/message"
 import { SessionProjector } from "@opencode/core/session/projector"
 import { toLLMMessages } from "@opencode/core/session/runner/to-llm-message"
-import { SessionMessageTable } from "@opencode/core/session/sql"
+import { SessionMessageTable, SessionTable } from "@opencode/core/session/sql"
 import { SessionStore } from "@opencode/core/session/store"
 import { AbsolutePath } from "@opencode/core/schema"
 import { Agent } from "@opencode/schema/agent"
@@ -1754,6 +1754,95 @@ describe("SessionExternal rich import, compaction, and lazy backfill", () => {
               const txt = latestAsst.content.find((p) => p.type === "text")
               expect(txt?.type === "text" ? txt.text : "").toBe("已收到外部追加暗号 ONYX-88。")
             }
+          }),
+        )
+      }),
+  )
+
+  it.live(
+    "preserves external sessions started in $HOME (e.g. /home/lsy) and heals legacy rows misfiled under 历史会话",
+    () =>
+      Effect.gen(function* () {
+        const tmp = yield* tmpdirScoped("ext-home-lsy-")
+        const home = path.join(tmp.path, "lsy")
+        const agyCliRoot = path.join(home, ".gemini", "antigravity-cli")
+        const convID = "3de4bcfa-73ce-4710-a0bf-d6e489509edc"
+        const logDir = path.join(agyCliRoot, "brain", convID, ".system_generated", "logs")
+
+        yield* Effect.promise(async () => {
+          await fs.mkdir(logDir, { recursive: true })
+          const summaryDbPath = path.join(agyCliRoot, "conversation_summaries.db")
+          const sqlite = new SqliteDatabase(summaryDbPath)
+          sqlite.exec(
+            "CREATE TABLE conversation_summaries (conversation_id TEXT PRIMARY KEY, title TEXT, preview TEXT, workspace_uris TEXT, last_modified_time TEXT);",
+          )
+          sqlite
+            .prepare(
+              "INSERT INTO conversation_summaries (conversation_id, title, preview, workspace_uris, last_modified_time) VALUES (?, ?, ?, ?, ?)",
+            )
+            .run(
+              convID,
+              "Pigu Chat Bug Feedback",
+              "现在了解一下pigu chat",
+              JSON.stringify([`file://${home}`]),
+              "2026-11-19T16:50:29Z",
+            )
+          sqlite.close()
+
+          const transcriptLines = [
+            JSON.stringify({
+              step_index: 0,
+              type: "USER_INPUT",
+              source: "USER_EXPLICIT",
+              created_at: "2026-11-19T15:22:25Z",
+              content: "<USER_REQUEST>\n现在了解一下pigu chat，又有用户反馈出现bug了\n</USER_REQUEST>",
+            }),
+            JSON.stringify({
+              step_index: 1,
+              type: "PLANNER_RESPONSE",
+              source: "MODEL",
+              created_at: "2026-11-19T15:22:30Z",
+              content: "正在排查 pigu chat 相关服务。",
+            }),
+          ]
+          await fs.writeFile(path.join(logDir, "transcript.jsonl"), `${transcriptLines.join("\n")}\n`, "utf8")
+        })
+
+        yield* withTestHome(
+          home,
+          Effect.gen(function* () {
+            const session = yield* Session.Service
+            const database = yield* Database.Service
+            const expectedID = SessionExternal.makeSessionID("agy", convID)
+
+            const firstList = yield* session.list({ limit: 20 })
+            const imported = firstList.data.find((item) => item.id === expectedID)
+            expect(imported).toBeDefined()
+            expect(imported?.location.directory).toBe(AbsolutePath.make(home))
+            expect(imported?.title).toBe("Pigu Chat Bug Feedback")
+
+            // Simulate a legacy row previously redirected into ~/.pigu/projects/历史会话 with originalCwd = home
+            const fallbackDir = path.join(home, ".pigu", "projects", "历史会话")
+            yield* Effect.promise(() => fs.mkdir(fallbackDir, { recursive: true }))
+            const existingRow = yield* database.db
+              .select({ metadata: SessionTable.metadata })
+              .from(SessionTable)
+              .where(eq(SessionTable.id, expectedID))
+              .get()
+            yield* database.db
+              .update(SessionTable)
+              .set({
+                directory: AbsolutePath.make(fallbackDir),
+                metadata: { ...(existingRow?.metadata ?? {}), originalCwd: home },
+              })
+              .where(eq(SessionTable.id, expectedID))
+              .run()
+
+            SessionExternal.resetForTesting()
+            const healedList = yield* session.list({ limit: 20 })
+            const healed = healedList.data.find((item) => item.id === expectedID)
+            expect(healed?.location.directory).toBe(AbsolutePath.make(home))
+            expect(healed?.metadata?.originalCwd).toBeUndefined()
           }),
         )
       }),

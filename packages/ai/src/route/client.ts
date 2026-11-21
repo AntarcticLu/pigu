@@ -1,4 +1,4 @@
-import { Cause, Context, Effect, Layer, Option, Schema, Stream } from "effect"
+import { Cause, Clock, Context, Duration, Effect, Layer, Option, Schema, Stream } from "effect"
 import { Auth } from "./auth.js"
 import { Endpoint, type EndpointPatch } from "./endpoint.js"
 import { RequestExecutor } from "./executor.js"
@@ -19,6 +19,7 @@ import {
   CompactionResponse,
   CompactionCheckpointResponse,
   AIErrorReason,
+  DEFAULT_CHUNK_TIMEOUT_MS,
   LLMResponse,
   ResponseFold,
   LanguageModel,
@@ -27,8 +28,11 @@ import {
   InvalidProviderOutputError,
   ProviderConfigurationError,
   ProviderID,
+  timeoutConfig,
   ToolChoice,
   ToolEntry,
+  TransportError,
+  type HttpContext,
   type LLMRequest,
   mergeGeneration,
   mergeProviderOptions,
@@ -328,6 +332,104 @@ const incompleteStreamError = (route: string) =>
     }),
   })
 
+// Once visible text or JSON tool arguments begin streaming, reasoning for that block has finished;
+// bounding semantic silence avoids hanging 15 minutes (or forever under SSE `ping` keepalives).
+const DEFAULT_ACTIVE_BLOCK_IDLE_TIMEOUT_MS = 90_000
+// After a protocol observes `finish_reason` (e.g. OpenAI Chat), only an optional usage frame and `[DONE]`
+// remain; if a compatible proxy omits `[DONE]` and holds the socket open, finish cleanly after 15s.
+const DEFAULT_SETTLED_TAIL_TIMEOUT_MS = 15_000
+// Once `step-finish` itself has already been emitted (e.g. Anthropic `message_stop`), allow a brief window
+// for trailing frames / clean EOF connection reuse, then close if a proxy holds the socket open.
+const DEFAULT_POST_FINISH_TAIL_TIMEOUT_MS = 5_000
+
+const semanticReadTimeout = (http: HttpContext | undefined, kind: "tool" | "text" | "general") =>
+  new AIError({
+    reason: new TransportError({
+      message:
+        kind === "tool"
+          ? "Timed out waiting for streamed tool arguments"
+          : kind === "text"
+            ? "Timed out waiting for streamed response text"
+            : "Timed out waiting for response data",
+      transport: "http",
+      operation: "read",
+      code: "Timeout",
+      http,
+    }),
+  })
+
+const withSemanticIdleTimeout =
+  (
+    request: LLMRequest,
+    transportId: string,
+    http: HttpContext | undefined,
+    isSettled?: () => boolean,
+  ) =>
+  (batches: Stream.Stream<ReadonlyArray<LLMEvent>, AIError>) => {
+    if (!transportId.startsWith("http")) return batches
+    const chunkLimit = timeoutConfig(request.timeout).chunk
+    if (chunkLimit === false) return batches
+    const baseMs = chunkLimit ?? DEFAULT_CHUNK_TIMEOUT_MS
+    const activeBlockMs = Math.min(baseMs, DEFAULT_ACTIVE_BLOCK_IDLE_TIMEOUT_MS)
+    const settledTailMs = Math.min(baseMs, DEFAULT_SETTLED_TAIL_TIMEOUT_MS)
+    const postFinishTailMs = Math.min(baseMs, DEFAULT_POST_FINISH_TAIL_TIMEOUT_MS)
+    return Stream.suspend(() => {
+      const openToolInputs = new Set<string>()
+      const openTextBlocks = new Set<string>()
+      let stepFinished = false
+      let waitStartedAt: number | undefined
+      let settledStartedAt: number | undefined
+      return Stream.transformPull(batches, (pull) =>
+        Effect.succeed(
+          Effect.gen(function* () {
+            const now = yield* Clock.currentTimeMillis
+            const settled = stepFinished || isSettled?.() === true
+            if (settled) {
+              if (settledStartedAt === undefined) settledStartedAt = now
+              const tailMs = stepFinished ? postFinishTailMs : settledTailMs
+              const remaining = Math.max(0, tailMs - (now - settledStartedAt))
+              return yield* pull.pipe(
+                Effect.timeoutOrElse({
+                  duration: Duration.millis(remaining),
+                  orElse: () => Cause.done(),
+                }),
+              )
+            }
+            if (waitStartedAt === undefined) waitStartedAt = now
+            const kind: "tool" | "text" | "general" =
+              openToolInputs.size > 0 ? "tool" : openTextBlocks.size > 0 ? "text" : "general"
+            const budgetMs = kind === "general" ? baseMs : activeBlockMs
+            const remaining = Math.max(0, budgetMs - (now - waitStartedAt))
+            const batch = yield* pull.pipe(
+              Effect.timeoutOrElse({
+                duration: Duration.millis(remaining),
+                orElse: () => Effect.fail(semanticReadTimeout(http, kind)),
+              }),
+            )
+            for (const chunk of batch) {
+              const semantic = chunk.filter((item) => !LLMEvent.is.raw(item))
+              if (semantic.length === 0) continue
+              waitStartedAt = undefined
+              for (const item of semantic) {
+                if (item.type === "tool-input-start") openToolInputs.add(item.id)
+                if (item.type === "tool-input-end" || item.type === "tool-input-error" || item.type === "tool-call")
+                  openToolInputs.delete(item.id)
+                if (item.type === "text-start") openTextBlocks.add(item.id)
+                if (item.type === "text-end") openTextBlocks.delete(item.id)
+                if (item.type === "step-finish") {
+                  stepFinished = true
+                  openToolInputs.clear()
+                  openTextBlocks.clear()
+                }
+              }
+            }
+            return batch
+          }),
+        ),
+      )
+    })
+  }
+
 const requireTerminalEvent = (route: string) => (events: Stream.Stream<LLMEvent, AIError>) =>
   Stream.suspend(() => {
     let terminal = false
@@ -472,6 +574,12 @@ function makeFromTransport<Body, Prepared, Frame, Event, State>(
                       }),
                       Effect.mapError(frameError(frame, event)),
                     ),
+                  ),
+                  withSemanticIdleTimeout(
+                    request,
+                    routeInput.transport.id,
+                    execution.http,
+                    protocol.stream.settled ? () => protocol.stream.settled!(state) : undefined,
                   ),
                   Stream.flatMap(Stream.fromIterable),
                 )

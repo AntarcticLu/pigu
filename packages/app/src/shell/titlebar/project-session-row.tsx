@@ -20,7 +20,26 @@ import { isSessionUiLoading, startSessionUiLoading } from "@/session/loading-sta
 import { sessionTreeIDs } from "@/session/requests/session-request-tree"
 import { sessionLabel } from "@/session/title"
 import { notifySessionTabsRemoved } from "./session-events"
+import { usePinState } from "./pin-store"
 import "./tab-nav.css"
+
+export function PinGlyph(props: { filled?: boolean; class?: string }) {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 16 16"
+      fill={props.filled ? "currentColor" : "none"}
+      stroke="currentColor"
+      stroke-width={props.filled ? "0.4" : "1.3"}
+      stroke-linejoin="round"
+      class={props.class}
+      aria-hidden="true"
+    >
+      <path d="M9.8 1.5L14.5 6.2L13.1 7.6L11.6 6.8L8.8 9.6L9.4 12.4L8 13.8L5.2 11L1.8 14.4L1.1 13.7L4.5 10.3L1.7 7.5L3.1 6.1L5.9 6.7L8.7 3.9L7.9 2.4L9.8 1.5Z" />
+    </svg>
+  )
+}
 
 export function resolveSessionSource(session: SessionInfo) {
   const raw = String(session.metadata?.source ?? "pigu").toLowerCase()
@@ -122,6 +141,11 @@ export function ProjectSessionRow(props: {
     () => props.session,
   )
 
+  const pins = usePinState()
+  const isPinned = () => pins.isPinned(props.server, props.session.id)
+  const hasUnreadCompletion = () =>
+    !props.active && !status.attention() && !status.loading() && status.unread()
+
   const rename = (title: string) => {
     const current = ctx()
 
@@ -214,7 +238,11 @@ export function ProjectSessionRow(props: {
         data-titlebar-tab-action
         data-state={props.active ? "pressed" : undefined}
         class="group/session relative flex h-7 w-full shrink-0 cursor-pointer items-center gap-1.5 rounded-[6px] ps-8 pe-1.5 text-start text-[13px] leading-[var(--line-height-compact)] font-medium focus-visible:outline-none"
-        classList={{ "text-v2-text-text-base": props.active, "text-v2-text-text-faint": !props.active }}
+        classList={{
+          "text-v2-text-text-base": props.active || status.attention() || hasUnreadCompletion(),
+          "text-v2-text-text-faint": !props.active && !status.attention() && !hasUnreadCompletion(),
+          "bg-amber-500/[0.06]": status.attention() && !props.active,
+        }}
         aria-current={props.active ? "page" : undefined}
         title={
           props.session.metadata?.originalCwd
@@ -253,19 +281,57 @@ export function ProjectSessionRow(props: {
           }
         }}
       >
+        <Show when={status.attention() || hasUnreadCompletion() || isPinned()}>
+          <span
+            aria-hidden="true"
+            class="pointer-events-none absolute start-3.5 top-1/2 flex -translate-y-1/2 items-center justify-center"
+          >
+            <Show
+              when={!status.attention()}
+              fallback={<span class="size-2 animate-pulse rounded-full bg-amber-500" />}
+            >
+              <Show
+                when={!hasUnreadCompletion()}
+                fallback={<span class="size-1.5 rounded-full bg-blue-500" />}
+              >
+                <PinGlyph filled class="text-amber-500/85" />
+              </Show>
+            </Show>
+          </span>
+        </Show>
         <span class="min-w-0 flex-1 truncate" dir="auto">
           {sessionLabel(props.session)}
         </span>
-        <span
-          class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium group-hover/session:hidden ${resolveSessionSource(props.session).class}`}
+        <Show
+          when={status.attention()}
+          fallback={
+            <span
+              class={`shrink-0 rounded px-1.5 py-0.5 text-[10px] leading-none font-medium group-hover/session:hidden ${resolveSessionSource(props.session).class}`}
+            >
+              {resolveSessionSource(props.session).label}
+            </span>
+          }
         >
-          {resolveSessionSource(props.session).label}
-        </span>
+          <span class="shrink-0 rounded bg-amber-500/15 px-1.5 py-0.5 text-[10px] leading-none font-semibold text-amber-600 group-hover/session:hidden dark:text-amber-400">
+            {language.tr("等你处理", "Needs you")}
+          </span>
+        </Show>
         <span
           class="hidden shrink-0 items-center gap-0.5 group-hover/session:flex"
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
         >
+          <IconButton
+            icon={<PinGlyph filled={isPinned()} class={isPinned() ? "text-amber-500" : ""} />}
+            variant="ghost-muted"
+            size="small"
+            aria-label={isPinned() ? language.tr("取消置顶", "Unpin") : language.tr("置顶会话", "Pin")}
+            title={isPinned() ? language.tr("取消置顶", "Unpin") : language.tr("置顶会话", "Pin")}
+            onClick={(event) => {
+              event.stopPropagation()
+              pins.togglePinned(props.server, props.session.id)
+            }}
+          />
           <IconButton
             icon={<Icon name="edit" size="small" />}
             variant="ghost-muted"
@@ -301,6 +367,10 @@ export function ProjectSessionRow(props: {
             if (dialog.active) event.preventDefault()
           }}
         >
+          <Menu.Item onSelect={() => pins.togglePinned(props.server, props.session.id)}>
+            {isPinned() ? language.tr("取消置顶会话", "Unpin session") : language.tr("固定置顶会话", "Pin session")}
+          </Menu.Item>
+          <Menu.Separator />
           <Show when={props.onToggleArchive}>
             <Menu.Item onSelect={() => props.onToggleArchive?.()}>
               {props.archived ? language.tr("恢复展示会话", "Unarchive session") : language.tr("收纳会话", "Archive session")}

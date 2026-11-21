@@ -507,26 +507,37 @@ test("authoritative end values replace accumulated deltas in the durable ended e
   })
 })
 
-test("tool input deltas are accumulated without being published", async () => {
-  const { published, publisher } = capture()
-  await Effect.runPromise(
-    Effect.forEach(
+it.effect("batches tool input deltas and flushes pending input before the terminal event", () =>
+  Effect.gen(function* () {
+    const { published, publisher } = capture()
+    yield* Effect.forEach(
       [
-        LLMEvent.toolInputStart({ id: "call", name: "read" }),
-        LLMEvent.toolInputDelta({ id: "call", name: "read", text: '{"path":' }),
-        LLMEvent.toolInputDelta({ id: "call", name: "read", text: '"file.txt"}' }),
-        LLMEvent.toolInputEnd({ id: "call", name: "read" }),
+        LLMEvent.toolInputStart({ id: "call", name: "patch" }),
+        LLMEvent.toolInputDelta({ id: "call", name: "patch", text: '{"patchText":' }),
+        LLMEvent.toolInputDelta({ id: "call", name: "patch", text: '"*** Begin Patch\\n' }),
       ],
       publisher.publish,
       { discard: true },
-    ),
-  )
+    )
 
-  expect(published.some((event) => event.type === "session.tool.input.delta")).toBe(false)
-  expect(published.find((event) => event.type === "session.tool.input.ended.1")?.data).toMatchObject({
-    text: '{"path":"file.txt"}',
-  })
-})
+    expect(published.filter((event) => event.type === "session.tool.input.delta")).toHaveLength(0)
+    yield* TestClock.adjust("100 millis")
+    expect(published.filter((event) => event.type === "session.tool.input.delta").map((event) => event.data)).toMatchObject([
+      { id: "call", delta: '{"patchText":"*** Begin Patch\\n' },
+    ])
+
+    yield* publisher.publish(LLMEvent.toolInputDelta({ id: "call", name: "patch", text: '*** End Patch"}' }))
+    yield* publisher.publish(LLMEvent.toolInputEnd({ id: "call", name: "patch" }))
+    expect(published.slice(-2).map((event) => event.type)).toEqual([
+      "session.tool.input.delta",
+      "session.tool.input.ended.1",
+    ])
+    expect(published.at(-2)?.data).toMatchObject({ id: "call", delta: '*** End Patch"}' })
+    expect(published.find((event) => event.type === "session.tool.input.ended.1")?.data).toMatchObject({
+      text: '{"patchText":"*** Begin Patch\\n*** End Patch"}',
+    })
+  }),
+)
 
 test("provider-executed tool metadata is flattened using the route key", async () => {
   const { published, publisher } = capture("openai")

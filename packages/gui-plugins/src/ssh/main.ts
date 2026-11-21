@@ -57,6 +57,8 @@ const setup: Plugin.MainSetup = async (ctx) => {
       runtime.runPromise(controller.respond(input.id, input.prompt, input.value, caller.window)),
     cancel: (input, caller) => runtime.runPromise(controller.cancel(input.id, caller.window)),
     forget: (input) => runtime.runPromise(controller.forget(input.id).pipe(Effect.orDie)),
+    checkUpdate: (input) => runtime.runPromise(controller.checkUpdate(input.id, input.currentVersion)),
+    setTargetVersion: (input) => runtime.runPromise(controller.setTargetVersion(input.id, input.version)),
   })
 
   function push() {

@@ -24,11 +24,12 @@ import { homeSessionsQuery } from "./queries"
 import type { HomeController } from "../model"
 import { buildHomeSessionRecords, homeProjectForSession, homeSessionLocation, type HomeSessionRecord } from "./records"
 import { useExtensionScopeStore } from "@/shell/titlebar/extension-scope-store"
+import { usePinState } from "@/shell/titlebar/pin-store"
 
 export type { HomeSessionRecord } from "./records"
 
 export type HomeSessionGroup = {
-  id: "today" | "yesterday" | "older"
+  id: "pinned" | "today" | "yesterday" | "older"
   title: string
   sessions: HomeSessionRecord[]
 }
@@ -43,6 +44,7 @@ export function createHomeSessionsController(home: HomeController) {
   const platform = usePlatform()
   const queryClient = useQueryClient()
   const scopeStore = useExtensionScopeStore()
+  const pins = usePinState()
 
   const projectDirectories = createMemo(() => {
     const selected = home.selection.value().directory
@@ -92,7 +94,10 @@ export function createHomeSessionsController(home: HomeController) {
   )
 
   const records = createMemo(() => allRecords().slice(0, HOME_SESSION_LIMIT))
-  const groups = createMemo(() => groupSessions(records(), language))
+  const groups = createMemo(() => {
+    const serverKey = home.selection.value().server ?? ""
+    return groupSessions(records(), language, (sessionID) => pins.pinnedTimestamp(serverKey, sessionID))
+  })
   const prefetched = new Set<string>()
 
   const location = (record: HomeSessionRecord) => {
@@ -428,15 +433,27 @@ function localDay(date: Date) {
   return date.getFullYear() * 10_000 + date.getMonth() * 100 + date.getDate()
 }
 
-function groupSessions(records: HomeSessionRecord[], language: ReturnType<typeof useLanguage>): HomeSessionGroup[] {
+function groupSessions(
+  records: HomeSessionRecord[],
+  language: ReturnType<typeof useLanguage>,
+  pinnedAtOf?: (sessionID: string) => number | undefined,
+): HomeSessionGroup[] {
+  const pinnedSessions = pinnedAtOf
+    ? records
+        .filter((record) => pinnedAtOf(record.session.id) !== undefined)
+        .toSorted((a, b) => (pinnedAtOf(b.session.id) ?? 0) - (pinnedAtOf(a.session.id) ?? 0))
+    : []
+  const pinnedIDs = new Set(pinnedSessions.map((record) => record.session.id))
+  const unpinned = records.filter((record) => !pinnedIDs.has(record.session.id))
+
   const now = new Date()
   const today = localDay(now)
   const yesterday = localDay(new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1))
   const day = (record: HomeSessionRecord) =>
     localDay(new Date(record.session.time.updated ?? record.session.time.created))
-  const todaySessions = records.filter((record) => day(record) === today)
-  const yesterdaySessions = records.filter((record) => day(record) === yesterday)
-  const olderSessions = records.filter((record) => day(record) !== today && day(record) !== yesterday)
+  const todaySessions = unpinned.filter((record) => day(record) === today)
+  const yesterdaySessions = unpinned.filter((record) => day(record) === yesterday)
+  const olderSessions = unpinned.filter((record) => day(record) !== today && day(record) !== yesterday)
 
   const olderTitle =
     todaySessions.length === 0 && yesterdaySessions.length === 0
@@ -444,6 +461,7 @@ function groupSessions(records: HomeSessionRecord[], language: ReturnType<typeof
       : language.t("home.sessions.group.older")
 
   return [
+    { id: "pinned" as const, title: language.tr("置顶会话", "Pinned"), sessions: pinnedSessions },
     { id: "today" as const, title: language.t("home.sessions.group.today"), sessions: todaySessions },
     { id: "yesterday" as const, title: language.t("home.sessions.group.yesterday"), sessions: yesterdaySessions },
     { id: "older" as const, title: olderTitle, sessions: olderSessions },

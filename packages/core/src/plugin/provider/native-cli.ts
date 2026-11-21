@@ -18,12 +18,22 @@ import type {
 } from "@ai-sdk/provider"
 import { define } from "@opencode/plugin/effect/plugin"
 import type { Context } from "@opencode/plugin/effect/plugin"
+import { Global } from "@opencode/util/global"
 import { Effect, Option, Schema, Stream } from "effect"
 import { Bus } from "../../bus.js"
 import { Credential } from "../../credential.js"
+import { Mcp } from "../../mcp/index.js"
 import { Model } from "../../model.js"
 import { Provider } from "../../provider.js"
+import { Tool } from "../../tool.js"
 import type { PluginInternal } from "../internal.js"
+import { loadActiveMemoriesPromptSync } from "../memory.js"
+import {
+  createBridgeServer,
+  ensureAgyMcpConfig,
+  type BridgeLease,
+  type BridgeServer,
+} from "./mcp-bridge.js"
 import {
   buildCatalogLimitMap,
   buildMultimodalProcessEnv,
@@ -572,10 +582,11 @@ function findAgyTranscriptInBase(baseDir: string, sessionId: string) {
   return fs.existsSync(compact) ? compact : undefined
 }
 
-function isAgyCliSession(home: string, sessionId: string) {
+export function isAgyCliSession(home: string, sessionId: string) {
   const cliBase = path.join(home, ".gemini", "antigravity-cli")
   if (findAgyTranscriptInBase(cliBase, sessionId)) return true
-  return fs.existsSync(path.join(cliBase, "conversations", `${sessionId}.pb`))
+  if (fs.existsSync(path.join(cliBase, "conversations", `${sessionId}.pb`))) return true
+  return fs.existsSync(path.join(cliBase, "conversations", `${sessionId}.db`))
 }
 
 function findAgySessionFile(home: string, sessionId: string) {
@@ -956,9 +967,18 @@ function buildLocalChildEnv(
   extra?: Readonly<Record<string, string | undefined>>,
 ): Record<string, string | undefined> {
   const multimodal = buildMultimodalProcessEnv(resolveDefaultConfigDir(home))
+  const mergedNoProxy = [
+    ...new Set(
+      [process.env.NO_PROXY, process.env.no_proxy, "127.0.0.1,localhost,::1"].flatMap((value) =>
+        (value ?? "").split(",").flatMap((entry) => entry.trim() || []),
+      ),
+    ),
+  ].join(",")
   return {
     ...process.env,
     ...multimodal,
+    NO_PROXY: mergedNoProxy,
+    no_proxy: mergedNoProxy,
     PATH: buildAugmentedPath(),
     ...(extra ?? {}),
   }
@@ -1308,12 +1328,30 @@ async function runStreamJsonProcess(input: {
   resume: boolean
   subModel?: string
   variant?: string
+  mcpLease?: BridgeLease
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
   const extraFlags = input.extraFlags ?? []
   const noSessionPersistence = extraFlags.includes("--no-session-persistence")
   const targetSessionId = input.sessionId ?? crypto.randomUUID()
+  const claudeMcpFile =
+    input.mode === "claude" && input.mcpLease && !noSessionPersistence
+      ? path.join(os.tmpdir(), `pigu-claude-mcp-${crypto.randomUUID()}.json`)
+      : undefined
+  if (claudeMcpFile && input.mcpLease) {
+    fs.writeFileSync(
+      claudeMcpFile,
+      `${JSON.stringify({ mcpServers: { pigu: { type: "http", url: input.mcpLease.mcpUrl } } }, null, 2)}\n`,
+      "utf8",
+    )
+  }
+  if (input.mode === "agy" && input.mcpLease && !extraFlags.includes("--disable-slash-commands")) {
+    ensureAgyMcpConfig(input.home, input.mcpLease.stdioCommand, input.mcpLease.stdioArgs)
+  }
+  const cleanupMcpFile = () => {
+    if (claudeMcpFile && fs.existsSync(claudeMcpFile)) fs.rmSync(claudeMcpFile, { force: true })
+  }
   const sessionFlag =
     input.mode === "agy"
       ? input.resume && input.sessionId
@@ -1367,21 +1405,30 @@ async function runStreamJsonProcess(input: {
             ...extraFlags,
             input.prompt,
           ]
-        : [
-            "-p",
-            "--output-format",
-            "stream-json",
-            "--verbose",
-            "--include-partial-messages",
-            "--dangerously-skip-permissions",
-            ...modelFlag,
-            ...effortFlag,
-            ...sessionFlag,
-            ...extraFlags,
-            input.prompt,
-          ]
+          : [
+              "-p",
+              "--output-format",
+              "stream-json",
+              "--verbose",
+              "--include-partial-messages",
+              "--dangerously-skip-permissions",
+              ...(claudeMcpFile ? ["--mcp-config", claudeMcpFile] : []),
+              ...modelFlag,
+              ...effortFlag,
+              ...sessionFlag,
+              ...extraFlags,
+              input.prompt,
+            ]
 
-  const env = buildLocalChildEnv(input.home)
+  const env = buildLocalChildEnv(
+    input.home,
+    input.mcpLease
+      ? {
+          PIGU_MCP_URL: input.mcpLease.mcpUrl,
+          PIGU_MCP_CALL_URL: input.mcpLease.callUrl,
+        }
+      : undefined,
+  )
 
   return new Promise((resolve, reject) => {
     const child = childProcess.spawn(input.binary, args, {
@@ -1566,11 +1613,13 @@ async function runStreamJsonProcess(input: {
 
     child.on("error", (err) => {
       input.signal.removeEventListener("abort", onAbort)
+      cleanupMcpFile()
       reject(err)
     })
 
     child.on("close", (code) => {
       input.signal.removeEventListener("abort", onAbort)
+      cleanupMcpFile()
 
       if (state.buffer.trim()) handleLine(state.buffer)
 
@@ -1632,6 +1681,7 @@ async function runCodexProcess(input: {
   resume: boolean
   subModel?: string
   variant?: string
+  mcpLease?: BridgeLease
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
@@ -1648,6 +1698,10 @@ async function runCodexProcess(input: {
       : []
   const reviewInvocation =
     input.reviewArg !== undefined ? resolveCodexReviewInvocation(input.cwd, input.reviewArg) : undefined
+  const mcpFlags =
+    input.mcpLease && !reviewInvocation && !imageFlags.includes("--ephemeral")
+      ? ["-c", `mcp_servers.pigu.url=${JSON.stringify(input.mcpLease.mcpUrl)}`]
+      : []
 
   // Pass "-" so Codex reads the prompt from stdin rather than argv, avoiding Windows 32KB CreateProcess
   // command-line truncation, cmd.exe quoting hazards, and leading "-" flag collisions.
@@ -1675,6 +1729,7 @@ async function runCodexProcess(input: {
           "--skip-git-repo-check",
           ...modelFlag,
           ...effortFlag,
+          ...mcpFlags,
           ...imageFlags,
           "-o",
           lastMsgFile,
@@ -1687,6 +1742,7 @@ async function runCodexProcess(input: {
           "--skip-git-repo-check",
           ...modelFlag,
           ...effortFlag,
+          ...mcpFlags,
           ...imageFlags,
           "-C",
           input.cwd,
@@ -1694,7 +1750,15 @@ async function runCodexProcess(input: {
           lastMsgFile,
         ]
 
-  const env = buildLocalChildEnv(input.home)
+  const env = buildLocalChildEnv(
+    input.home,
+    input.mcpLease
+      ? {
+          PIGU_MCP_URL: input.mcpLease.mcpUrl,
+          PIGU_MCP_CALL_URL: input.mcpLease.callUrl,
+        }
+      : undefined,
+  )
   const stdinPayload = reviewInvocation ? reviewInvocation.stdinText : input.prompt
 
   return new Promise((resolve, reject) => {
@@ -1955,10 +2019,32 @@ async function runOpencodeProcess(input: {
   cwd: string
   home: string
   sessionId?: string
+  mcpLease?: BridgeLease
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
-  const env = buildLocalChildEnv(input.home, { PWD: input.cwd })
+  const existingConfigText = process.env.OPENCODE_CONFIG_CONTENT?.trim() ?? ""
+  const existingConfigParsed = existingConfigText ? Option.getOrUndefined(decodeJsonUnknown(existingConfigText)) : undefined
+  const baseConfigObj = isRecord(existingConfigParsed) ? { ...existingConfigParsed } : {}
+  const mergedConfigContent = input.mcpLease
+    ? JSON.stringify({
+        ...baseConfigObj,
+        mcp: {
+          ...(isRecord(baseConfigObj.mcp) ? baseConfigObj.mcp : {}),
+          pigu: { type: "remote", url: input.mcpLease.mcpUrl },
+        },
+      })
+    : undefined
+  const env = buildLocalChildEnv(input.home, {
+    PWD: input.cwd,
+    ...(input.mcpLease
+      ? {
+          PIGU_MCP_URL: input.mcpLease.mcpUrl,
+          PIGU_MCP_CALL_URL: input.mcpLease.callUrl,
+          ...(mergedConfigContent ? { OPENCODE_CONFIG_CONTENT: mergedConfigContent } : {}),
+        }
+      : {}),
+  })
   delete env.OPENCODE_DB
   delete env.OPENCODE_DISABLE_CHANNEL_DB
 
@@ -2547,6 +2633,7 @@ async function runDshProcess(input: {
   resume: boolean
   noSessionPersistence?: boolean
   subModel?: string
+  mcpLease?: BridgeLease
   signal: AbortSignal
   emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
@@ -2562,12 +2649,31 @@ async function runDshProcess(input: {
     detail: `Pigu · ${modelLabel}`,
   })
 
+  const dshActiveMemories = !input.noSessionPersistence
+    ? loadActiveMemoriesPromptSync(Global.Path.data, input.cwd, Global.Path.home)
+    : undefined
+  const dshBaseHint =
+    input.mcpLease && !input.noSessionPersistence
+      ? "You are a coding agent powered by the {{model}} model. Pigu Workbench built-in tools are reachable via HTTP POST $PIGU_MCP_CALL_URL with JSON {\"name\":\"<tool>\",\"arguments\":{...}} (e.g. sandbox_preview with {title, language: \"tsx\"|\"html\"|\"svg\", code} to live-render interactive UI in Pigu's right-hand Sandbox panel; memory_save / memory_list / memory_delete to persist or inspect long-term memories in Pigu Visual Memory; and browser_tabs_open / browser_snapshot / browser_screenshot / browser_click to control Pigu's right-hand Chromium browser)."
+      : undefined
+  const dshPersonaHint =
+    dshBaseHint && dshActiveMemories
+      ? `${dshBaseHint}\n\n${dshActiveMemories}`
+      : dshBaseHint ?? (dshActiveMemories ? `You are a coding agent powered by the {{model}} model.\n\n${dshActiveMemories}` : undefined)
+
   const patchLines = [
     "- id: settings",
     "  disabled: false",
     "- id: dsh-dafeiyu",
     "  config:",
     "    enabled: false",
+    ...(dshPersonaHint
+      ? [
+          "- id: system-prompt",
+          "  config:",
+          `    personaPrefix: ${JSON.stringify(dshPersonaHint)}`,
+        ]
+      : []),
     ...(input.noSessionPersistence
       ? [
           "- id: session-persistence-jsonl",
@@ -2624,6 +2730,12 @@ async function runDshProcess(input: {
   const env = buildLocalChildEnv(input.home, {
     DSH_PERMISSION_MODE: "danger-full-access",
     ...(route ? { PIGU_DSH_API_KEY: route.apiKey } : {}),
+    ...(input.mcpLease
+      ? {
+          PIGU_MCP_URL: input.mcpLease.mcpUrl,
+          PIGU_MCP_CALL_URL: input.mcpLease.callUrl,
+        }
+      : {}),
   })
 
   return new Promise((resolve, reject) => {
@@ -2916,6 +3028,7 @@ async function dispatchLocalEngineRun(input: {
   readonly canResume: boolean
   readonly subModel?: string
   readonly variant?: string
+  readonly mcpLease?: BridgeLease
   readonly signal: AbortSignal
   readonly emitter: ReturnType<typeof createStreamEmitter>
 }): Promise<{ sessionId?: string }> {
@@ -2932,6 +3045,7 @@ async function dispatchLocalEngineRun(input: {
       resume: input.canResume,
       subModel: input.subModel,
       variant: input.variant,
+      mcpLease: input.mcpLease,
       signal: input.signal,
       emitter: input.emitter,
     })
@@ -2949,6 +3063,7 @@ async function dispatchLocalEngineRun(input: {
       resume: input.canResume,
       subModel: input.subModel,
       variant: input.variant,
+      mcpLease: input.mcpLease,
       signal: input.signal,
       emitter: input.emitter,
     })
@@ -3002,6 +3117,7 @@ async function dispatchLocalEngineRun(input: {
       cwd: input.cwd,
       home: input.home,
       sessionId: input.sessionId,
+      mcpLease: input.mcpLease,
       signal: input.signal,
       emitter: input.emitter,
     })
@@ -3030,6 +3146,7 @@ async function dispatchLocalEngineRun(input: {
       resume: input.canResume,
       noSessionPersistence: input.cliAttachmentFlags.includes("--no-session-persistence"),
       subModel: input.subModel,
+      mcpLease: input.mcpLease,
       signal: input.signal,
       emitter: input.emitter,
     })
@@ -3090,6 +3207,7 @@ class LocalLanguageModel implements LanguageModelV3 {
     readonly getSessionState: (sessionID: string) => Promise<SessionCliState>,
     readonly setSessionState: (sessionID: string, state: SessionCliState) => Promise<void>,
     readonly defaultDirectory: string,
+    readonly mcpBridge?: BridgeServer,
   ) {}
 
   async doGenerate(_options: LanguageModelV3CallOptions): Promise<never> {
@@ -3286,6 +3404,22 @@ class LocalLanguageModel implements LanguageModelV3 {
             : promptUserTurn
 
           const cliAttachmentFlags = buildCliAttachmentFlags(currentEngine, attachments)
+          const mcpLease =
+            this.mcpBridge && codexReviewMatch === null
+              ? await this.mcpBridge
+                  .acquireLease({
+                    sessionID,
+                    cwd,
+                    home,
+                    onToolCall: (toolName) => {
+                      emitter.pushReasoning(`\n[Pigu 内置 MCP: ${toolName}]\n`)
+                    },
+                  })
+                  .catch(() => undefined)
+              : undefined
+
+          const onSignalRelease = () => mcpLease?.release()
+          signal.addEventListener("abort", onSignalRelease, { once: true })
 
           const runResult = await dispatchLocalEngineRun({
             currentEngine,
@@ -3300,8 +3434,12 @@ class LocalLanguageModel implements LanguageModelV3 {
             canResume,
             subModel,
             variant,
+            mcpLease,
             signal,
             emitter,
+          }).finally(() => {
+            signal.removeEventListener("abort", onSignalRelease)
+            mcpLease?.release()
           })
 
           const nextSessionId =
@@ -4656,7 +4794,7 @@ async function runCodexNativeCompact(input: {
       jsonrpc: "2.0",
       id: 1,
       method: "initialize",
-      params: { clientInfo: { name: "pigu", version: "1.0.3" } },
+      params: { clientInfo: { name: "pigu", version: "1.0.4" } },
     })
   })
 }
@@ -4679,6 +4817,24 @@ export const NativeCliProviderPlugin = define({
 
     const home = os.homedir()
     const bus = yield* Bus.Service
+    const globalOpt = yield* Effect.serviceOption(Global.Service)
+    const toolServiceOpt = yield* Effect.serviceOption(Tool.Service)
+    const mcpServiceOpt = yield* Effect.serviceOption(Mcp.Service)
+
+    const mcpBridge =
+      Option.isSome(toolServiceOpt) || Option.isSome(mcpServiceOpt)
+        ? createBridgeServer({
+            runEffect: (eff) => runPromise(eff),
+            toolService: Option.getOrUndefined(toolServiceOpt),
+            mcpService: Option.getOrUndefined(mcpServiceOpt),
+            dataDir: Option.getOrUndefined(globalOpt)?.data,
+            homeDir: Option.getOrUndefined(globalOpt)?.home,
+          })
+        : undefined
+
+    if (mcpBridge) {
+      yield* Effect.addFinalizer(() => Effect.promise(() => mcpBridge.close()))
+    }
 
     yield* bus.subscribe(Credential.Event.Updated).pipe(
       Stream.runForEach(() => ctx.provider.reload()),
@@ -4721,7 +4877,7 @@ export const NativeCliProviderPlugin = define({
           if (evt.package !== LOCAL_PACKAGE) return
           evt.sdk = {
             languageModel: (modelID: string) =>
-              new LocalLanguageModel(modelID, getSessionState, setSessionState, ctx.location.directory),
+              new LocalLanguageModel(modelID, getSessionState, setSessionState, ctx.location.directory, mcpBridge),
           }
         }),
       { providerID: LOCAL_PROVIDER_ID },
@@ -4832,6 +4988,10 @@ export const NativeCliProviderPlugin = define({
 
           event.result = {
             summary: nativeCompacted.summary,
+            native: {
+              cliEngine: currentEngine,
+              engineSessionId: currentRecord.sessionId,
+            },
             metadata: {
               nativeCliEngine: currentEngine,
               engineSessionId: currentRecord.sessionId,

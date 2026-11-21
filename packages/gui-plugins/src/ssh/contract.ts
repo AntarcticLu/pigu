@@ -74,6 +74,14 @@ export type SshStart = typeof SshStart.Type
 
 const Id = Schema.Struct({ id: Schema.String })
 
+export const SshUpdateInfo = Schema.Struct({
+  status: Schema.Literals(["available", "up-to-date", "offline"]),
+  currentVersion: Schema.optional(Schema.String),
+  latestVersion: Schema.optional(Schema.String),
+})
+
+export type SshUpdateInfo = typeof SshUpdateInfo.Type
+
 /** SSH connections, owned by the main process. Prompts reach only the window that started the attempt. */
 export const Ssh = Ipc.define({
   id: "ssh",
@@ -85,5 +93,12 @@ export const Ssh = Ipc.define({
     respond: { input: Schema.Struct({ id: Schema.String, prompt: Schema.String, value: Schema.String }) },
     cancel: { input: Id },
     forget: { input: Id },
+    checkUpdate: {
+      input: Schema.Struct({ id: Schema.String, currentVersion: Schema.optional(Schema.String) }),
+      output: SshUpdateInfo,
+    },
+    setTargetVersion: {
+      input: Schema.Struct({ id: Schema.String, version: Schema.NullOr(Schema.String) }),
+    },
   },
 })

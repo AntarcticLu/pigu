@@ -7,19 +7,22 @@ import {
   Exit,
   Fiber,
   FileSystem,
+  Option,
   Path,
   Predicate,
   PubSub,
   Ref,
   Schedule,
+  Schema,
   Scope,
   Stream,
 } from "effect"
 import { HttpClient } from "effect/http"
 import { ChildProcess, ChildProcessSpawner } from "effect/process"
-import type { SshConfig, SshHttp, SshStart, SshState } from "./contract"
+import type { SshConfig, SshHttp, SshStart, SshState, SshUpdateInfo } from "./contract"
 import { createAskpass } from "./askpass"
-import { bootstrap } from "./bootstrap"
+import { bootstrap, probeLatestGitHubReleaseLocal, probeRemoteLatestRelease } from "./bootstrap"
+import { cleanReleaseSemver, compareReleaseSemver } from "@opencode/util/semver"
 import { parseTarget, quote, runSsh, sshArgs, sshExecutable, tunnelArgs, SshFailure } from "./command"
 import {
   createSshMainState,
@@ -54,6 +57,7 @@ export const createSshController = Effect.fn("Ssh.controller")(function* (input:
   const responders = new Map<number, (prompt: string, value: string) => Effect.Effect<void>>()
   const timers = new Map<number, Fiber.Fiber<void>>()
   const waiters = new Map<number, Deferred.Deferred<SshHttp | null>>()
+  const targetVersions = new Map<string, string>()
   const issued = { waiter: 0 }
 
   const dispatch = (event: SshMainEvent): Effect.Effect<void> =>
@@ -208,10 +212,11 @@ export const createSshController = Effect.fn("Ssh.controller")(function* (input:
           destination: `${fields.get("user") ?? ""}@${fields.get("hostname")}:${fields.get("port") ?? "22"}`,
         })
 
+      const requestedVersion = targetVersions.get(id)
       const remote = yield* bootstrap({
         target,
-        version: input.version,
-        development: input.development,
+        version: requestedVersion ?? input.version,
+        development: requestedVersion ? false : input.development,
         env: askpass.env,
         replace,
       }).pipe(
@@ -303,7 +308,62 @@ export const createSshController = Effect.fn("Ssh.controller")(function* (input:
     respond: (id: string, prompt: string, value: string, owner: number) =>
       dispatch({ type: "respond", id, promptID: prompt, value, owner }),
     cancel: (id: string, owner: number) => dispatch({ type: "cancel", id, owner }),
-    forget: (id: string) => dispatch({ type: "forget", id }),
+    forget: (id: string) => {
+      targetVersions.delete(id)
+      return dispatch({ type: "forget", id })
+    },
+    setTargetVersion: (id: string, version: string | null) =>
+      Effect.sync(() => {
+        const cleaned = version ? cleanReleaseSemver(version) : undefined
+        if (cleaned) {
+          targetVersions.set(id, cleaned)
+          return
+        }
+        targetVersions.delete(id)
+      }),
+    checkUpdate: Effect.fn("Ssh.checkUpdate")(function* (id: string, currentVersion?: string): Effect.fn.Return<SshUpdateInfo> {
+      const record = current.machine.servers.find((srv) => srv.config.id === id)
+      const cleanCurrent = cleanReleaseSemver(currentVersion)
+
+      if (!record || record.phase.status !== "ready") {
+        return {
+          status: "offline",
+          ...(cleanCurrent ? { currentVersion: cleanCurrent } : {}),
+        }
+      }
+
+      const probedCurrent =
+        cleanCurrent ??
+        (yield* probeHealthVersion(record.phase.http).pipe(Effect.provideService(HttpClient.HttpClient, httpClient)))
+
+      if (!probedCurrent) {
+        return { status: "offline" }
+      }
+
+      const localLatest = yield* Effect.promise(() => probeLatestGitHubReleaseLocal())
+      const latestVersion =
+        localLatest ??
+        (yield* Effect.try({ try: () => parseTarget(record.config.target), catch: SshFailure.from }).pipe(
+          Effect.flatMap((target) =>
+            probeRemoteLatestRelease(target).pipe(Effect.provideService(ChildProcessSpawner.ChildProcessSpawner, spawner)),
+          ),
+          Effect.orElseSucceed(() => undefined),
+        ))
+
+      if (!latestVersion) {
+        return {
+          status: "offline",
+          currentVersion: probedCurrent,
+        }
+      }
+
+      const cmp = compareReleaseSemver(probedCurrent, latestVersion)
+      return {
+        status: cmp === -1 ? "available" : "up-to-date",
+        currentVersion: probedCurrent,
+        latestVersion,
+      }
+    }),
     detach: (owner: number) => dispatch({ type: "window.detached", owner }),
     close,
   }
@@ -341,5 +401,26 @@ const checkHealth = Effect.fn("Ssh.checkHealth")(function* (http: SshHttp) {
       Effect.timeout(2000),
       Effect.map((response) => response.status >= 200 && response.status < 300),
       Effect.orElseSucceed(() => false),
+    )
+})
+
+const decodeInfoPayload = Schema.decodeUnknownOption(Schema.Struct({ version: Schema.String }))
+
+const probeHealthVersion = Effect.fn("Ssh.probeHealthVersion")(function* (http: SshHttp) {
+  const client = yield* HttpClient.HttpClient
+
+  return yield* client
+    .get(`${http.url}/api/info`, {
+      headers: { authorization: `Basic ${Buffer.from(`opencode:${http.password}`).toString("base64")}` },
+    })
+    .pipe(
+      Effect.flatMap((response) => response.json),
+      Effect.timeout(2500),
+      Effect.map((payload) => {
+        const decoded = decodeInfoPayload(payload)
+
+        return Option.isSome(decoded) ? cleanReleaseSemver(decoded.value.version) : undefined
+      }),
+      Effect.orElseSucceed(() => undefined),
     )
 })

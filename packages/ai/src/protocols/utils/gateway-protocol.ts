@@ -82,6 +82,7 @@ export function gatewayProtocol<Body, Event, State>(
         return [{ inner, gateway }, attachGatewayMetadata(events, gateway)] as const
       }),
       terminal: protocol.stream.terminal,
+      settled: protocol.stream.settled ? (state) => protocol.stream.settled!(state.inner) : undefined,
       onHalt: onHalt
         ? (state) => onHalt(state.inner).pipe(Effect.map((events) => attachGatewayMetadata(events, state.gateway)))
         : undefined,

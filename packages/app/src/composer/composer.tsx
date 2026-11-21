@@ -15,6 +15,7 @@ import { useSettings } from "@/settings/model"
 import type { ComposerModel } from "./model"
 import type { ComposerModelLabel } from "./model-label"
 import { ComposerContextCircle } from "./context-circle"
+import { ComposerMemoryControl } from "./memory-control"
 import { ComposerMcpSkillControl } from "./mcp-skill-control"
 import { ComposerVoiceControl } from "./voice-control"
 
@@ -69,6 +70,7 @@ export function Composer(props: {
         trailingControl={
           <div class="flex items-center gap-0.5">
             <ComposerVoiceControl model={props.model} />
+            <ComposerMemoryControl model={props.model} />
             <ComposerMcpSkillControl model={props.model} />
             <ComposerContextCircle model={props.model} />
             <ComposerFollowUpControl />

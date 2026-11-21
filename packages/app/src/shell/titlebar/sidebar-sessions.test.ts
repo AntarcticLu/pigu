@@ -1,6 +1,11 @@
 import { expect, test } from "bun:test"
 import type { OpenCodeEvent, SessionInfo } from "@opencode/client/promise"
-import { createSidebarSessionActivity, isSidebarSessionActivity, mergeSidebarSessions } from "./sidebar-sessions"
+import {
+  createSidebarSessionActivity,
+  isSidebarCompletionOrAttentionEvent,
+  isSidebarSessionActivity,
+  mergeSidebarSessions,
+} from "./sidebar-sessions"
 
 const session: SessionInfo = {
   id: "ses_sidebar",
@@ -84,9 +89,40 @@ test.each([
     event: { ...envelope, type: "session.renamed", data: { sessionID: session.id, title: "New title" } },
     expected: true,
   },
+  {
+    event: { ...envelope, type: "session.execution.succeeded", data: { sessionID: session.id } },
+    expected: true,
+  },
 ] satisfies { event: OpenCodeEvent; expected: boolean }[])(
   "$event.type counts as sidebar activity: $expected",
   ({ event, expected }) => {
     expect(isSidebarSessionActivity(event)).toBe(expected)
   },
 )
+
+test("completion events promote both child and root session timestamps and trigger project auto-expand", () => {
+  const activity = createSidebarSessionActivity()
+  const completed: OpenCodeEvent = {
+    ...envelope,
+    created: 250,
+    type: "session.execution.succeeded",
+    data: { sessionID: "ses_child" },
+  }
+
+  expect(isSidebarCompletionOrAttentionEvent(completed)).toBe(true)
+  activity.update("server", completed, session.id)
+  expect(activity.get("server", "ses_child")).toBe(250)
+  expect(activity.get("server", session.id)).toBe(250)
+
+  const merged = mergeSidebarSessions([session], [], (id) => activity.get("server", id))
+  expect(merged[0]?.time.updated).toBe(250)
+})
+
+test("advances timestamp when known session records a newer completion idle time", () => {
+  const merged = mergeSidebarSessions(
+    [session],
+    [{ ...session, time: { created: 1, updated: 10, idle: 180 } }],
+    () => undefined,
+  )
+  expect(merged[0]?.time.updated).toBe(180)
+})
